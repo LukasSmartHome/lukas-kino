@@ -43,8 +43,9 @@ public class StartseitenWaechter extends AccessibilityService {
         if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0) {
             Log.i(TAG, "Waechter Taste " + KeyEvent.keyCodeToString(e.getKeyCode()));
         }
-        // Einstellungstaste: Das Google-Seitenmenü gibt es nicht mehr, also die Einstellungen-App öffnen.
-        if (e.getKeyCode() == KeyEvent.KEYCODE_SETTINGS) {
+        // Einstellungstaste (die TCL-Fernbedienung sendet KEYCODE_NOTIFICATION, das öffnete das
+        // Google-Seitenmenü – das gibt es nicht mehr), also die Einstellungen-App öffnen.
+        if (istEinstellungstaste(e.getKeyCode())) {
             if (e.getAction() == KeyEvent.ACTION_UP && !e.isCanceled()) MainActivity.einstellungenOeffnen(this);
             return true;
         }
@@ -57,6 +58,10 @@ public class StartseitenWaechter extends AccessibilityService {
             }
         }
         return true;
+    }
+
+    static boolean istEinstellungstaste(int k) {
+        return k == KeyEvent.KEYCODE_SETTINGS || k == KeyEvent.KEYCODE_NOTIFICATION;
     }
 
     @Override

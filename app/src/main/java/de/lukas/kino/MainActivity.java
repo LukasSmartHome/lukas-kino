@@ -189,7 +189,7 @@ public class MainActivity extends Activity {
             Log.i("LukasKino", "Taste " + KeyEvent.keyCodeToString(k) + " (" + k + ", scan " + e.getScanCode() + ")");
         }
 
-        if (k == KeyEvent.KEYCODE_SETTINGS) {
+        if (StartseitenWaechter.istEinstellungstaste(k)) {
             if (e.getAction() == KeyEvent.ACTION_UP) einstellungenOeffnen(this);
             return true;
         }
