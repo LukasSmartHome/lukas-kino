@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Jede Version bekommt die Nummer des GitHub-Laufs, damit Updates sauber drüber installieren.
+def lauf = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int
+
+android {
+    namespace 'de.lukas.kino'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'de.lukas.kino'
+        minSdk 26
+        targetSdk 34
+        versionCode lauf
+        versionName "1.0.${lauf}"
+    }
+
+    // Fester Schlüssel nur, damit neue Versionen über die alte installiert werden können.
+    // Nicht sicherheitsrelevant: installieren kann man nur per ADB im eigenen Heimnetz.
+    signingConfigs {
+        release {
+            storeFile rootProject.file('signing/lukaskino.jks')
+            storePassword 'lukaskino'
+            keyAlias 'lukaskino'
+            keyPassword 'lukaskino'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}

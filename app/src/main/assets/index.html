@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lukas Kino</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&amp;display=swap">
+<style>
+html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden}
+body{font-family:'Inter Tight','Google Sans',Roboto,system-ui,sans-serif;color:#fff;-webkit-user-select:none;user-select:none;cursor:none}
+#buehne{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;overflow:hidden;background:#000}
+.ebene{position:absolute;inset:0}
+#bg{transform:scale(1.07);opacity:0;transition:transform 2600ms cubic-bezier(.2,.8,.2,1),opacity 1000ms ease}
+#bg .bild{position:absolute;inset:0;background-size:cover;background-position:center;opacity:0;transition:opacity 900ms ease}
+#bg .bild.da{opacity:1}
+#bg svg{position:absolute;inset:0;width:100%;height:100%;display:block;transition:opacity 900ms ease}
+#scrim{top:auto;height:480px;background:linear-gradient(to top,rgba(8,6,14,.55),rgba(8,6,14,0));opacity:0;transition:opacity 900ms ease}
+#uhr{position:absolute;left:96px;top:60px;font-size:176px;font-weight:700;letter-spacing:-5px;line-height:1;font-variant-numeric:tabular-nums;text-shadow:0 6px 44px rgba(0,0,0,.38);opacity:0;transform:translateY(-16px);transition:opacity 900ms ease 250ms,transform 900ms cubic-bezier(.2,.8,.2,1) 250ms}
+#ort{position:absolute;right:96px;top:96px;display:flex;align-items:center;gap:14px;font-size:48px;font-weight:600;letter-spacing:-.5px;text-shadow:0 4px 30px rgba(0,0,0,.4);opacity:0;transform:translateY(-16px);transition:opacity 900ms ease 400ms,transform 900ms cubic-bezier(.2,.8,.2,1) 400ms}
+#ort.leer{visibility:hidden}
+body.an #bg{transform:scale(1);opacity:1}
+body.an #scrim,body.an #uhr,body.an #ort{opacity:1;transform:none}
+#reihe{position:absolute;left:0;right:0;bottom:92px;height:260px;transition:transform 450ms cubic-bezier(.2,.8,.2,1)}
+body.suche #reihe{transform:translateY(-118px)}
+#spur{display:flex;gap:34px;padding-left:96px;padding-top:40px;transition:transform 380ms cubic-bezier(.2,.8,.2,1)}
+.kachel{flex:0 0 auto;position:relative;width:300px;height:170px;border-radius:26px;transform:translateY(320px);opacity:0;transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 380ms ease,box-shadow 200ms ease;box-shadow:0 10px 28px rgba(0,0,0,.28)}
+body.apps .kachel,body.suche .kachel{transform:none;opacity:1}
+.kachel .innen{position:absolute;inset:0;border-radius:26px;overflow:hidden}
+.kachel img.banner{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.kachel .glas{position:absolute;inset:0;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-start;padding:20px 22px;background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.3);border-radius:26px;-webkit-backdrop-filter:blur(26px) saturate(160%);backdrop-filter:blur(26px) saturate(160%);transition:background 200ms ease}
+.kachel .symbol{width:60px;height:60px;border-radius:16px;object-fit:contain}
+.kachel .badge{width:58px;height:58px;border-radius:17px;display:flex;align-items:center;justify-content:center;background:rgba(66,110,255,.85);box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}
+.kachel .text{display:flex;flex-direction:column;gap:2px}
+.kachel .name{font-size:30px;font-weight:650;letter-spacing:-.3px;text-shadow:0 2px 12px rgba(0,0,0,.3)}
+.kachel .unter{font-size:20px;font-weight:500;opacity:.85}
+body.apps .kachel.fokus{transform:translateY(-8px) scale(1.1);box-shadow:0 0 0 4px rgba(255,255,255,.95),0 26px 60px rgba(0,0,0,.5);z-index:2}
+body.apps .kachel.fokus .glas{background:rgba(255,255,255,.3)}
+body.apps .kachel.gehoben{transform:translateY(-16px) scale(1.12)}
+.pfeile{position:absolute;top:14px;right:14px;display:none;gap:4px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.92);z-index:3}
+.kachel.gehoben .pfeile{display:flex}
+body.bearbeiten .kachel:not(.fokus) .innen{animation:wackeln .3s ease-in-out infinite alternate}
+@keyframes wackeln{from{transform:rotate(-.7deg)}to{transform:rotate(.7deg)}}
+#suche{position:absolute;left:96px;bottom:64px;opacity:0;transform:translateY(40px);transition:opacity 350ms ease,transform 450ms cubic-bezier(.2,.8,.2,1)}
+body.suche #suche{opacity:1;transform:none}
+#suche .feld{width:720px;height:88px;border-radius:44px;display:flex;align-items:center;gap:20px;padding:0 34px;box-sizing:border-box;font-size:30px;font-weight:500;background:rgba(255,255,255,.24);border:1px solid rgba(255,255,255,.4);box-shadow:0 0 0 4px rgba(255,255,255,.95),0 20px 50px rgba(0,0,0,.4);-webkit-backdrop-filter:blur(26px) saturate(160%);backdrop-filter:blur(26px) saturate(160%)}
+#hinweis{position:absolute;left:0;right:0;bottom:56px;display:flex;justify-content:center;align-items:center;gap:10px;font-size:24px;font-weight:500;opacity:0;transition:opacity 500ms ease 300ms;text-shadow:0 2px 16px rgba(0,0,0,.5)}
+body.bild #hinweis{opacity:.8}
+#toast{position:absolute;left:50%;top:84px;transform:translateX(-50%) translateY(-12px);opacity:0;transition:opacity 250ms ease,transform 250ms ease;padding:18px 34px;border-radius:999px;background:rgba(20,16,30,.45);border:1px solid rgba(255,255,255,.3);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);font-size:28px;font-weight:600;white-space:nowrap}
+#toast.da{opacity:1;transform:translateX(-50%)}
+#schwarz{background:#000;opacity:1;pointer-events:none;transition:opacity 700ms ease}
+body.an #schwarz{opacity:0}
+</style>
+</head>
+<body>
+<div id="buehne">
+  <div id="bg" class="ebene">
+    <svg id="standardbild" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="lkHimmel" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#120d2e"/><stop offset="0.34" stop-color="#392262"/><stop offset="0.6" stop-color="#a1436c"/><stop offset="0.8" stop-color="#ee8952"/><stop offset="0.95" stop-color="#ffcd6c"/><stop offset="1" stop-color="#ffdc7e"/>
+        </linearGradient>
+        <radialGradient id="lkSonne" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="#fffbe8"/><stop offset="0.45" stop-color="#ffe38f"/><stop offset="1" stop-color="#ffb54a" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="lkGlut" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="#ffd27a" stop-opacity="0.6"/><stop offset="0.5" stop-color="#ff9c55" stop-opacity="0.18"/><stop offset="1" stop-color="#ff8a4c" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient id="lkMeer" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ec8d55"/><stop offset="0.22" stop-color="#a14e63"/><stop offset="0.6" stop-color="#4a2348"/><stop offset="1" stop-color="#170c26"/>
+        </linearGradient>
+        <linearGradient id="lkFels" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#2c1632"/><stop offset="1" stop-color="#0c0711"/>
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width="1920" height="806" fill="url(#lkHimmel)"/>
+      <circle cx="1230" cy="790" r="560" fill="url(#lkGlut)"/>
+      <ellipse cx="320" cy="290" rx="400" ry="14" fill="#7d4a8c" opacity="0.4"/>
+      <ellipse cx="880" cy="520" rx="380" ry="10" fill="#f39b7b" opacity="0.38"/>
+      <ellipse cx="1520" cy="600" rx="320" ry="12" fill="#ffc48a" opacity="0.5"/>
+      <ellipse cx="1720" cy="470" rx="260" ry="9" fill="#e88ba3" opacity="0.3"/>
+      <ellipse cx="1050" cy="640" rx="250" ry="7" fill="#ffd8a0" opacity="0.45"/>
+      <circle cx="1230" cy="792" r="104" fill="url(#lkSonne)"/>
+      <circle cx="1230" cy="792" r="70" fill="#fff3cf"/>
+      <path d="M800 802 C880 786 970 782 1040 790 L1064 802 Z" fill="#7a3c5d" opacity="0.75"/>
+      <path d="M1380 802 C1460 772 1560 750 1650 744 C1740 738 1830 754 1920 742 L1920 802 Z" fill="#673254" opacity="0.92"/>
+      <rect x="0" y="800" width="1920" height="280" fill="url(#lkMeer)"/>
+      <ellipse cx="1230" cy="812" rx="160" ry="5" fill="#fff1c4" opacity="0.85"/>
+      <ellipse cx="1230" cy="834" rx="124" ry="4" fill="#ffe7a8" opacity="0.65"/>
+      <ellipse cx="1230" cy="858" rx="98" ry="4" fill="#ffdc96" opacity="0.5"/>
+      <ellipse cx="1230" cy="886" rx="74" ry="3" fill="#ffd28a" opacity="0.4"/>
+      <ellipse cx="1230" cy="918" rx="54" ry="3" fill="#ffc985" opacity="0.3"/>
+      <ellipse cx="1230" cy="956" rx="38" ry="3" fill="#ffc080" opacity="0.22"/>
+      <ellipse cx="1230" cy="1000" rx="26" ry="2" fill="#ffb87a" opacity="0.15"/>
+      <ellipse cx="1500" cy="846" rx="180" ry="2" fill="#ffd3a0" opacity="0.25"/>
+      <ellipse cx="960" cy="872" rx="220" ry="2" fill="#ffc7a0" opacity="0.18"/>
+      <ellipse cx="1660" cy="930" rx="240" ry="2" fill="#f3a58f" opacity="0.14"/>
+      <path d="M1556 802 L1568 744 L1586 728 L1602 742 L1612 802 Z" fill="#3a1b39"/>
+      <path d="M1650 802 L1660 772 L1676 762 L1688 802 Z" fill="#3a1b39"/>
+      <path d="M0 1080 L0 612 C120 600 260 596 380 604 C500 612 600 624 690 640 C740 650 770 668 790 700 C812 735 822 770 846 800 C870 832 905 862 940 902 C990 962 1040 1022 1100 1080 Z" fill="url(#lkFels)"/>
+      <path d="M0 612 C120 600 260 596 380 604 C500 612 600 624 690 640 C740 650 770 668 790 700" fill="none" stroke="#f3a56c" stroke-width="3" stroke-linecap="round" opacity="0.55"/>
+      <path d="M702 652 C716 700 728 760 758 822 M612 640 C622 700 640 780 676 860 M500 624 C506 700 520 800 548 900" fill="none" stroke="#46223f" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+      <path d="M120 603 l6 -16 M128 603 l-3 -14 M260 597 l5 -15 M268 598 l-4 -12 M430 607 l6 -15 M438 608 l-2 -13 M590 622 l5 -14" fill="none" stroke="#2c1632" stroke-width="3" stroke-linecap="round"/>
+      <path d="M1920 1080 L1920 902 C1860 907 1800 927 1760 962 C1720 997 1700 1042 1690 1080 Z" fill="#0c0711"/>
+      <path d="M1010 420 q12 -10 24 0 q12 -10 24 0 M1094 378 q8 -7 16 0 q8 -7 16 0 M968 458 q7 -6 14 0 q7 -6 14 0" fill="none" stroke="#2a1638" stroke-width="3" stroke-linecap="round"/>
+    </svg>
+  </div>
+  <div id="scrim" class="ebene"></div>
+  <div id="uhr">--:--</div>
+  <div id="ort" class="leer">
+    <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/></svg>
+    <span id="ortname"></span>
+  </div>
+  <div id="reihe"><div id="spur"></div></div>
+  <div id="suche">
+    <div class="feld">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+      <span>Nach Apps und Spielen suchen</span>
+    </div>
+  </div>
+  <div id="hinweis">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    <span>Apps</span>
+  </div>
+  <div id="toast"></div>
+  <div id="schwarz" class="ebene"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var LK = window.LK || null;
+  var $ = function (id) { return document.getElementById(id); };
+
+  // Reihenfolge beim ersten Start (danach merkt sich die App die eigene Reihenfolge).
+  var FAVORITEN = [
+    'com.google.android.youtube.tv', 'com.spotify.tv.android', 'com.netflix.ninja', '@hdmi2',
+    'com.amazon.amazonvideo.livingroom', 'com.plexapp.android', 'com.google.android.youtube.tvmusic',
+    'com.limelight', 'com.valvesoftware.steamlink', 'tunein.player'
+  ];
+  var VERSTECKT = /^(de\.lukas\.kino$|com\.tcl\.|com\.google\.android\.apps\.tv\.launcherx|com\.google\.android\.tungsten)/;
+  var PLAYSTATION = { pkg: '@hdmi2', name: 'PlayStation', unter: 'HDMI 2', banner: false, spiel: true };
+  var SCHRITT = 334, SICHTBAR = 5;
+
+  var apps = [], kacheln = [], fokus = 0, scroll = 0, phase = '', modus = '';
+  var bilder = [], bildIndex = -1, toastZeit = null, reinZeit = null, t1 = null, t2 = null;
+
+  // ---------- Bühne auf Bildschirmgröße skalieren ----------
+  function skalieren() {
+    var s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+    var x = (window.innerWidth - 1920 * s) / 2, y = (window.innerHeight - 1080 * s) / 2;
+    $('buehne').style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
+  }
+
+  // ---------- Uhr ----------
+  function uhr() {
+    var d = new Date();
+    $('uhr').textContent = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  // ---------- Hinweis oben ----------
+  function zeigen(text) {
+    var t = $('toast');
+    t.textContent = text;
+    t.classList.add('da');
+    clearTimeout(toastZeit);
+    toastZeit = setTimeout(function () { t.classList.remove('da'); }, 2200);
+  }
+
+  // ---------- Apps laden ----------
+  function laden() {
+    var liste = [];
+    try { liste = LK ? JSON.parse(LK.apps()) : demo(); } catch (e) { liste = []; }
+    liste = liste.filter(function (a) { return !VERSTECKT.test(a.pkg); });
+    var nachPkg = {};
+    liste.forEach(function (a) { nachPkg[a.pkg] = a; });
+    nachPkg['@hdmi2'] = PLAYSTATION;
+    var gespeichert = null;
+    try { gespeichert = JSON.parse(localStorage.getItem('lk.reihenfolge') || 'null'); } catch (e) {}
+    var basis = (Array.isArray(gespeichert) && gespeichert.length) ? gespeichert : FAVORITEN;
+    var reihe = [], drin = {};
+    basis.forEach(function (p) { if (nachPkg[p] && !drin[p]) { reihe.push(nachPkg[p]); drin[p] = 1; } });
+    liste.slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'de'); })
+      .forEach(function (a) { if (!drin[a.pkg]) { reihe.push(a); drin[a.pkg] = 1; } });
+    var neu = reihe.map(function (a) { return a.pkg; }).join('|');
+    var alt = apps.map(function (a) { return a.pkg; }).join('|');
+    apps = reihe;
+    if (neu !== alt) zeichnen();
+  }
+
+  function speichern() {
+    try { localStorage.setItem('lk.reihenfolge', JSON.stringify(apps.map(function (a) { return a.pkg; }))); } catch (e) {}
+  }
+
+  function demo() {
+    return [
+      { pkg: 'com.google.android.youtube.tv', name: 'YouTube', banner: false },
+      { pkg: 'com.spotify.tv.android', name: 'Spotify', banner: false },
+      { pkg: 'com.netflix.ninja', name: 'Netflix', banner: false },
+      { pkg: 'com.plexapp.android', name: 'Plex', banner: false }
+    ];
+  }
+
+  var PFEILE = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1a1426" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>' +
+               '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1a1426" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
+  var CONTROLLER = '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9h10a4 4 0 0 1 3.9 4.9l-0.6 2.6a2.3 2.3 0 0 1-3.9 1L14.6 15.6H9.4l-1.8 1.9a2.3 2.3 0 0 1-3.9-1l-0.6-2.6A4 4 0 0 1 7 9z"/><path d="M8 11.5v3M6.5 13h3"/><circle cx="15.5" cy="12.3" r="0.6"/><circle cx="17.2" cy="13.9" r="0.6"/></svg>';
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  function glasHtml(a) {
+    var symbol = a.spiel ? '<span class="badge">' + CONTROLLER + '</span>'
+                         : '<img class="symbol" src="/icon/' + encodeURIComponent(a.pkg) + '" alt="">';
+    return '<div class="glas">' + symbol + '<span class="text"><span class="name">' + esc(a.name) + '</span>' +
+           (a.unter ? '<span class="unter">' + esc(a.unter) + '</span>' : '') + '</span></div>';
+  }
+
+  function kachelBauen(a) {
+    var k = document.createElement('div');
+    k.className = 'kachel';
+    var innen = document.createElement('div');
+    innen.className = 'innen';
+    if (a.banner && !a.spiel) {
+      var img = document.createElement('img');
+      img.className = 'banner';
+      img.alt = a.name;
+      img.src = '/banner/' + encodeURIComponent(a.pkg);
+      img.onerror = function () { innen.innerHTML = glasHtml(a); };
+      innen.appendChild(img);
+    } else {
+      innen.innerHTML = glasHtml(a);
+    }
+    k.appendChild(innen);
+    var p = document.createElement('div');
+    p.className = 'pfeile';
+    p.innerHTML = PFEILE;
+    k.appendChild(p);
+    return k;
+  }
+
+  function zeichnen() {
+    var spur = $('spur');
+    spur.innerHTML = '';
+    kacheln = apps.map(function (a) { var k = kachelBauen(a); spur.appendChild(k); return k; });
+    if (fokus >= apps.length) fokus = Math.max(0, apps.length - 1);
+    fokusSetzen();
+  }
+
+  function fokusSetzen() {
+    if (fokus < scroll) scroll = fokus;
+    if (fokus > scroll + SICHTBAR - 1) scroll = fokus - (SICHTBAR - 1);
+    if (scroll < 0) scroll = 0;
+    $('spur').style.transform = 'translateX(' + (-scroll * SCHRITT) + 'px)';
+    kacheln.forEach(function (k, i) {
+      k.classList.toggle('fokus', i === fokus);
+      k.classList.toggle('gehoben', i === fokus && modus === 'gehoben');
+    });
+    document.body.classList.toggle('bearbeiten', modus !== '');
+  }
+
+  // ---------- Zustände ----------
+  function phaseSetzen(p) {
+    phase = p;
+    ['apps', 'bild', 'suche'].forEach(function (n) { document.body.classList.toggle(n, n === p); });
+  }
+
+  function appsRein() {
+    var war = phase;
+    kacheln.forEach(function (k, i) {
+      var stufe = Math.min(Math.max(0, i - scroll), 6);
+      k.style.transitionDelay = (war === 'apps' || war === 'suche') ? '0ms' : (stufe * 55) + 'ms';
+    });
+    phaseSetzen('apps');
+    fokusSetzen();
+    clearTimeout(reinZeit);
+    reinZeit = setTimeout(function () { kacheln.forEach(function (k) { k.style.transitionDelay = '0ms'; }); }, 1000);
+  }
+
+  function einschalten() {
+    clearTimeout(t1); clearTimeout(t2);
+    document.body.classList.remove('an');
+    phaseSetzen('');
+    fokus = 0; scroll = 0; modus = '';
+    fokusSetzen();
+    bilderLaden();
+    if (bilder.length) bildZeigen(Math.floor(Math.random() * bilder.length));
+    t1 = setTimeout(function () { document.body.classList.add('an'); }, 400);
+    t2 = setTimeout(appsRein, 1700);
+  }
+
+  function wiederda() {
+    if (!document.body.classList.contains('an')) return;
+    laden();
+    var anzahl = bilder.length;
+    bilderLaden();
+    if (bilder.length !== anzahl) bildZeigen(bilder.length ? 0 : -1);
+    if (phase !== 'apps') appsRein();
+  }
+
+  // ---------- Hintergründe ----------
+  function bilderLaden() {
+    try { bilder = LK ? JSON.parse(LK.hintergruende()) : []; } catch (e) { bilder = []; }
+  }
+
+  function bildZeigen(i) {
+    var bg = $('bg');
+    if (!bilder.length) {
+      $('standardbild').style.opacity = 1;
+      Array.prototype.slice.call(bg.querySelectorAll('.bild')).forEach(function (b) { b.remove(); });
+      $('ort').classList.add('leer');
+      return;
+    }
+    bildIndex = ((i % bilder.length) + bilder.length) % bilder.length;
+    var name = bilder[bildIndex];
+    var url = '/bg/' + encodeURIComponent(name);
+    var vorlader = new Image();
+    vorlader.onload = function () {
+      var alte = Array.prototype.slice.call(bg.querySelectorAll('.bild'));
+      var d = document.createElement('div');
+      d.className = 'bild';
+      d.style.backgroundImage = 'url("' + url + '")';
+      bg.appendChild(d);
+      requestAnimationFrame(function () {
+        d.classList.add('da');
+        $('standardbild').style.opacity = 0;
+        setTimeout(function () { alte.forEach(function (b) { b.remove(); }); }, 1000);
+      });
+    };
+    vorlader.src = url;
+    var titel = name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').trim();
+    if (name.charAt(0) === '_' || !titel) {
+      $('ort').classList.add('leer');
+    } else {
+      $('ortname').textContent = titel;
+      $('ort').classList.remove('leer');
+    }
+  }
+
+  // ---------- Bedienung ----------
+  function oeffnen(a) {
+    if (a.pkg === '@hdmi2') {
+      var ok = LK ? LK.hdmi(2) : false;
+      zeigen(ok ? 'Wechsle auf HDMI 2 …' : 'HDMI 2 nicht gefunden');
+      return;
+    }
+    if (LK) LK.starten(a.pkg);
+    else zeigen(a.name + ' wird geöffnet …');
+  }
+
+  function taste(r) {
+    if (phase === 'apps') {
+      if (r === 'links' || r === 'rechts') {
+        var ziel = fokus + (r === 'links' ? -1 : 1);
+        if (ziel < 0 || ziel >= apps.length) return;
+        if (modus === 'gehoben') {
+          var a = apps[fokus]; apps[fokus] = apps[ziel]; apps[ziel] = a;
+          var spur = $('spur'), k1 = kacheln[fokus], k2 = kacheln[ziel];
+          if (ziel > fokus) spur.insertBefore(k2, k1); else spur.insertBefore(k1, k2);
+          kacheln[fokus] = k2; kacheln[ziel] = k1;
+          speichern();
+        }
+        fokus = ziel;
+        fokusSetzen();
+      } else if (r === 'hoch') {
+        if (!modus) phaseSetzen('bild');
+      } else if (r === 'runter') {
+        if (!modus) phaseSetzen('suche');
+      }
+    } else if (phase === 'bild') {
+      if (r === 'runter') appsRein();
+      else if ((r === 'links' || r === 'rechts') && bilder.length > 1) bildZeigen(bildIndex + (r === 'links' ? -1 : 1));
+    } else if (phase === 'suche') {
+      if (r === 'hoch') phaseSetzen('apps');
+    }
+  }
+
+  function ok() {
+    if (phase === 'apps') {
+      if (modus === 'gehoben') { modus = 'bearbeiten'; speichern(); fokusSetzen(); zeigen('Abgelegt · OK beendet das Bearbeiten'); return; }
+      if (modus === 'bearbeiten') { modus = ''; fokusSetzen(); zeigen('Fertig'); return; }
+      if (apps[fokus]) oeffnen(apps[fokus]);
+    } else if (phase === 'bild') {
+      appsRein();
+    } else if (phase === 'suche') {
+      if (LK) LK.suche();
+    }
+  }
+
+  function halten() {
+    if (phase !== 'apps' || !apps.length) return;
+    modus = 'gehoben';
+    fokusSetzen();
+    zeigen('Mit links und rechts verschieben · OK legt ab');
+  }
+
+  function zurueck() {
+    if (modus) { modus = ''; speichern(); fokusSetzen(); zeigen('Fertig'); return; }
+    if (phase === 'bild' || phase === 'suche') { appsRein(); return; }
+    if (LK && !LK.istStartseite()) LK.beenden();
+  }
+
+  window.lk = { taste: taste, ok: ok, halten: halten, zurueck: zurueck, einschalten: einschalten, wiederda: wiederda };
+
+  // Nur zum Testen im Browser am PC (auf dem Fernseher kommen die Tasten von der App).
+  if (!LK) {
+    var lang = false;
+    document.addEventListener('keydown', function (e) {
+      var karte = { ArrowLeft: 'links', ArrowRight: 'rechts', ArrowUp: 'hoch', ArrowDown: 'runter' };
+      if (karte[e.key]) { e.preventDefault(); taste(karte[e.key]); return; }
+      if (e.key === 'Enter') { e.preventDefault(); if (e.repeat && !lang) { lang = true; halten(); } if (!e.repeat) lang = false; }
+      if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); zurueck(); }
+    });
+    document.addEventListener('keyup', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); if (!lang) ok(); lang = false; }
+    });
+  }
+
+  window.addEventListener('resize', skalieren);
+  skalieren();
+  uhr();
+  setInterval(uhr, 5000);
+  laden();
+  einschalten();
+})();
+</script>
+</body>
+</html>
