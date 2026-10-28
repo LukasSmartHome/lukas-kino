@@ -3,7 +3,7 @@
 Eigene, werbefreie Startseite für Lukas' TCL-Fernseher (Google TV, Android 14).
 
 - Großes Hintergrundbild, Uhrzeit links oben, Bildname bzw. Land rechts oben.
-- Unten die App-Kacheln mit den echten Bannern der Apps; gedrückt halten = verschieben, OK = ablegen, nochmal OK = fertig.
+- Unten die App-Kacheln mit den echten Bannern der Apps; gedrückt halten = verschieben (OK legt ab), nochmal halten = „Deinstallieren“ darüber (hoch, dann OK).
 - Hoch: nur das Bild. Runter: Kacheln zurück. Nochmal runter: Suche nach Apps und Spielen.
 - PlayStation-Kachel wechselt auf HDMI 2.
 

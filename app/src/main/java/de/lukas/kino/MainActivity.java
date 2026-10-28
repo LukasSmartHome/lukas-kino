@@ -330,6 +330,20 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void deinstallieren(final String pkg) {
+            if (pkg == null || pkg.startsWith("@") || pkg.equals(getPackageName())) return;
+            runOnUiThread(() -> {
+                try {
+                    // Android fragt selbst noch einmal nach, bevor wirklich etwas gelöscht wird.
+                    Intent i = new Intent(Intent.ACTION_DELETE, Uri.fromParts("package", pkg, null));
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                } catch (Exception ignored) {
+                }
+            });
+        }
+
+        @JavascriptInterface
         public String eingaenge() {
             JSONArray arr = new JSONArray();
             try {
