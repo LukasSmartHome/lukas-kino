@@ -39,7 +39,16 @@ public class StartseitenWaechter extends AccessibilityService {
 
     @Override
     protected boolean onKeyEvent(KeyEvent e) {
-        if (e == null || e.getKeyCode() != KeyEvent.KEYCODE_HOME) return false;
+        if (e == null) return false;
+        if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0) {
+            Log.i(TAG, "Waechter Taste " + KeyEvent.keyCodeToString(e.getKeyCode()));
+        }
+        // Einstellungstaste: Das Google-Seitenmenü gibt es nicht mehr, also die Einstellungen-App öffnen.
+        if (e.getKeyCode() == KeyEvent.KEYCODE_SETTINGS) {
+            if (e.getAction() == KeyEvent.ACTION_UP && !e.isCanceled()) MainActivity.einstellungenOeffnen(this);
+            return true;
+        }
+        if (e.getKeyCode() != KeyEvent.KEYCODE_HOME) return false;
         // Ganze Home-Taste schlucken, damit die Google-Startseite gar nicht erst aufgeht.
         if (e.getAction() == KeyEvent.ACTION_UP && !e.isCanceled()) {
             if (!holen("home-taste")) {

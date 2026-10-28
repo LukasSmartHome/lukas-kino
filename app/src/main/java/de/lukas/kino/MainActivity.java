@@ -161,9 +161,39 @@ public class MainActivity extends Activity {
 
     // ---------- Tasten der Fernbedienung ----------
 
+    /** Öffnet die normale Einstellungen-App (Ersatz für das Google-Seitenmenü hinter der Einstellungstaste). */
+    static boolean einstellungenOeffnen(Context c) {
+        Intent[] wege = new Intent[] {
+                new Intent(android.provider.Settings.ACTION_SETTINGS),
+                c.getPackageManager().getLeanbackLaunchIntentForPackage("com.android.tv.settings"),
+                c.getPackageManager().getLaunchIntentForPackage("com.android.tv.settings")
+        };
+        for (Intent i : wege) {
+            if (i == null) continue;
+            try {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                c.startActivity(i);
+                Log.i("LukasKino", "Einstellungen geoeffnet: " + i);
+                return true;
+            } catch (Exception ex) {
+                Log.w("LukasKino", "Einstellungen gingen nicht: " + i, ex);
+            }
+        }
+        return false;
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         int k = e.getKeyCode();
+        if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0) {
+            Log.i("LukasKino", "Taste " + KeyEvent.keyCodeToString(k) + " (" + k + ", scan " + e.getScanCode() + ")");
+        }
+
+        if (k == KeyEvent.KEYCODE_SETTINGS) {
+            if (e.getAction() == KeyEvent.ACTION_UP) einstellungenOeffnen(this);
+            return true;
+        }
+
         String richtung = null;
         if (k == KeyEvent.KEYCODE_DPAD_UP) richtung = "hoch";
         else if (k == KeyEvent.KEYCODE_DPAD_DOWN) richtung = "runter";
