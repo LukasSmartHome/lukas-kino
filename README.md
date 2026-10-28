@@ -17,3 +17,8 @@ Eigene, werbefreie Startseite für Lukas' TCL-Fernseher (Google TV, Android 14).
 
 GitHub Actions baut bei jedem Push die APK und hängt sie als `lukas-kino.apk` an ein Release.
 Der Schlüssel in `signing/` ist absichtlich öffentlich: Er sorgt nur dafür, dass neue Versionen über die alte installiert werden können.
+
+## Startseite
+
+Sanfte Variante: Der Bedienungshilfe-Dienst `StartseitenWaechter` holt Lukas Kino nach vorn, sobald die Google-TV-Startseite aufgeht. Es wird kein Systempaket abgeschaltet.
+Einschalten per ADB: `de.lukas.kino/de.lukas.kino.StartseitenWaechter` an `enabled_accessibility_services` anhängen und `accessibility_enabled` auf 1. Ausschalten: wieder entfernen.

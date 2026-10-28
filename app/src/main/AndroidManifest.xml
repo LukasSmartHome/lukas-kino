@@ -23,7 +23,9 @@
         android:hardwareAccelerated="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
 
-        <!-- Testphase: ganz normale App. Die Startseite (HOME) kommt erst später dazu. -->
+        <!-- Startseite: sanft über den StartseitenWaechter (Google-Startseite bleibt installiert).
+             Der HOME-Eintrag schadet nicht, solange die Google-Startseite die höhere Priorität hat,
+             und wird erst gebraucht, falls sie später ganz abgeschaltet wird. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -35,6 +37,24 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
+
+        <service
+            android:name=".StartseitenWaechter"
+            android:exported="false"
+            android:label="@string/waechter_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/waechter" />
+        </service>
     </application>
 </manifest>

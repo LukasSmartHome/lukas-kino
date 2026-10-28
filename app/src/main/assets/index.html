@@ -424,7 +424,7 @@ body.an #schwarz{opacity:0}
     if (modus === 'menue') { modus = 'gehoben'; menueWahl = false; fokusSetzen(); return; }
     if (modus) { modus = ''; speichern(); fokusSetzen(); return; }
     if (phase === 'bild' || phase === 'suche') { appsRein(); return; }
-    if (LK && !LK.istStartseite()) LK.beenden();
+    // Als Startseite schließt Zurück nichts mehr (sonst würde die Google-Startseite kurz aufblitzen).
   }
 
   window.lk = { taste: taste, ok: ok, halten: halten, zurueck: zurueck, einschalten: einschalten, wiederda: wiederda };
