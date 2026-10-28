@@ -2,12 +2,13 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=1920, user-scalable=no">
 <title>Lukas Kino</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&amp;display=swap">
 <style>
 html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden}
 body{font-family:'Inter Tight','Google Sans',Roboto,system-ui,sans-serif;color:#fff;-webkit-user-select:none;user-select:none;cursor:none}
+#rahmen{position:fixed;left:0;top:0;right:0;bottom:0;overflow:hidden;background:#000}
 #buehne{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;overflow:hidden;background:#000}
 .ebene{position:absolute;inset:0}
 #bg{transform:scale(1.07);opacity:0;transition:transform 2600ms cubic-bezier(.2,.8,.2,1),opacity 1000ms ease}
@@ -52,6 +53,7 @@ body.an #schwarz{opacity:0}
 </style>
 </head>
 <body>
+<div id="rahmen">
 <div id="buehne">
   <div id="bg" class="ebene">
     <svg id="standardbild" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
@@ -124,6 +126,7 @@ body.an #schwarz{opacity:0}
   <div id="toast"></div>
   <div id="schwarz" class="ebene"></div>
 </div>
+</div>
 
 <script>
 (function () {
@@ -146,9 +149,12 @@ body.an #schwarz{opacity:0}
 
   // ---------- Bühne auf Bildschirmgröße skalieren ----------
   function skalieren() {
-    var s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
-    var x = (window.innerWidth - 1920 * s) / 2, y = (window.innerHeight - 1080 * s) / 2;
+    var r = $('rahmen');
+    var w = r.clientWidth || window.innerWidth, h = r.clientHeight || window.innerHeight;
+    var s = Math.min(w / 1920, h / 1080);
+    var x = (w - 1920 * s) / 2, y = (h - 1080 * s) / 2;
     $('buehne').style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
+    console.log('LK groesse ' + w + 'x' + h + ' skala ' + s.toFixed(3) + ' dpr ' + window.devicePixelRatio);
   }
 
   // ---------- Uhr ----------
@@ -184,7 +190,10 @@ body.an #schwarz{opacity:0}
     var neu = reihe.map(function (a) { return a.pkg; }).join('|');
     var alt = apps.map(function (a) { return a.pkg; }).join('|');
     apps = reihe;
-    if (neu !== alt) zeichnen();
+    if (neu !== alt) {
+      zeichnen();
+      console.log('LK apps ' + apps.length + ': ' + apps.slice(0, 12).map(function (a) { return a.name + (a.banner ? '*' : ''); }).join(', '));
+    }
   }
 
   function speichern() {
@@ -223,7 +232,7 @@ body.an #schwarz{opacity:0}
       img.className = 'banner';
       img.alt = a.name;
       img.src = '/banner/' + encodeURIComponent(a.pkg);
-      img.onerror = function () { innen.innerHTML = glasHtml(a); };
+      img.onerror = function () { console.log('LK kein Banner ' + a.pkg); innen.innerHTML = glasHtml(a); };
       innen.appendChild(img);
     } else {
       innen.innerHTML = glasHtml(a);
