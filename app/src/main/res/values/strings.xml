@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="waechter_name">Lukas Kino als Startseite</string>
-    <string name="waechter_beschreibung">Zeigt statt der Google-TV-Startseite immer Lukas Kino an. Liest keine Inhalte, reagiert nur darauf, dass die Google-Startseite aufgeht.</string>
+    <string name="waechter_beschreibung">Zeigt statt der Google-TV-Startseite immer Lukas Kino an. Liest keine Inhalte, reagiert nur auf die Home-Taste und darauf, dass die Google-Startseite aufgeht.</string>
 </resources>

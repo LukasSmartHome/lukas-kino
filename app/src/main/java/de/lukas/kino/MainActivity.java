@@ -137,7 +137,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        js("window.lk&&lk.wiederda()");
+        setIntent(intent);
+        boolean home = intent != null
+                && (intent.getBooleanExtra(StartseitenWaechter.EXTRA_HOME, false)
+                    || intent.hasCategory(Intent.CATEGORY_HOME));
+        js(home ? "window.lk&&lk.home()" : "window.lk&&lk.wiederda()");
     }
 
     @Override
