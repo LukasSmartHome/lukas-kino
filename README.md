@@ -9,8 +9,14 @@ Eigene, werbefreie Startseite für Lukas' TCL-Fernseher (Google TV, Android 14).
 
 ## Aufbau
 
-- `app/src/main/assets/index.html` – die ganze Oberfläche.
-- `app/src/main/java/de/lukas/kino/MainActivity.java` – liefert Apps, Bilder, Hintergründe und die Tasten der Fernbedienung.
+- Ganz normale Android-Oberfläche ohne WebView (seit 1.0.11, vorher eine Webseite in einer WebView – brauchte über 250 MB).
+- `MainActivity.java` – Bühne 1920x1080 (wird auf den Bildschirm skaliert), Zustände, Tasten, Apps, Hintergründe.
+- `Kachel.java` – eine App-Kachel mit Schatten, Banner oder Glas, Verschiebe-Pfeilen und „Deinstallieren“.
+- `Glas.java` – Milchglas: kleine verwischte Kopie des Hintergrunds, jedes Glas-Element zeichnet seinen Ausschnitt.
+- `Hintergrund.java` – Hintergrundbild mit Überblendung, sonst der gezeichnete Sonnenuntergang.
+- `Beschriftung.java` (Uhr, Bildname), `Pille.java` (Suchfeld, Meldung), `Symbole.java`, `SvgPfad.java`, `Ani.java`, `Schriften.java`.
+- `UmzugDienst.java` – einmalig: übernimmt die Kachel-Reihenfolge aus der alten Web-Version (eigener Prozess, beendet sich selbst).
+- Schrift: Inter Tight (SIL Open Font License, `assets/fonts/OFL-InterTight.txt`).
 - Hintergrundbilder liegen nur auf dem Fernseher in `Android/data/de.lukas.kino/files/hintergruende/` (nicht im Repository). Der Dateiname ohne Endung wird rechts oben angezeigt; beginnt er mit `_`, wird nichts angezeigt.
 
 ## Bauen

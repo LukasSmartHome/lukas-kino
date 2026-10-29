@@ -44,6 +44,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Einmaliger Umzug der alten Kachel-Reihenfolge aus der WebView (eigener Prozess, beendet sich selbst). -->
+        <service
+            android:name=".UmzugDienst"
+            android:exported="false"
+            android:process=":umzug" />
+
         <service
             android:name=".StartseitenWaechter"
             android:exported="false"
