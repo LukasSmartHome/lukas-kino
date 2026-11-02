@@ -16,6 +16,7 @@ Befehle (alles ohne --los ist nur Anschauen, es wird nichts verändert):
                                 Datei nach Schema „Titel (Jahr) [tmdbid-N]/Titel (Jahr) [tmdbid-N].ext“
                                 in /media/Filme verschieben (Titel und Jahr von TMDB), Jellyfin neu einlesen.
                                 Ohne TMDB-Eintrag mit IMDb-ID: [imdbid-tt...].
+  stapel ID,ZIEL[,--titel=..] ... [--los]   mehrere auf einmal
   titel ID Neuer_Titel          Anzeigename in Jellyfin setzen und sperren
                                 Jede Verschiebung steht in /media/Filme/.filmsortierer_log.jsonl (Rückweg).
   zurueck [--los]               letzte Verschiebung rückgängig machen
@@ -281,6 +282,22 @@ def cmd_umbenennen(a):
     print("verschoben")
 
 
+def cmd_stapel(a):
+    """stapel ID,ZIEL[,--titel=..][,--jahr=..] ID,ZIEL ... [--los] – mehrere Filme auf einmal (Fehler stoppen nur den einen)"""
+    los = ["--los"] if "--los" in a else []
+    for e in a:
+        if e == "--los":
+            continue
+        print("##", e)
+        try:
+            cmd_umbenennen(e.split(",") + los)
+        except SystemExit as x:
+            print("   übersprungen:", x)
+        except Exception as x:
+            print("   Fehler:", x)
+    print("FERTIG")
+
+
 def cmd_titel(a):
     """titel ITEM-ID Neuer_Titel – Anzeigename in Jellyfin setzen und sperren (z. B. deutscher Titel statt Original)"""
     item_id, name = a[0], a[1].replace("_", " ")
@@ -313,7 +330,7 @@ def cmd_zurueck(a):
 
 
 BEFEHLE = {"inventar": cmd_inventar, "offen": cmd_offen, "suche": cmd_suche, "bilder": cmd_bilder,
-           "doppelte": cmd_doppelte, "umbenennen": cmd_umbenennen, "titel": cmd_titel, "zurueck": cmd_zurueck}
+           "doppelte": cmd_doppelte, "umbenennen": cmd_umbenennen, "stapel": cmd_stapel, "titel": cmd_titel, "zurueck": cmd_zurueck}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in BEFEHLE:
