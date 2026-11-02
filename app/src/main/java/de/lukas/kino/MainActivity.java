@@ -112,6 +112,7 @@ public class MainActivity extends Activity {
     private BroadcastReceiver bildschirmAn, umzugFertig;
     private SharedPreferences einst;
     private Runnable t1, t2, toastWeg;
+    private KinoHa.Waechter auftrag;   // Film vom Dashboard starten (Skript 01g)
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -142,6 +143,8 @@ public class MainActivity extends Activity {
         }
         umzugStarten();
 
+        auftrag = new KinoHa.Waechter(this, (film, fortsetzen) -> PlayerActivity.starten(this, film, fortsetzen));
+
         uhrTick.run();
         laden();
         einschalten();
@@ -159,6 +162,13 @@ public class MainActivity extends Activity {
         super.onResume();
         vollbild();
         wiederda();
+        auftrag.an();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        auftrag.aus();
     }
 
     @Override
@@ -179,6 +189,7 @@ public class MainActivity extends Activity {
             unregisterReceiver(umzugFertig);
         } catch (Exception ignored) {
         }
+        auftrag.aus();
         h.removeCallbacksAndMessages(null);
         arbeiter.shutdownNow();
         super.onDestroy();

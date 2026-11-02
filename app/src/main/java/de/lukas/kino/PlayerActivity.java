@@ -36,6 +36,8 @@ import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.CaptionStyleCompat;
 import androidx.media3.ui.PlayerView;
 
+import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -64,6 +66,23 @@ public class PlayerActivity extends Activity {
     private final String sitzung = UUID.randomUUID().toString().replace("-", "");
     private final Handler h = new Handler(Looper.getMainLooper());
     private boolean gemeldet;
+    private JSONObject eintrag;                 // ganzer Jellyfin-Eintrag (für Home Assistant)
+    private boolean haLaeuft, haPause;          // HA: Start gemeldet und noch kein Stopp
+    private long haLetzte;
+    private KinoHa.Waechter auftrag;
+
+    /** Film oder Folge abspielen (Titel und Logo wie in der Filmübersicht). */
+    static void starten(Context c, JSONObject f, boolean fortsetzen) {
+        String titel = f.optString("Name");
+        if ("Episode".equals(f.optString("Type"))) titel = f.optString("SeriesName", titel) + " · " + titel;
+        String logo = null, lt = Jellyfin.tag(f, "Logo");
+        if (lt != null) logo = Jellyfin.logo(f.optString("Id"), lt);
+        else {
+            String pid = f.optString("ParentLogoItemId", null), ptag = f.optString("ParentLogoImageTag", null);
+            if (pid != null && ptag != null && !ptag.isEmpty()) logo = Jellyfin.logo(pid, ptag);
+        }
+        starten(c, f.optString("Id"), titel, fortsetzen ? Jellyfin.position(f) : 0, logo);
+    }
 
     static void starten(Context c, String id, String titel, long startTicks, String logoUrl) {
         Intent i = new Intent(c, PlayerActivity.class);
@@ -157,6 +176,24 @@ public class PlayerActivity extends Activity {
         player.setPlayWhenReady(true);
         leiste.zeigen(4000);
         h.postDelayed(fortschritt, 10_000);
+        // ganzen Eintrag für Home Assistant holen (Titel, Jahr, Serie)
+        new Thread(() -> {
+            try {
+                JSONObject e = jf.film(id);
+                h.post(() -> {
+                    eintrag = e;
+                    if (gemeldet) haMelden(1);
+                });
+            } catch (Exception ignored) {
+                // dann erfährt HA eben nichts
+            }
+        }).start();
+        // neuer Auftrag vom Dashboard, während hier etwas läuft: anderen Film starten
+        auftrag = new KinoHa.Waechter(this, (film, fortsetzen) -> {
+            if (film.optString("Id").equals(id)) return;
+            starten(this, film, fortsetzen);
+            finish();
+        });
     }
 
     private final Runnable fortschritt = new Runnable() {
@@ -177,6 +214,31 @@ public class PlayerActivity extends Activity {
             else if (art == 1) jf.meldeFortschritt(id, quelle, ticks, pause, sitzung);
             else jf.meldeStopp(id, quelle, ticks, sitzung);
         }).start();
+        haMelden(art);
+    }
+
+    /** Home Assistant: start, stand (höchstens jede Minute oder bei Pause/Weiter), stopp (einmal). */
+    private void haMelden(int art) {
+        if (player == null || eintrag == null) return;
+        boolean pause = !player.isPlaying();
+        long jetzt = SystemClock.uptimeMillis();
+        String a;
+        if (art == 2) {
+            if (!haLaeuft) return;
+            haLaeuft = false;
+            a = "stopp";
+        } else if (!haLaeuft) {
+            if (pause && art != 0 && haLetzte > 0) return;   // nach dem Stopp erst wieder melden, wenn es weiterläuft
+            haLaeuft = true;
+            a = "start";
+        } else {
+            if (jetzt - haLetzte < 55_000 && pause == haPause) return;
+            a = "stand";
+        }
+        haLetzte = jetzt;
+        haPause = pause;
+        long dauer = player.getDuration();
+        KinoHa.wiedergabe(eintrag, a, player.getCurrentPosition(), dauer == C.TIME_UNSET ? 0 : dauer, pause);
     }
 
     private void verstecken() {
@@ -187,6 +249,7 @@ public class PlayerActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (auftrag != null) auftrag.aus();
         if (player != null) {
             melde(2);
             player.pause();
@@ -197,10 +260,12 @@ public class PlayerActivity extends Activity {
     protected void onResume() {
         super.onResume();
         verstecken();
+        if (auftrag != null) auftrag.an();
     }
 
     @Override
     protected void onDestroy() {
+        if (auftrag != null) auftrag.aus();
         h.removeCallbacksAndMessages(null);
         if (player != null) {
             player.release();

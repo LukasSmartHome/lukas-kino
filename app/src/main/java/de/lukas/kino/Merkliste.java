@@ -30,8 +30,11 @@ final class Merkliste {
     private final Map<String, JSONObject> items = new HashMap<>();
     private final Map<String, List<String>> haIds = new HashMap<>(); // Jellyfin-ID -> IDs in HA
     private final Map<String, long[]> lokal = new HashMap<>();       // Jellyfin-ID -> {an (1/0), bis}
-    private Map<String, String> plex;                                // Name|Jahr -> Plex-ID
-    private String webhook;
+    // Katalog (plexfilme.json, seit 02.11.2026 aus Jellyfin: { filme: { HA-ID: {t, j, jf} } }) und Webhook – für alle gleich
+    private static Map<String, String> plex;                         // Name|Jahr -> HA-ID (alte Plex-ID oder jf:<ID>)
+    private static Map<String, String> jfZuHa = new HashMap<>();     // Jellyfin-ID -> HA-ID
+    private static long plexZeit;
+    private static String webhook;
 
     /** HA-Daten übernehmen (nach Familie.laden()). Blockiert. Liefert true, wenn sich die Liste geändert hat. */
     boolean ausHa(Jellyfin jf) throws Exception {
@@ -152,25 +155,35 @@ final class Merkliste {
             if (plexId != null && !ziele.contains(plexId)) ziele.add(plexId);
             if (!ziele.contains("jf:" + jfId)) ziele.add("jf:" + jfId);
         }
-        String url = webhook();
         for (String z : ziele) {
-            String body = "wer=" + Jellyfin.enc(WER) + "&id=" + Jellyfin.enc(z) + "&titel=" + Jellyfin.enc(titel) + "&an=" + an;
-            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-            c.setConnectTimeout(5000);
-            c.setReadTimeout(10000);
-            c.setRequestMethod("POST");
-            c.setDoOutput(true);
-            c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            try (OutputStream o = c.getOutputStream()) {
-                o.write(body.getBytes(StandardCharsets.UTF_8));
-            }
-            int code = c.getResponseCode();
-            c.disconnect();
-            if (code >= 400) throw new Exception("Webhook " + code);
+            webhookSenden("wer=" + Jellyfin.enc(WER) + "&id=" + Jellyfin.enc(z) + "&titel=" + Jellyfin.enc(titel) + "&an=" + an);
         }
     }
 
-    private synchronized String webhook() throws Exception {
+    /** Formular an den Webhook von Automation 84 schicken (Merkliste, Wiedergabe). Blockiert. */
+    static void webhookSenden(String body) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(webhook()).openConnection();
+        c.setConnectTimeout(5000);
+        c.setReadTimeout(10000);
+        c.setRequestMethod("POST");
+        c.setDoOutput(true);
+        c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+        try (OutputStream o = c.getOutputStream()) {
+            o.write(body.getBytes(StandardCharsets.UTF_8));
+        }
+        int code = c.getResponseCode();
+        c.disconnect();
+        if (code >= 400) throw new Exception("Webhook " + code);
+    }
+
+    /** ID dieses Films in Home Assistant (wie im Dashboard): alte Plex-ID, sonst jf:<Jellyfin-ID>. Blockiert. */
+    static String haIdFuer(JSONObject film) {
+        plexLaden();
+        String id = plexIdFuer(film);
+        return id != null ? id : "jf:" + film.optString("Id");
+    }
+
+    private static synchronized String webhook() throws Exception {
         if (webhook != null) return webhook;
         JSONObject j = new JSONObject(Jellyfin.holen(Familie.BASIS + "kino_geheim.json?t=" + System.currentTimeMillis()));
         String id = j.optString("merkWebhook", "");
@@ -179,11 +192,11 @@ final class Merkliste {
         return webhook;
     }
 
-    private void plexLaden() {
-        synchronized (this) {
-            if (plex != null) return;
+    private static void plexLaden() {
+        synchronized (Merkliste.class) {
+            if (plex != null && System.currentTimeMillis() - plexZeit < 1_800_000) return;
         }
-        Map<String, String> p = new HashMap<>();
+        Map<String, String> p = new HashMap<>(), zuHa = new HashMap<>();
         try {
             JSONObject f = new JSONObject(Jellyfin.holen(Familie.BASIS + "plexfilme.json?t=" + System.currentTimeMillis())).optJSONObject("filme");
             Iterator<String> it = f != null ? f.keys() : null;
@@ -192,9 +205,10 @@ final class Merkliste {
                 JSONObject o = f.optJSONObject(id);
                 if (o != null && !o.optString("t").isEmpty())
                     p.put(Familie.schluessel(o.optString("t"), o.has("j") ? String.valueOf(o.optInt("j")) : ""), id);
+                if (o != null && !o.optString("jf").isEmpty()) zuHa.put(o.optString("jf"), id);
             }
         } catch (Exception ignored) {
-            // ohne Plex-Katalog: dann jf:<ID>
+            // ohne Katalog: dann jf:<ID>
         }
         JSONObject roh = Familie.roh();
         JSONObject[] quellen = {roh != null ? roh.optJSONObject("bewertungen") : null, roh != null ? roh.optJSONObject("merktitel") : null};
@@ -210,12 +224,16 @@ final class Merkliste {
                 if (!p.containsKey(k)) p.put(k, id);
             }
         }
-        synchronized (this) {
+        synchronized (Merkliste.class) {
             plex = p;
+            jfZuHa = zuHa;
+            plexZeit = System.currentTimeMillis();
         }
     }
 
-    private synchronized String plexIdFuer(JSONObject e) {
+    private static synchronized String plexIdFuer(JSONObject e) {
+        String direkt = jfZuHa.get(e.optString("Id"));
+        if (direkt != null) return direkt;
         if (plex == null) return null;
         int j = e.optInt("ProductionYear", 0);
         String[] namen = {e.optString("Name"), e.optString("OriginalTitle", "")};

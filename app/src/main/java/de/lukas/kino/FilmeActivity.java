@@ -126,6 +126,7 @@ public class FilmeActivity extends Activity {
     private final ExecutorService bildSuche = Executors.newFixedThreadPool(2);
     private SharedPreferences titelSpeicher;
     private final Merkliste merkliste = new Merkliste();
+    private KinoHa.Waechter auftrag;   // Film vom Dashboard starten (Skript 01g)
     private String[] detailTrailer;          // {youtubeId, titel} zum Film in der Detailansicht
     private String detailTrailerId;
     private String hinweisText;              // kurzer Hinweis unten (z. B. „Auf der Merkliste“)
@@ -179,6 +180,7 @@ public class FilmeActivity extends Activity {
         buehne = new Buehne(this);
         setContentView(buehne);
         verstecken();
+        auftrag = new KinoHa.Waechter(this, this::abspielen);
         if (jf.angemeldet()) laden();
         else anmelden();
     }
@@ -192,10 +194,18 @@ public class FilmeActivity extends Activity {
             nachDemFilm();
         }
         if (jf.angemeldet() && SystemClock.uptimeMillis() - familieZeit > 180_000) netz.execute(this::familieLaden);
+        auftrag.an();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        auftrag.aus();
     }
 
     @Override
     protected void onDestroy() {
+        auftrag.aus();
         h.removeCallbacksAndMessages(null);
         netz.shutdownNow();
         bildSuche.shutdownNow();
