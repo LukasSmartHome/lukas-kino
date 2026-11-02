@@ -884,6 +884,167 @@
     }
   }
 
+  // ------------------------------------------------------------------ Live: wer schaut gerade was, wo (ganz links in Weiterschauen)
+  // Quelle: sensor.kino_jetzt in HA, kommt mit auftrag.json (alle 4 s). Die Zeit läuft am Fernseher weiter.
+
+  const LIVE_W = 470, LIVE_LUECKE = 64;
+  const live = { liste: [], sig: '', laedt: false };
+
+  function liveWo(w) {
+    if (w === PERSON.ha) return PERSON.schluessel === 'eltern' ? 'Ihr  ·  Wohnzimmer' : 'Du  ·  dein Zimmer';
+    if (w === 'Eltern') return 'Mama und Papa  ·  Wohnzimmer';
+    return w + '  ·  in seinem Zimmer';
+  }
+
+  function liveFarbe(w) { return w === 'Eltern' ? '#E8559A' : PERSONEN_FARBE[w] || GELB; }
+
+  async function liveNeu(laeuft, jetzt) {
+    const wer = Object.keys(laeuft).filter(function (w) {
+      const x = laeuft[w];
+      return x && (!x.typ || x.typ === 'movie' || x.typ === 'episode');
+    });
+    wer.sort(function (a, b) { return (Number(laeuft[b].ts) || 0) - (Number(laeuft[a].ts) || 0); }); // das Aktuellste ganz links
+    const sig = wer.map(function (w) { return w + '|' + laeuft[w].id; }).join(',');
+    if (sig === live.sig) {
+      live.liste.forEach(function (e) {
+        const li = e._live, x = laeuft[li.wer];
+        if (!x) return;
+        if (li.jetzt !== jetzt) {
+          li.jetzt = jetzt;
+          li.empfangen = Date.now();
+        }
+        li.pos = Number(x.pos) || 0;
+        li.dauer = Number(x.dauer) || 0;
+        li.status = x.status || 'playing';
+        li.ts = Number(x.ts) || jetzt;
+      });
+      liveTexte();
+      return;
+    }
+    if (live.laedt) return;
+    live.laedt = true;
+    try {
+      await merk.plexLaden();
+      const ids = {};
+      wer.forEach(function (w) {
+        const id = String(laeuft[w].id || '');
+        const jid = id.indexOf('jf:') === 0 ? id.substring(3) : (merk.haZuJf || {})[id];
+        if (jid) ids[w] = jid;
+      });
+      const uniq = Object.keys(ids).map(function (k) { return ids[k]; }).filter(function (x, i, a) { return a.indexOf(x) === i; });
+      const items = {};
+      if (uniq.length) {
+        (await jf.liste('/Items?userId=' + jf.benutzer + '&ids=' + uniq.join(',') + '&fields=' + FELDER))
+          .forEach(function (e) { items[e.Id] = e; });
+      }
+      const weiter = await jf.weiterschauen();
+      const liste = [];
+      wer.forEach(function (w) {
+        const f = items[ids[w]], x = laeuft[w];
+        if (!f) return;
+        const k = Object.assign({}, f);
+        k._live = { wer: w, pos: Number(x.pos) || 0, dauer: Number(x.dauer) || 0, status: x.status || 'playing',
+          ts: Number(x.ts) || jetzt, jetzt: jetzt, empfangen: Date.now() };
+        liste.push(k);
+      });
+      live.sig = sig;
+      live.liste = liste;
+      liveEinsetzen(weiter);
+    } catch (e) {
+      /* beim nächsten Mal nochmal */
+    } finally {
+      live.laedt = false;
+    }
+  }
+
+  /** Live-Kacheln vorne in die Reihe Weiterschauen der Filme-Startseite (weiter = frische Liste von Jellyfin oder null). */
+  function liveEinsetzen(weiter) {
+    const start = startseiten.filme;
+    if (!start) return;
+    let w = start.reihen[0];
+    const da = !!w && w.titel === 'Weiterschauen';
+    const alt = da ? (w.live || 0) : 0;
+    const liveIds = live.liste.map(function (e) { return e.Id; });
+    let regulaer = weiter ? weiter.slice() : (da ? w.eintraege.filter(function (e) { return e && !e._live; }) : []);
+    regulaer = regulaer.filter(function (e) { return e && liveIds.indexOf(e.Id) < 0; });
+    const alle = live.liste.concat(regulaer);
+    if (!alle.length) {
+      if (da && start.reihen.length > 1) {
+        start.reihen.shift();
+        if (start.akt > 0) start.akt--;
+      }
+    } else {
+      if (!da) {
+        w = reiheAus('Weiterschauen', [], POSTER);
+        start.reihen.unshift(w);
+        if (seite === start) start.akt++;
+      }
+      w.eintraege = alle;
+      w.live = live.liste.length;
+      w.version++;
+      // stand man ganz vorne, bleibt man vorne (Live zuerst sehen), sonst bleibt der Fokus auf demselben Film
+      w.fokus = begrenzen(alt === 0 && w.fokus === 0 ? 0 : w.fokus + w.live - alt, 0, alle.length - 1);
+    }
+    if (seite === start && (ansicht === A.LISTE || ansicht === A.DETAIL)) {
+      infoSchluessel = '';
+      zeichnen();
+    }
+  }
+
+  function liveKarteBauen(e) {
+    const li = e._live || {};
+    const c = div('karte live');
+    c.style.setProperty('--farbe', liveFarbe(li.wer));
+    let url = null;
+    if (e.BackdropImageTags && e.BackdropImageTags.length) {
+      url = SERVER + '/Items/' + e.Id + '/Images/Backdrop/0?fillWidth=' + LIVE_W * 2 + '&quality=85&tag=' + e.BackdropImageTags[0];
+    } else if (e.ParentBackdropItemId && e.ParentBackdropImageTags && e.ParentBackdropImageTags.length) {
+      url = SERVER + '/Items/' + e.ParentBackdropItemId + '/Images/Backdrop/0?fillWidth=' + LIVE_W * 2 + '&quality=85&tag=' + e.ParentBackdropImageTags[0];
+    } else url = kartenUrl(e, POSTER);
+    if (url) {
+      const img = document.createElement('img');
+      img.alt = '';
+      img.decoding = 'async';
+      img.onerror = function () { if (img.parentNode) img.parentNode.removeChild(img); };
+      img.src = url;
+      c.appendChild(img);
+    }
+    c.insertAdjacentHTML('beforeend', '<div class="lv-verlauf"></div><div class="lv-live"><i></i>LIVE</div><div class="lv-wer"></div>'
+      + '<div class="lv-titel"></div><div class="lv-bahn"><i></i></div><div class="lv-zeit"></div>');
+    c.querySelector('.lv-wer').textContent = liveWo(li.wer);
+    c.querySelector('.lv-titel').textContent = typ(e) === 'Episode'
+      ? (e.SeriesName || '') + '  ·  S' + (e.ParentIndexNumber || 0) + ' E' + (e.IndexNumber || 0) : (e.Name || '');
+    c._liveEintrag = e;
+    liveKarteText(c);
+    return c;
+  }
+
+  function liveKarteText(c) {
+    const li = c._liveEintrag && c._liveEintrag._live;
+    if (!li) return;
+    const dauer = li.dauer || 0, pause = li.status !== 'playing';
+    let pos = li.pos || 0;
+    if (!pause) pos += Math.max(0, (li.jetzt || 0) - (li.ts || 0)) + (Date.now() - (li.empfangen || Date.now())) / 1000;
+    if (dauer > 0) pos = Math.min(pos, dauer);
+    c.querySelector('.lv-bahn i').style.width = (dauer > 0 ? 100 * pos / dauer : 0) + '%';
+    const rest = Math.max(0, Math.round((dauer - pos) / 60));
+    const restText = rest >= 60 ? Math.floor(rest / 60) + ' Std. ' + (rest % 60) + ' Min.' : rest + ' Min.';
+    let z;
+    if (dauer <= 0) z = pause ? 'pausiert' : 'läuft';
+    else if (pause) z = 'pausiert  ·  noch ' + restText;
+    else {
+      const ende = new Date(Date.now() + (dauer - pos) * 1000);
+      z = 'noch ' + restText + '  ·  fertig ca. ' + ende.getHours() + ':' + zweistellig(ende.getMinutes());
+    }
+    c.querySelector('.lv-zeit').textContent = z;
+  }
+
+  function liveTexte() {
+    const start = startseiten.filme, w = start && start.reihen[0];
+    if (!w || !w.live || !w.karten) return;
+    Object.keys(w.karten).forEach(function (k) { if (w.karten[k].classList.contains('live')) liveKarteText(w.karten[k]); });
+  }
+
   // ------------------------------------------------------------------ Gesehen je Profil (ab 80 %)
   // Quelle: Home Assistant (sensor.kino_gesehen, Paket kino_gesehen.yaml) über bewertungen.json → gesehen → Profil.
   // Gesehene Filme verschwinden bei diesem Profil aus Neu, den Kategorien, Alle Filme und Empfohlen und stehen in der
@@ -1474,6 +1635,7 @@
 
   function zeigeStart(b, s) {
     startseiten[b] = s;
+    if (b === 'filme') liveEinsetzen(null);
     if (bereich !== b) return;
     seite = s;
     ansicht = A.LISTE;
@@ -1604,6 +1766,7 @@
           start.reihen.unshift(reiheAus('Weiterschauen', weiter, b === 'serien' ? QUER : POSTER));
           if (seite === start) start.akt++;
         }
+        if (b === 'filme') liveEinsetzen(null);
       }
       fokusGeaendert();
     } catch (e) { /* nicht schlimm */ }
@@ -1614,7 +1777,7 @@
     alle.forEach(function (s) {
       s.reihen.forEach(function (r) {
         for (let i = 0; i < r.eintraege.length; i++) {
-          if (r.eintraege[i] && r.eintraege[i].Id === neu.Id) {
+          if (r.eintraege[i] && r.eintraege[i].Id === neu.Id && !r.eintraege[i]._live) {
             r.eintraege[i] = neu;
             r.version++;
           }
@@ -1937,7 +2100,7 @@
       r.el.style.top = (REIHE_Y + versatz(s, i)) + 'px';
       r.el.style.opacity = i < s.akt ? '0' : i > s.akt ? '0.6' : '1';
       r.titelEl.style.opacity = i === s.akt ? '0.9' : '0.67';
-      r.titelEl.textContent = r.titel;
+      r.titelEl.textContent = r.live ? '' : r.titel;
       kartenZeichnen(r, i === s.akt);
     }
     if (neu) sofortEnde(cont);
@@ -1959,6 +2122,13 @@
     el.reihen.appendChild(d);
   }
 
+  /** x-Position einer Karte; in Weiterschauen stehen vorne die breiteren Live-Kacheln mit Abstand. */
+  function kartenX(r, k) {
+    const n = r.live || 0, sw = (r.form === QUER ? QW : PW) + ABSTAND;
+    if (!n) return k * sw;
+    return k < n ? k * (LIVE_W + ABSTAND) : n * (LIVE_W + ABSTAND) + LIVE_LUECKE + (k - n) * sw;
+  }
+
   function kartenZeichnen(r, aktiv) {
     const quer = r.form === QUER, schritt = (quer ? QW : PW) + ABSTAND;
     if (r.gebaut !== r.version) {
@@ -1966,8 +2136,20 @@
       r.karten = {};
       r.platzhalter = false;
       r.gebaut = r.version;
+      if (r.live) {
+        // Überschriften wandern mit: „Läuft gerade“ über den Live-Kacheln, „Weiterschauen“ über dem Rest
+        const t1 = div('live-titel');
+        t1.innerHTML = '<i></i>Läuft gerade';
+        t1.style.left = '0px';
+        r.streifen.appendChild(t1);
+        if (r.eintraege.length > r.live) {
+          const t2 = div('live-titel', 'Weiterschauen');
+          t2.style.left = kartenX(r, r.live) + 'px';
+          r.streifen.appendChild(t2);
+        }
+      }
     }
-    r.streifen.style.transform = 'translate3d(' + (-r.fokus * schritt) + 'px,0,0)';
+    r.streifen.style.transform = 'translate3d(' + (-kartenX(r, r.fokus)) + 'px,0,0)';
     if (!r.geladen && !r.eintraege.length) {
       if (!r.platzhalter) {
         for (let k = 0; k < 8; k++) {
@@ -1996,8 +2178,8 @@
     for (let k = von; k <= bis; k++) {
       let c = r.karten[k];
       if (!c) {
-        c = karteBauen(r.eintraege[k], r.form);
-        c.style.left = (k * schritt) + 'px';
+        c = k < (r.live || 0) ? liveKarteBauen(r.eintraege[k]) : karteBauen(r.eintraege[k], r.form);
+        c.style.left = kartenX(r, k) + 'px';
         c._reihe = r;
         c._index = k;
         r.streifen.appendChild(c);
@@ -3147,6 +3329,7 @@
       const r = await fetch('../auftrag.json?t=' + Date.now());
       if (!r.ok) return;
       const j = await r.json();
+      liveNeu((j && j.laeuft) || {}, Number(j && j.jetzt) || Date.now() / 1000);
       const a = j && j.auftraege && j.auftraege[PERSON.ha];
       if (!a || !a.id || !a.ts) return;
       const kennung = String(a.ts) + '|' + a.id;

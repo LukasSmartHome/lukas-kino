@@ -683,7 +683,8 @@ public class FilmeActivity extends Activity {
         w.eintraege.clear();
         w.eintraege.addAll(alle);
         w.live = liveListe.size();
-        w.fokus = Math.max(0, Math.min(w.fokus + w.live - alt, w.eintraege.size() - 1));
+        // stand man ganz vorne, bleibt man vorne (Live zuerst sehen), sonst bleibt der Fokus auf demselben Film
+        w.fokus = Math.max(0, Math.min(alt == 0 && w.fokus == 0 ? 0 : w.fokus + w.live - alt, w.eintraege.size() - 1));
         buehne.invalidate();
     }
 
