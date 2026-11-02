@@ -178,7 +178,8 @@ final class SprachRahmen extends View {
         }
         Blase letzte = liste.isEmpty() ? null : liste.get(liste.size() - 1);
         if (zustand == HOERT && (letzte == null || !letzte.du)) liste.add(new Blase(tippDu, true, null));
-        if (zustand == DENKT && letzte != null && letzte.du && letzte.text != null) {
+        // Claude tippt nach deiner Frage – und auch nach seinem „Moment …“, solange Opus nachdenkt.
+        if (zustand == DENKT && letzte != null && (!letzte.du || letzte.text != null)) {
             liste.add(new Blase(tippClaude, false, null));
         }
 

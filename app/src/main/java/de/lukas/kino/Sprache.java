@@ -122,6 +122,10 @@ public class Sprache extends Service {
     private boolean jarvisSpricht;
     /** Die Jarvis-Antwort läuft über den TV (Teufel hängt am TV, Voice-PE-Ton wäre nicht zu hören). */
     private boolean jarvisTonAmTv;
+    /** Schon eine Jarvis-Antwort gezeigt (danach kommt Teil 2 ohne Warten aufs Sprechen). */
+    private boolean jarvisTeilGezeigt;
+    /** Teil 2 (Opus), der nach dem noch laufenden Teil 1 abgespielt wird: {text, audio, fertig}. */
+    private String[] jarvisNaechster;
     private static final long LIVE_TAKT_MS = 900;
     private static final int LIVE_MAX_BYTES = RATE * 2 * 30;
     private static final long GESPRAECH_OFFEN_MS = 10 * 60_000;
@@ -658,14 +662,46 @@ public class Sprache extends Service {
         }
         duErsetzen(erk);
         wartendeAntwort = ant.isEmpty() ? null : ant;
+        // Bei schweren Fragen sagt Haiku erst „Moment …“ und Opus liefert über /tv/weiter nach.
+        final String weiter = j.optString("weiter", "");
+        Runnable danach = weiter.isEmpty() ? this::gespraechWartet : () -> weiterHolen(weiter);
         if (mp3.isEmpty()) {
             wartendeAntwortZeigen();
-            gespraechWartet();
+            danach.run();
             return;
         }
         // Text und Stimme zeitgleich: bis der erste Ton kommt, tippt Claude (drei Punkte).
         zeige(SprachRahmen.DENKT, "");
-        abspielen(mp3, gesendet, this::gespraechWartet);
+        abspielen(mp3, gesendet, danach);
+    }
+
+    /** Wartet auf die Opus-Antwort (GET /tv/weiter, bis 3 min); Claude tippt solange. */
+    private void weiterHolen(String id) {
+        final int runde = sendeRunde;
+        final long seit = SystemClock.uptimeMillis();
+        zeige(SprachRahmen.DENKT, "");
+        haupt.removeCallbacks(schliessen);
+        final String url = server() + "/tv/weiter?id=" + id;
+        new Thread(() -> {
+            JSONObject j = holeJson(url, 185_000);
+            haupt.post(() -> {
+                if (runde != sendeRunde) return;
+                if (j == null || j.has("fehler")) {
+                    fehler(j == null ? "Keine Antwort vom Laptop" : j.optString("fehler", "Fehler"));
+                    return;
+                }
+                Log.i(TAG, "Opus-Antwort nach " + (SystemClock.uptimeMillis() - seit) + " ms");
+                String ant = j.optString("antwort", "");
+                String mp3 = j.optString("audio", "");
+                wartendeAntwort = ant.isEmpty() ? null : ant;
+                if (mp3.isEmpty()) {
+                    wartendeAntwortZeigen();
+                    gespraechWartet();
+                    return;
+                }
+                abspielen(mp3, seit, this::gespraechWartet);
+            });
+        }, "LukasKinoWeiter").start();
     }
 
     /** Spielt die Antwort ab; der wartende Antworttext erscheint mit dem ersten Ton (spätestens nach 8 s). */
@@ -821,6 +857,8 @@ public class Sprache extends Service {
                 jarvisAntwort = null;
                 jarvisSpricht = false;
                 jarvisTonAmTv = false;
+                jarvisTeilGezeigt = false;
+                jarvisNaechster = null;
                 duLive = null;
                 fokusHolen();
                 zeige(SprachRahmen.HOERT, "");
@@ -859,6 +897,8 @@ public class Sprache extends Service {
         jarvisAntwort = null;
         jarvisSpricht = false;
         jarvisTonAmTv = false;
+        jarvisTeilGezeigt = false;
+        jarvisNaechster = null;
     }
 
     /** Holt erst den aktuellen Stand (Basis), dann alle 0,3 s, bis eine neue Anfrage samt Antwort da ist. */
@@ -871,25 +911,32 @@ public class Sprache extends Service {
                 return;
             }
             int basis = b.optInt("nr", 0);
-            long ende = SystemClock.uptimeMillis() + 90_000;
+            long ende = SystemClock.uptimeMillis() + 200_000;
             String erkZuletzt = "";
+            int teilZuletzt = 0;
             while (runde == jarvisRunde && SystemClock.uptimeMillis() < ende) {
                 SystemClock.sleep(300);
                 JSONObject j = holeJson(url);
-                if (j == null || j.optInt("nr", 0) <= basis) continue;
+                // != statt >: startet der Laptop-Dienst neu, beginnt nr wieder bei 0.
+                if (j == null || j.optInt("nr", 0) == basis) continue;
                 final String erk = j.optString("erkannt", "").trim();
                 final String ant = j.optString("antwort", "").trim();
-                final String ton = j.optString("audio", "").trim();
-                if (!erk.equals(erkZuletzt) || !ant.isEmpty()) {
+                final int teil = j.optInt("teil", 1);
+                final boolean fertig = j.optBoolean("fertig", true);
+                final boolean neuerTeil = !ant.isEmpty() && teil > teilZuletzt;
+                final String ton = neuerTeil ? j.optString("audio", "").trim() : "";
+                if (!erk.equals(erkZuletzt) || neuerTeil) {
                     erkZuletzt = erk;
-                    haupt.post(() -> jarvisText(runde, erk, ant, ton));
+                    if (neuerTeil) teilZuletzt = teil;
+                    final String text = neuerTeil ? ant : "";
+                    haupt.post(() -> jarvisText(runde, erk, text, ton, fertig));
                 }
-                if (!ant.isEmpty()) break;
+                if (!ant.isEmpty() && fertig) break;
             }
         }, "LukasKinoJarvis").start();
     }
 
-    private void jarvisText(int runde, String erk, String ant, String ton) {
+    private void jarvisText(int runde, String erk, String ant, String ton, boolean fertig) {
         if (runde != jarvisRunde || !jarvisAnzeige) return;
         if (!erk.isEmpty()) {
             if (duLive == null) {
@@ -900,23 +947,57 @@ public class Sprache extends Service {
             }
             zeige(SprachRahmen.DENKT, "");
         }
-        if (ant.isEmpty() || jarvisTonAmTv) return;
+        if (ant.isEmpty()) return;
+        if (duLive != null && "…".equals(duLive[1])) verlauf.remove(duLive);
         if (!ton.isEmpty()) {
-            // Stimme über den TV: Text erscheint mit dem ersten Ton, danach noch kurz stehen lassen.
+            // Stimme über den TV: Text erscheint mit dem ersten Ton.
             jarvisTonAmTv = true;
-            if (duLive != null && "…".equals(duLive[1])) verlauf.remove(duLive);
             duLive = null;
-            wartendeAntwort = ant;
-            zeige(SprachRahmen.DENKT, "");
-            haupt.removeCallbacks(schliessen);
-            abspielen(ton, SystemClock.uptimeMillis(), () -> {
-                haupt.removeCallbacks(schliessen);
-                haupt.postDelayed(schliessen, 9000);
-            });
+            if (spieler != null) {
+                jarvisNaechster = new String[]{ant, ton, fertig ? "1" : "0"};
+                return;
+            }
+            jarvisSpielen(ant, ton, fertig);
+            return;
+        }
+        if (jarvisTonAmTv || jarvisTeilGezeigt) {
+            // Teil ohne Ton (z. B. Stimme fehlt): gleich zeigen.
+            duLive = null;
+            verlauf.add(new String[]{"claude", ant});
+            jarvisTeilGezeigt = true;
+            jarvisNachTeil(fertig);
             return;
         }
         jarvisAntwort = ant;
         if (jarvisSpricht) jarvisAntwortZeigen();
+    }
+
+    private void jarvisSpielen(String ant, String ton, boolean fertig) {
+        wartendeAntwort = ant;
+        zeige(SprachRahmen.DENKT, "");
+        haupt.removeCallbacks(schliessen);
+        abspielen(ton, SystemClock.uptimeMillis(), () -> {
+            jarvisTeilGezeigt = true;
+            String[] n = jarvisNaechster;
+            jarvisNaechster = null;
+            if (n != null) {
+                jarvisSpielen(n[0], n[1], "1".equals(n[2]));
+                return;
+            }
+            jarvisNachTeil(fertig);
+        });
+    }
+
+    /** Nach einem Teil: fertig → noch 9 s stehen lassen; sonst tippt Claude, bis Opus nachliefert. */
+    private void jarvisNachTeil(boolean fertig) {
+        haupt.removeCallbacks(schliessen);
+        if (fertig) {
+            zeige(SprachRahmen.ANTWORT, "");
+            haupt.postDelayed(schliessen, 9000);
+        } else {
+            zeige(SprachRahmen.DENKT, "");
+            haupt.postDelayed(schliessen, 200_000);
+        }
     }
 
     private void jarvisAntwortZeigen() {
@@ -926,15 +1007,20 @@ public class Sprache extends Service {
         if (duLive != null && "…".equals(duLive[1])) verlauf.remove(duLive);
         duLive = null;
         verlauf.add(new String[]{"claude", a});
+        jarvisTeilGezeigt = true;
         zeige(SprachRahmen.ANTWORT, "");
     }
 
     private static JSONObject holeJson(String url) {
+        return holeJson(url, 2500);
+    }
+
+    private static JSONObject holeJson(String url, int leseZeit) {
         HttpURLConnection c = null;
         try {
             c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(1500);
-            c.setReadTimeout(2500);
+            c.setReadTimeout(leseZeit);
             if (c.getResponseCode() != 200) return null;
             ByteArrayOutputStream b = new ByteArrayOutputStream();
             try (InputStream ein = c.getInputStream()) {
