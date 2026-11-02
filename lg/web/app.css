@@ -637,10 +637,16 @@ body {
   border-radius: 48px;
   transform: translate3d(-480px, 0, 0);
   opacity: 0;
-  transition: transform .38s cubic-bezier(.2, .8, .2, 1), opacity .25s;
+  visibility: hidden; /* zu = gar nicht zeichnen (die Unschärfe kostet sonst auch unsichtbar) */
+  transition: transform .38s cubic-bezier(.2, .8, .2, 1), opacity .25s, visibility 0s linear .38s;
 }
 
-#leiste.auf { transform: none; opacity: 1; }
+#leiste.auf {
+  transform: none;
+  opacity: 1;
+  visibility: visible;
+  transition: transform .38s cubic-bezier(.2, .8, .2, 1), opacity .25s, visibility 0s;
+}
 
 #leiste .marke {
   position: absolute;
@@ -1122,3 +1128,32 @@ body {
   color: rgba(255, 255, 255, .7);
   margin-left: 6px;
 }
+
+/* ------------------------------------------------------------ Leichter Modus
+   Für schwächere Fernseher (Jonas' LG B5): keine Unschärfe hinter dem Glas, keine großen weichen
+   Schatten und Leuchten – die rechnet der Grafikchip bei jeder Bewegung neu, das ruckelt. */
+
+.leicht .glas {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .09) 0, rgba(255, 255, 255, 0) 220px),
+    rgba(26, 28, 34, .93);
+  box-shadow: inset 0 0 0 1.6px rgba(255, 255, 255, .26);
+}
+
+.leicht .karte { transition: transform .2s cubic-bezier(.2, .8, .2, 1), opacity .25s; }
+.leicht .treffer { transition: transform .2s cubic-bezier(.2, .8, .2, 1), opacity .2s; }
+.leicht .karte.fokus, .leicht .treffer.fokus { box-shadow: none; }
+.leicht .knopf { transition: background .15s, color .15s; }
+.leicht .knopf.fokus { box-shadow: none; }
+.leicht #leiste .pille { box-shadow: none; }
+.leicht .i-gross, .leicht .i-titel span { text-shadow: none; }
+.leicht .i-logo img { filter: none; }
+.leicht .i-logo img.weiss { filter: brightness(0) invert(1); }
+.leicht .bg { transition-duration: .3s; }
+.leicht #info .neu { animation: none; }
+
+/* Empfohlen: wer wie bewertet hat steht schon in der Liste – dafür Inhalt kürzer, damit nichts in die Reihe rutscht */
+#info.empf:not(.detail) .i-rest { display: none; }
+#info.empf:not(.detail) .i-inhalt { -webkit-line-clamp: 2; }

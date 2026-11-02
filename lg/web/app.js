@@ -23,6 +23,31 @@
   });
 
   const SERVER = (parameter.server || 'http://192.168.178.44:8096').replace(/\/+$/, '');
+  // Home Assistant (für die Merkliste): gleicher Rechner wie diese Seite, Port 8123
+  const HA = (parameter.ha || (location.protocol + '//' + (location.hostname || '192.168.178.44') + ':8123')).replace(/\/+$/, '');
+
+  // Wer schaut an diesem Fernseher? Steht in der Server-Adresse der LG-App:
+  //   http://192.168.178.44:8098        -> Eltern (Wohnzimmer, Moni und Uli gemeinsam)
+  //   http://192.168.178.44:8098/jonas  -> Jonas
+  //   http://192.168.178.44:8098/lukas  -> Lukas
+  // ich = Namen, die in HA zu diesem Fernseher gehören (Bewertungen, Verlauf, Merkliste).
+  // ohneTon = Tonformate, die der Fernseher im Browser nicht abspielt – die wandelt der Pi um.
+  const PERSONEN = {
+    eltern: { name: 'Eltern', ha: 'Eltern', ich: ['Moni', 'Uli', 'Eltern'], listen: ['Moni', 'Uli', 'Eltern'], ohneTon: ['truehd', 'mlp'] },
+    jonas: { name: 'Jonas', ha: 'Jonas', ich: ['Jonas'], listen: ['Jonas'], ohneTon: ['dts', 'dca', 'truehd', 'mlp'], leicht: true },
+    lukas: { name: 'Lukas', ha: 'Lukas', ich: ['Lukas'], listen: ['Lukas'], ohneTon: ['truehd', 'mlp'] }
+  };
+  const PERSON = (function () {
+    let k = String(parameter.person || '').toLowerCase();
+    if (!PERSONEN[k]) {
+      const m = String(location.pathname || '').match(/\/(eltern|jonas|lukas)\//i);
+      k = m ? m[1].toLowerCase() : 'eltern';
+    }
+    return Object.assign({ schluessel: k }, PERSONEN[k]);
+  })();
+  // Leichter Modus (ohne Glas-Unschärfe und große Schatten) für schwächere Fernseher; ?leicht=1/0 erzwingt
+  const LEICHT = parameter.leicht === '1' || (parameter.leicht !== '0' && !!PERSON.leicht);
+  if (LEICHT) document.documentElement.classList.add('leicht');
   const CLIENT = 'Lukas Kino Web';
   const VERSION = '1.0.0';
   const GELB = '#F2B705';
@@ -44,8 +69,8 @@
     'Familie und Animation': '#3E9BF0', 'Kriegsfilme': '#5E6B2B', 'Historienfilme': '#9C7442', 'Western': '#E9A23B'
   };
 
-  const LEISTE = ['Suche', 'Filme', 'Serien', 'Merkliste', 'Fotos'];
-  const BEREICHE = ['filme', 'serien', 'merkliste', 'fotos'];
+  const LEISTE = ['Suche', 'Filme', 'Serien', 'Merkliste', 'Empfohlen', 'Fotos'];
+  const BEREICHE = ['filme', 'serien', 'merkliste', 'empfohlen', 'fotos'];
   const TASTEN = [
     ['a', 'b', 'c', 'd', 'e', 'f'], ['g', 'h', 'i', 'j', 'k', 'l'], ['m', 'n', 'o', 'p', 'q', 'r'],
     ['s', 't', 'u', 'v', 'w', 'x'], ['y', 'z', 'ä', 'ö', 'ü', 'ß'], ['1', '2', '3', '4', '5', '6'],
@@ -84,6 +109,7 @@
     '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9l5 3-5 3z"/>',
     '<rect x="3" y="7" width="18" height="11" rx="2.5"/><path d="M8.5 3L12 7l3.5-4M8 21h8"/>',
     '<path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-1z"/>',
+    '<path d="M12 3.2l2.7 5.5 6 .9-4.35 4.2 1 6-5.35-2.8-5.35 2.8 1-6L3.3 9.6l6-.9z"/>',
     '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3.5 17L9 11.5l4 4 2.5-2.5 5 4.5"/><circle cx="16.2" cy="9.2" r="1.6"/>'
   ];
 
@@ -269,13 +295,26 @@
     streamUrl: function (id, quelle) {
       return SERVER + '/Videos/' + id + '/stream?static=true&mediaSourceId=' + encodeURIComponent(quelle)
         + '&deviceId=' + encodeURIComponent(geraetId) + '&ApiKey=' + this.token + '&api_key=' + this.token;
+    },
+    // Über den Pi: Bild wird nur umverpackt (kein Umrechnen), der Ton wird zu Dolby Digital 5.1 (AC3) –
+    // oder ebenfalls nur kopiert, wenn die gewählte Spur schon AC3/E-AC3/AAC ist.
+    hlsUrl: function (id, quelle, sitzung, tonIndex) {
+      let u = SERVER + '/Videos/' + id + '/master.m3u8?MediaSourceId=' + encodeURIComponent(quelle)
+        + '&DeviceId=' + encodeURIComponent(geraetId) + '&PlaySessionId=' + encodeURIComponent(sitzung)
+        + '&VideoCodec=hevc,h264,av1&AudioCodec=ac3,eac3,aac,mp3&AllowVideoStreamCopy=true&AllowAudioStreamCopy=true'
+        + '&TranscodingMaxAudioChannels=6&AudioBitrate=640000&SegmentContainer=mp4&MinSegments=1&RequireAvc=false'
+        + '&ApiKey=' + this.token + '&api_key=' + this.token;
+      if (tonIndex != null && tonIndex >= 0) u += '&AudioStreamIndex=' + tonIndex;
+      return u;
     }
   };
 
   // Bilder (Jellyfin liefert sie ohne Anmeldung)
   function mitTag(tag) { return tag ? '&tag=' + tag : ''; }
   function posterUrl(id, tag, h) { return SERVER + '/Items/' + id + '/Images/Primary?fillHeight=' + h + '&quality=90' + mitTag(tag); }
-  function hintergrundBild(id, tag) { return SERVER + '/Items/' + id + '/Images/Backdrop/0?fillWidth=1920&quality=85' + mitTag(tag); }
+  function hintergrundBild(id, tag) {
+    return SERVER + '/Items/' + id + '/Images/Backdrop/0?fillWidth=' + (LEICHT ? 1280 : 1920) + '&quality=' + (LEICHT ? 80 : 85) + mitTag(tag);
+  }
   function logoBild(id, tag) { return SERVER + '/Items/' + id + '/Images/Logo?fillHeight=220&quality=90' + mitTag(tag); }
   function querUrl(id, tag, b) { return SERVER + '/Items/' + id + '/Images/Primary?fillWidth=' + b + '&quality=85' + mitTag(tag); }
   function fotoUrl(id, tag) { return SERVER + '/Items/' + id + '/Images/Primary?maxWidth=1920&maxHeight=1080&quality=90' + mitTag(tag); }
@@ -405,36 +444,111 @@
   };
   window.LukasKinoSuche = Suche; // für Tests
 
-  // ------------------------------------------------------------------ Merkliste (je Gerät)
-  // Gespeichert in Jellyfin (DisplayPreferences des Benutzers, je Gerät eine eigene Liste):
-  // übersteht App-Updates und ist am Eltern-Fernseher eine andere Liste als an Lukas' TCL.
+  // ------------------------------------------------------------------ Filme nach Titel finden
+  // Home Assistant kennt Filme mit Plex-ID und "Titel (Jahr)". Zugeordnet wird über Name und Jahr
+  // (Jahr ±1, weil Plex und Jellyfin manchmal ein Jahr auseinander liegen), sonst über einen eindeutigen Namen.
+
+  const filmIndex = { laedt: null, fertig: false, schluessel: {}, name: {}, jfZuSchluessel: {} };
+
+  function filmIndexLaden() {
+    if (filmIndex.laedt) return filmIndex.laedt;
+    filmIndex.laedt = jf.liste('/Items?userId=' + jf.benutzer + '&includeItemTypes=Movie&recursive=true'
+      + '&fields=OriginalTitle&enableImages=false&enableUserData=false').then(function (a) {
+      const k = {}, n = {}, r = {};
+      a.forEach(function (e) {
+        const s = familienSchluessel(e.Name, e.ProductionYear);
+        if (!k[s]) k[s] = e.Id;
+        r[e.Id] = s;
+        if (e.OriginalTitle) {
+          const o = familienSchluessel(e.OriginalTitle, e.ProductionYear);
+          if (!k[o]) k[o] = e.Id;
+        }
+        const nn = Suche.normal(e.Name);
+        n[nn] = n[nn] === undefined ? e.Id : null; // null = mehrdeutig
+      });
+      filmIndex.schluessel = k;
+      filmIndex.name = n;
+      filmIndex.jfZuSchluessel = r;
+      filmIndex.fertig = true;
+    }).catch(function () { filmIndex.laedt = null; });
+    return filmIndex.laedt;
+  }
+
+  /** Jellyfin-ID zu einem Plex-Titel "Name (Jahr)", sonst null. */
+  function jfIdFuerTitel(t) {
+    const p = plexTitel(t);
+    if (!p.name) return null;
+    const j = parseInt(p.jahr, 10);
+    const k = filmIndex.schluessel;
+    return k[familienSchluessel(p.name, p.jahr)]
+      || (j ? k[familienSchluessel(p.name, j - 1)] || k[familienSchluessel(p.name, j + 1)] : null)
+      || filmIndex.name[Suche.normal(p.name)] || null;
+  }
+
+  // ------------------------------------------------------------------ Merkliste (dieselbe wie im HA-Profil)
+  // Quelle ist sensor.plex_merkliste in Home Assistant (über bewertungen.json, Paket kino_export.yaml).
+  // Am Eltern-Fernseher gilt die gemeinsame Liste von Moni und Uli, bei Jonas seine, bei Lukas seine.
+  // Merken/Entfernen geht per Webhook an Automation 84 – die ändert dieselbe Liste wie das Dashboard.
+  // Die Webhook-Adresse steht nur in /share/kino/kino_geheim.json (nicht im Code).
 
   const merk = {
-    ids: [],
-    items: {},
-    dto: null,
-
-    client: function () {
-      const d = window.DeviceInfo || {};
-      const name = parameter.liste || d.modelName || d.model || geraetId;
-      return 'lukaskino-' + String(name).replace(/[^A-Za-z0-9_-]/g, '');
-    },
-
-    pfad: function () {
-      return '/DisplayPreferences/lukaskino-merkliste?userId=' + jf.benutzer + '&client=' + encodeURIComponent(this.client());
-    },
+    ids: [],          // Jellyfin-IDs, zuletzt gemerkt zuerst
+    items: {},        // Jellyfin-ID -> Eintrag
+    haIds: {},        // Jellyfin-ID -> [IDs in HA] (Plex-ID oder jf:<Jellyfin-ID>)
+    lokal: {},        // Jellyfin-ID -> {an, bis}: gerade geändert, HA-Datei hängt noch hinterher
+    plex: null,       // Name|Jahr -> Plex-ID (aus plexfilme.json und den Bewertungen)
+    webhook: null,
+    roh: null,        // letzte Daten aus HA
 
     laden: async function () {
-      try { this.dto = await jf.anfrage('GET', this.pfad()); } catch (e) { this.dto = null; }
-      const roh = this.dto && this.dto.CustomPrefs && this.dto.CustomPrefs.merkliste;
-      const ids = roh ? String(roh).split(',').filter(Boolean) : [];
-      if (ids.length) {
-        const a = await jf.liste('/Items?userId=' + jf.benutzer + '&ids=' + ids.join(',') + '&fields=' + FELDER);
-        const self = this;
-        a.forEach(function (i) { self.items[i.Id] = i; });
+      // nur noch für den Start: HA-Daten kommen über familieLaden()
+      await filmIndexLaden();
+      if (this.roh) await this.ausHa(this.roh);
+    },
+
+    /** Liste dieses Fernsehers aus den HA-Daten übernehmen. */
+    ausHa: async function (j) {
+      this.roh = j;
+      if (!filmIndex.fertig) await filmIndexLaden();
+      const listen = (j && j.merkliste) || {}, titel = (j && j.merktitel) || {};
+      const reihenfolge = [], haIds = {};
+      PERSON.listen.forEach(function (w) {
+        (listen[w] || []).forEach(function (roh) {
+          const id = String(roh);
+          let jfId = null;
+          if (id.indexOf('jf:') === 0) jfId = id.substring(3);
+          else if (titel[id]) jfId = jfIdFuer(id, titel[id]);
+          else jfId = jfIdFuer(id, null);
+          if (!jfId) return;
+          if (reihenfolge.indexOf(jfId) < 0) reihenfolge.push(jfId);
+          (haIds[jfId] = haIds[jfId] || []);
+          if (haIds[jfId].indexOf(id) < 0) haIds[jfId].push(id);
+        });
+      });
+      // eigene Änderungen der letzten Sekunden gelten, bis HA sie bestätigt
+      const jetzt = Date.now(), self = this;
+      Object.keys(this.lokal).forEach(function (jfId) {
+        const l = self.lokal[jfId];
+        const drin = reihenfolge.indexOf(jfId) >= 0;
+        if (l.bis < jetzt || drin === l.an) { delete self.lokal[jfId]; return; }
+        if (l.an) reihenfolge.unshift(jfId);
+        else reihenfolge.splice(reihenfolge.indexOf(jfId), 1);
+      });
+      const fehlen = reihenfolge.filter(function (id) { return !self.items[id]; });
+      if (fehlen.length) {
+        for (let i = 0; i < fehlen.length; i += 60) {
+          try {
+            const a = await jf.liste('/Items?userId=' + jf.benutzer + '&ids=' + fehlen.slice(i, i + 60).join(',') + '&fields=' + FELDER);
+            a.forEach(function (e) { self.items[e.Id] = e; });
+          } catch (e) { /* dann fehlen sie eben */ }
+        }
       }
-      const self = this;
-      this.ids = ids.filter(function (id) { return !!self.items[id]; });
+      const neu = reihenfolge.filter(function (id) { return !!self.items[id]; });
+      this.haIds = haIds;
+      if (neu.join(',') !== this.ids.join(',')) {
+        this.ids = neu;
+        merklisteGeaendert();
+      }
     },
 
     hat: function (id) { return this.ids.indexOf(id) >= 0; },
@@ -444,32 +558,100 @@
       return this.ids.map(function (id) { return self.items[id]; }).filter(Boolean);
     },
 
-    umschalten: function (e) {
-      if (this.hat(e.Id)) this.ids = this.ids.filter(function (x) { return x !== e.Id; });
-      else {
-        this.ids.unshift(e.Id);
-        this.items[e.Id] = e;
+    /** Plex-ID zu einem Jellyfin-Film (für dieselbe Liste wie im Dashboard), sonst null. */
+    plexIdFuer: function (e) {
+      if (!this.plex) return null;
+      const j = parseInt(e.ProductionYear, 10) || 0;
+      const namen = [e.Name, e.OriginalTitle].filter(Boolean);
+      for (let i = 0; i < namen.length; i++) {
+        const n = namen[i];
+        const t = this.plex[familienSchluessel(n, j || '')] || (j ? this.plex[familienSchluessel(n, j - 1)] || this.plex[familienSchluessel(n, j + 1)] : null);
+        if (t) return t;
       }
-      merklisteGeaendert();
-      this.speichern();
+      return null;
     },
 
-    speichern: async function () {
-      const dto = this.dto || {
-        Id: 'lukaskino-merkliste', SortBy: 'SortName', SortOrder: 'Ascending', RememberIndexing: false,
-        RememberSorting: false, ScrollDirection: 'Horizontal', ShowBackdrop: true, ShowSidebar: false,
-        PrimaryImageHeight: 250, PrimaryImageWidth: 250, CustomPrefs: {}
-      };
-      dto.Client = this.client();
-      dto.CustomPrefs = Object.assign({}, dto.CustomPrefs || {}, { merkliste: this.ids.join(',') });
-      this.dto = dto;
+    plexLaden: async function () {
+      if (this.plex) return;
+      const p = {};
       try {
-        await jf.anfrage('POST', this.pfad(), dto);
-      } catch (e) {
-        hinweis('Merkliste ließ sich nicht speichern');
+        const r = await fetch('../plexfilme.json?t=' + Date.now());
+        if (r.ok) {
+          const f = ((await r.json()) || {}).filme || {};
+          Object.keys(f).forEach(function (id) {
+            if (f[id] && f[id].t) p[familienSchluessel(f[id].t, f[id].j || '')] = id;
+          });
+        }
+      } catch (e) { /* ohne Plex-Katalog: dann jf:<ID> */ }
+      const roh = this.roh || {};
+      [roh.bewertungen || {}, roh.merktitel || {}].forEach(function (q, art) {
+        Object.keys(q).forEach(function (id) {
+          if (id.indexOf('jf:') === 0) return;
+          const t = plexTitel(art === 0 ? q[id].t : q[id]);
+          const k = familienSchluessel(t.name, t.jahr);
+          if (!p[k]) p[k] = id;
+        });
+      });
+      this.plex = p;
+    },
+
+    webhookLaden: async function () {
+      if (this.webhook) return this.webhook;
+      const r = await fetch('../kino_geheim.json?t=' + Date.now());
+      if (!r.ok) throw new Error('kein Webhook');
+      const j = await r.json();
+      if (!j || !j.merkWebhook) throw new Error('kein Webhook');
+      this.webhook = HA + '/api/webhook/' + encodeURIComponent(j.merkWebhook);
+      return this.webhook;
+    },
+
+    senden: async function (daten) {
+      const url = await this.webhookLaden();
+      const body = Object.keys(daten).map(function (k) {
+        return encodeURIComponent(k) + '=' + encodeURIComponent(daten[k]);
+      }).join('&');
+      // no-cors: HA antwortet ohne CORS-Freigabe, die Antwort brauchen wir nicht
+      await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
+    },
+
+    umschalten: function (e) {
+      const self = this;
+      const an = !this.hat(e.Id);
+      if (an) {
+        this.ids.unshift(e.Id);
+        this.items[e.Id] = e;
+      } else {
+        this.ids = this.ids.filter(function (x) { return x !== e.Id; });
       }
+      this.lokal[e.Id] = { an: an, bis: Date.now() + 120000 };
+      merklisteGeaendert();
+      (async function () {
+        try {
+          await self.plexLaden();
+          const titel = (e.Name || '') + (e.ProductionYear ? ' (' + e.ProductionYear + ')' : '');
+          let ids;
+          if (an) ids = [self.plexIdFuer(e) || 'jf:' + e.Id];
+          else ids = (self.haIds[e.Id] || []).concat([self.plexIdFuer(e), 'jf:' + e.Id]).filter(function (x, i, a) { return x && a.indexOf(x) === i; });
+          for (let i = 0; i < ids.length; i++) {
+            await self.senden({ wer: PERSON.ha, id: ids[i], titel: titel, an: an ? 'true' : 'false' });
+          }
+          // HA schreibt die Datei sofort neu – kurz danach abholen
+          setTimeout(familieLaden, 2500);
+        } catch (x) {
+          hinweis('Merkliste ließ sich nicht speichern');
+          delete self.lokal[e.Id];
+          setTimeout(familieLaden, 500);
+        }
+      })();
     }
   };
+
+  /** Jellyfin-ID zu einer Plex-ID aus HA (über den Titel). */
+  function jfIdFuer(plexId, titel) {
+    if (titel) return jfIdFuerTitel(titel);
+    const b = merk.roh && merk.roh.bewertungen && merk.roh.bewertungen[plexId];
+    return b && b.t ? jfIdFuerTitel(b.t) : null;
+  }
 
   function merklisteSeite() {
     const s = neueSeite('Merkliste');
@@ -597,7 +779,95 @@
       familie.nurName = nurName;
       infoSchluessel = '';
       if (ansicht === A.LISTE || ansicht === A.DETAIL) zeichnen();
+      try { await merk.ausHa(j); } catch (x) { /* Merkliste bleibt, wie sie war */ }
+      try { await empfohlenAusHa(j); } catch (x) { /* Empfohlen bleibt, wie es war */ }
     } catch (e) { /* ohne Bewertungen weiter */ }
+  }
+
+  // ------------------------------------------------------------------ Empfohlen: was die anderen mit 7 bis 10 bewertet haben
+  // Eltern sehen die Bewertungen von Lukas und Jonas, Jonas die von Lukas, Moni und Uli, Lukas die von Jonas, Moni und Uli.
+  // Gruppiert nach der besten Note; innerhalb einer Gruppe zuerst, was man selbst noch nicht gesehen/bewertet hat.
+
+  const empfohlen = { sig: null, gruppen: [] };   // gruppen: [{note, eintraege}]
+  const eintragSpeicher = {};                      // Jellyfin-ID -> Eintrag (für Empfohlen)
+
+  async function empfohlenAusHa(j) {
+    if (!filmIndex.fertig) await filmIndexLaden();
+    if (!filmIndex.fertig) return;
+    const andere = function (n) { return PERSON.ich.indexOf(n) < 0; };
+    const k = {};
+    Object.keys(j.bewertungen || {}).forEach(function (pid) {
+      const f = j.bewertungen[pid] || {}, w = f.w || {};
+      const gut = Object.keys(w).filter(function (n) { return andere(n) && Number(w[n]) >= 7; });
+      if (!gut.length) return;
+      const id = jfIdFuerTitel(f.t);
+      if (!id) return;
+      const x = k[id] || (k[id] = { id: id, best: 0, summe: 0, n: 0, selbst: false });
+      gut.forEach(function (n) {
+        const v = Number(w[n]);
+        x.best = Math.max(x.best, v);
+        x.summe += v;
+        x.n++;
+      });
+      if (Object.keys(w).some(function (n) { return !andere(n); })) x.selbst = true;
+    });
+    (j.verlauf || []).forEach(function (v) {
+      if (PERSON.ich.indexOf(v.wer) < 0 || (v.typ && v.typ !== 'movie')) return;
+      const id = jfIdFuerTitel(v.titel);
+      if (id && k[id]) k[id].selbst = true;
+    });
+    const l = Object.keys(k).map(function (id) { return k[id]; });
+    l.sort(function (a, b) {
+      if (a.best !== b.best) return b.best - a.best;
+      if (a.selbst !== b.selbst) return a.selbst ? 1 : -1;
+      if (a.summe / a.n !== b.summe / b.n) return b.summe / b.n - a.summe / a.n;
+      return b.n - a.n;
+    });
+    const sig = l.map(function (x) { return x.id + ':' + x.best + (x.selbst ? 's' : ''); }).join(',');
+    if (sig === empfohlen.sig) return;
+    const fehlen = l.map(function (x) { return x.id; }).filter(function (id) { return !eintragSpeicher[id]; });
+    for (let i = 0; i < fehlen.length; i += 60) {
+      try {
+        const a = await jf.liste('/Items?userId=' + jf.benutzer + '&ids=' + fehlen.slice(i, i + 60).join(',') + '&fields=' + FELDER);
+        a.forEach(function (e) { eintragSpeicher[e.Id] = e; });
+      } catch (e) { /* dann fehlen sie eben */ }
+    }
+    const gruppen = [];
+    l.forEach(function (x) {
+      const e = eintragSpeicher[x.id];
+      if (!e) return;
+      let g = gruppen[gruppen.length - 1];
+      if (!g || g.note !== x.best) gruppen.push(g = { note: x.best, eintraege: [] });
+      g.eintraege.push(e);
+    });
+    empfohlen.sig = sig;
+    empfohlen.gruppen = gruppen;
+    empfohlenGeaendert();
+  }
+
+  function empfohlenSeite() {
+    const s = neueSeite('Empfohlen');
+    empfohlen.gruppen.forEach(function (g) {
+      for (let i = 0; i < g.eintraege.length; i += 8) {
+        s.reihen.push(reiheAus(i === 0 ? 'Mit ' + g.note + ' bewertet' : '', g.eintraege.slice(i, i + 8), POSTER));
+      }
+    });
+    if (!s.reihen.length) s.leer = empfohlen.sig === null ? 'Bewertungen werden geladen …' : 'Noch nichts mit 7 oder besser bewertet';
+    return s;
+  }
+
+  function empfohlenGeaendert() {
+    const alt = startseiten.empfohlen;
+    const neu = empfohlenSeite();
+    startseiten.empfohlen = neu;
+    if (alt && seite === alt) {
+      neu.akt = Math.min(alt.akt, Math.max(0, neu.reihen.length - 1));
+      const r = neu.reihen[neu.akt], ra = alt.reihen[alt.akt];
+      if (r && ra) r.fokus = Math.min(ra.fokus, r.eintraege.length - 1);
+      seite = neu;
+      infoSchluessel = '';
+      zeichnen();
+    }
   }
 
   function familieFuer(e) {
@@ -613,10 +883,10 @@
     return { noten: w, gesehen: g };
   }
 
-  function familienZeile(e) {
+  function familienZeile(e, immer) {
     const f = familieFuer(e);
     if (!f) return null;
-    const d = div('i-familie nur-detail');
+    const d = div('i-familie' + (immer ? '' : ' nur-detail'));
     const namen = Object.keys(f.noten).sort(function (a, b) { return f.noten[b] - f.noten[a]; });
     if (namen.length) {
       const summe = namen.reduce(function (a, n) { return a + Number(f.noten[n] || 0); }, 0);
@@ -894,10 +1164,16 @@
         else if (t === 'tvshows') serienId = v.Id;
         else if ((t === 'homevideos' || t === 'photos') && !fotosId) fotosId = v.Id;
       });
-      try { await merk.laden(); } catch (e) { /* ohne Merkliste weiter */ }
-      familieLaden();
+      // Merkliste und Bewertungen aus HA vor der Startseite holen (höchstens 4 Sekunden warten)
+      await Promise.race([
+        (async function () {
+          try { await merk.laden(); } catch (e) { /* ohne Merkliste weiter */ }
+          await familieLaden();
+        })(),
+        new Promise(function (ok) { setTimeout(ok, 4000); })
+      ]);
       clearInterval(laden.familieTimer);
-      laden.familieTimer = setInterval(familieLaden, 600000);
+      laden.familieTimer = setInterval(familieLaden, 180000);
       const s = await filmeSeite();
       zeigeStart('filme', s);
     } catch (e) {
@@ -909,6 +1185,8 @@
   async function bereichOeffnen(b) {
     stapel.length = 0;
     if (b === 'merkliste') startseiten.merkliste = merklisteSeite();
+    if (b === 'empfohlen') startseiten.empfohlen = empfohlenSeite();
+    if (b === 'merkliste' || b === 'empfohlen') familieLaden(); // frisch aus HA nachziehen
     const fertig = startseiten[b];
     bereich = b;
     if (fertig) {
@@ -1101,7 +1379,7 @@
 
   function fokusGeaendert() {
     clearTimeout(bgTimer);
-    bgTimer = setTimeout(hintergrundLaden, 220);
+    bgTimer = setTimeout(hintergrundLaden, LEICHT ? 420 : 220);
     zeichnen();
   }
 
@@ -1489,12 +1767,13 @@
     const e = heldEintrag();
     const detail = ansicht === A.DETAIL;
     el.info.classList.toggle('detail', detail);
+    el.info.classList.toggle('empf', bereich === 'empfohlen');
     let key;
     if (seite.leer) key = 'leer|' + seite.leer + '|' + seite.titel;
     else if (!e) key = '';
     else {
       const u = e.UserData || {};
-      key = e.Id + '|' + (u.PlaybackPositionTicks || 0) + '|' + (u.Played ? 1 : 0) + '|' + (seite.kopf ? seite.kopf.Id : '')
+      key = e.Id + '|' + bereich + '|' + (u.PlaybackPositionTicks || 0) + '|' + (u.Played ? 1 : 0) + '|' + (seite.kopf ? seite.kopf.Id : '')
         + '|' + (titelbilder[e.Id] || '');
     }
     if (key !== infoSchluessel) {
@@ -1594,7 +1873,7 @@
     }
     box.appendChild(meta);
 
-    const fam = familienZeile(e);
+    const fam = familienZeile(e, bereich === 'empfohlen');
     if (fam) box.appendChild(fam);
 
     const pos = position(e), ges = e.RunTimeTicks || 0;
@@ -2079,7 +2358,8 @@
     offen: false, eintrag: null, id: null, quelle: null, sitzung: null, gemeldet: false, gestoppt: false,
     streams: [], spulZiel: -1, spulSchritte: 0, letzteSpul: 0, spulTimer: 0,
     leisteAn: false, bisWann: 0, menue: false, spalte: 0, zeile: 0, ton: [], unter: [],
-    tonAktiv: -1, uAktiv: -1, cues: null, meldung: null, tick: 0, meldeTick: 0, start: 0
+    tonAktiv: -1, uAktiv: -1, cues: null, meldung: null, tick: 0, meldeTick: 0, start: 0,
+    art: 'direkt', tonStandard: -1, tonWunsch: -1, spurenFertig: false, hlsVersucht: false, direktVersucht: false, startNr: 0
   };
 
   function playerVorbereiten() {
@@ -2089,7 +2369,10 @@
       if (P.start > 0 && P.start < (v.duration || Infinity) - 5) {
         try { v.currentTime = P.start; } catch (e) { /* egal */ }
       }
-      spurenStart();
+      if (!P.spurenFertig) {
+        P.spurenFertig = true;
+        spurenStart();
+      }
       playerLeisteZeichnen();
     });
     v.addEventListener('playing', function () {
@@ -2117,6 +2400,22 @@
     v.addEventListener('error', function () {
       if (!P.offen || !v.getAttribute('src')) return;
       const c = v.error ? v.error.code : 0;
+      const pos = v.currentTime > 1 ? v.currentTime : P.start;
+      // Direkt ging nicht (z. B. Tonformat) -> über den Pi; über den Pi ging nicht -> direkt mit der Standardspur
+      if (P.art === 'direkt' && !P.hlsVersucht) {
+        P.meldung = 'Wird über den Pi angepasst …';
+        leisteZeigen(0);
+        streamStarten('hls', pos);
+        return;
+      }
+      const std = P.ton[P.tonStandard];
+      if (P.art === 'hls' && !P.direktVersucht && (!std || kompatibel(std.stream))) {
+        P.tonAktiv = P.tonStandard;
+        P.meldung = 'Ging über den Pi nicht – spiele direkt';
+        leisteZeigen(0);
+        streamStarten('direkt', pos);
+        return;
+      }
       P.meldung = 'Abspielen ging nicht' + (c ? ' (Fehler ' + c + ')' : '');
       leisteZeigen(0);
     });
@@ -2130,7 +2429,8 @@
     Object.assign(P, {
       offen: true, eintrag: f, id: f.Id, quelle: f.Id, sitzung: 'lk' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
       gemeldet: false, gestoppt: false, streams: [], spulZiel: -1, spulSchritte: 0, menue: false, tonAktiv: -1, uAktiv: -1,
-      cues: null, meldung: null, start: fortsetzen ? position(f) / 10000000 : 0
+      cues: null, meldung: null, start: fortsetzen ? position(f) / 10000000 : 0, ton: [], unter: [],
+      art: 'direkt', tonStandard: -1, tonWunsch: -1, spurenFertig: false, hlsVersucht: false, direktVersucht: false
     });
     el.untertitel.textContent = '';
     let titel = f.Name || '';
@@ -2164,14 +2464,95 @@
     } catch (e) { /* dann eben ohne Spurliste */ }
     if (!P.offen || P.id !== f.Id) return;
     const v = el.video;
-    v.src = jf.streamUrl(P.id, P.quelle);
-    const p = v.play();
-    if (p && p.catch) p.catch(function () { /* Autoplay im Browser ggf. gesperrt – OK drücken */ });
+    const w = tonWahl();
+    P.tonWunsch = w.j;
+    P.tonAktiv = w.hls ? w.j : P.tonStandard;
+    if (w.hls) {
+      P.meldung = 'Ton wird über den Pi angepasst …';
+      leisteZeigen(0);
+    }
+    streamStarten(w.hls ? 'hls' : 'direkt', P.start);
     clearInterval(P.tick);
     clearInterval(P.meldeTick);
     P.tick = setInterval(playerTick, 250);
     P.meldeTick = setInterval(function () { if (P.gemeldet && !v.paused) melde(1); }, 10000);
     requestAnimationFrame(untertitelSchleife);
+  }
+
+  // -------------------------------------------------- Direkt oder über den Pi
+
+  function kompatibel(s) {
+    const c = String((s && s.Codec) || '').toLowerCase();
+    return PERSON.ohneTon.indexOf(c) < 0;
+  }
+
+  /** Welche Tonspur, und geht das direkt? Deutsch bevorzugt, davon am liebsten eine, die der Fernseher selbst kann. */
+  function tonWahl() {
+    if (!P.ton.length) return { j: -1, hls: false };
+    const std = P.tonStandard >= 0 ? P.tonStandard : 0;
+    const ok = function (i) { return kompatibel(P.ton[i].stream); };
+    let j = std;
+    const de = [];
+    P.ton.forEach(function (t, i) { if (istDeutsch(t.stream)) de.push(i); });
+    if (de.length) {
+      const deOk = de.filter(ok);
+      if (de.indexOf(std) >= 0 && ok(std)) j = std;
+      else if (deOk.length) j = deOk[0];
+      else j = de.indexOf(std) >= 0 ? std : de[0];
+    } else if (!ok(std)) {
+      const sprache = P.ton[std].stream.Language;
+      for (let i = 0; i < P.ton.length; i++) {
+        if (ok(i) && P.ton[i].stream.Language === sprache) { j = i; break; }
+      }
+    }
+    // Ohne audioTracks spielt der Fernseher immer die Standardspur der Datei – eine andere geht dann nur über den Pi
+    const umschaltbar = !!el.video.audioTracks;
+    return { j: j, hls: !ok(j) || (j !== std && !umschaltbar) };
+  }
+
+  function encodingStoppen() {
+    if (!jf.token || !P.sitzung) return Promise.resolve();
+    return jf.anfrage('DELETE', '/Videos/ActiveEncodings?deviceId=' + encodeURIComponent(geraetId)
+      + '&playSessionId=' + encodeURIComponent(P.sitzung)).catch(function () { /* egal */ });
+  }
+
+  /** Stream (neu) starten – direkt vom Server oder als HLS über den Pi – ab Sekunde ab. */
+  async function streamStarten(art, ab) {
+    const nr = ++P.startNr, id = P.id;
+    const v = el.video;
+    if (P.art === 'hls' && v.getAttribute('src')) {
+      try { v.pause(); } catch (e) { /* egal */ }
+      await encodingStoppen();
+      if (!P.offen || P.id !== id || nr !== P.startNr) return;
+    }
+    P.art = art;
+    if (art === 'hls') P.hlsVersucht = true;
+    else P.direktVersucht = true;
+    P.start = ab || 0;
+    const t = P.ton[P.tonAktiv];
+    v.src = art === 'hls'
+      ? jf.hlsUrl(P.id, P.quelle, P.sitzung, t && t.stream ? t.stream.Index : -1)
+      : jf.streamUrl(P.id, P.quelle);
+    const p = v.play();
+    if (p && p.catch) p.catch(function () { /* Autoplay im Browser ggf. gesperrt – OK drücken */ });
+  }
+
+  /** Tonspur wechseln: direkt, wenn der Browser umschalten kann, sonst Neustart an derselben Stelle (ggf. über den Pi). */
+  function tonWechseln(j) {
+    const t = P.ton[j];
+    if (!t || j === P.tonAktiv) return;
+    if (P.art === 'direkt' && kompatibel(t.stream) && tonSetzen(j)) {
+      melde(1);
+      return;
+    }
+    const v = el.video;
+    const pos = v.currentTime > 1 ? v.currentTime : P.start;
+    P.tonAktiv = j;
+    P.hlsVersucht = false;
+    P.direktVersucht = false;
+    P.meldung = 'Tonspur wird gewechselt …';
+    leisteZeigen(0);
+    streamStarten(j === P.tonStandard && kompatibel(t.stream) ? 'direkt' : 'hls', pos);
   }
 
   /** 0 = Start, 1 = Fortschritt, 2 = Stopp */
@@ -2182,7 +2563,7 @@
     const pfad = art === 0 ? '/Sessions/Playing' : art === 1 ? '/Sessions/Playing/Progress' : '/Sessions/Playing/Stopped';
     const body = {
       ItemId: P.id, MediaSourceId: P.quelle, PositionTicks: ticks, IsPaused: !!v.paused, CanSeek: true,
-      PlayMethod: 'DirectPlay', PlaySessionId: P.sitzung
+      PlayMethod: P.art === 'hls' ? 'Transcode' : 'DirectPlay', PlaySessionId: P.sitzung
     };
     const ton = P.ton[P.tonAktiv];
     if (ton && ton.stream) body.AudioStreamIndex = ton.stream.Index;
@@ -2193,6 +2574,8 @@
   function playerSchliessen() {
     if (!P.offen) return;
     if (P.gemeldet && !P.gestoppt) melde(2);
+    if (P.art === 'hls') encodingStoppen();
+    P.startNr++;
     clearInterval(P.tick);
     clearInterval(P.meldeTick);
     clearTimeout(P.spulTimer);
@@ -2334,19 +2717,18 @@
     P.tonAktiv = -1;
     audio.forEach(function (s, j) { if (s.IsDefault && P.tonAktiv < 0) P.tonAktiv = j; });
     if (P.tonAktiv < 0 && audio.length) P.tonAktiv = 0;
+    P.tonStandard = P.tonAktiv;
     const unter = P.streams.filter(function (s) { return s.Type === 'Subtitle' && textUntertitel(s); });
     P.unter = [{ name: 'Aus', stream: null }].concat(unter.map(function (s) { return { name: spurName(s, false), stream: s }; }));
   }
 
   function spurenStart() {
     const audio = P.streams.filter(function (s) { return s.Type === 'Audio'; });
-    // Deutsch bevorzugen
+    // gewünschte Spur (Deutsch bevorzugt, siehe tonWahl) – direkt nur, wenn der Browser umschalten kann
     const at = el.video.audioTracks;
-    if (at && at.length === audio.length && audio.length > 1) {
+    if (P.art === 'direkt' && at && at.length === audio.length && audio.length > 1) {
       for (let i = 0; i < at.length; i++) if (at[i].enabled) P.tonAktiv = i;
-      let de = -1;
-      audio.forEach(function (s, j) { if (de < 0 && istDeutsch(s)) de = j; });
-      if (de >= 0 && !istDeutsch(audio[P.tonAktiv] || {})) tonSetzen(de);
+      if (P.tonWunsch >= 0 && P.tonWunsch !== P.tonAktiv) tonSetzen(P.tonWunsch);
     }
     // Untertitel: nur erzwungene deutsche (bzw. erzwungene in der Sprache der Tonspur) automatisch
     const unter = P.streams.filter(function (s) { return s.Type === 'Subtitle' && textUntertitel(s); });
@@ -2474,7 +2856,7 @@
       m.appendChild(s);
     });
     if (P.ton.length > 1 && !tonUmschaltbar()) {
-      m.appendChild(div('p-hinweis', 'Die Tonspur lässt sich an diesem Fernseher noch nicht umschalten.'));
+      m.appendChild(div('p-hinweis', 'Andere Tonspuren laufen über den Pi – Start dauert ein paar Sekunden.'));
     }
   }
 
@@ -2494,12 +2876,7 @@
       const x = liste[P.zeile];
       if (x) {
         if (P.spalte === 0) {
-          if (!tonSetzen(P.zeile) && P.ton.length > 1) {
-            P.meldung = 'Tonspur umschalten geht hier noch nicht';
-            setTimeout(function () { P.meldung = null; }, 2500);
-          } else {
-            melde(1);
-          }
+          tonWechseln(P.zeile);
         } else {
           untertitelLaden(x.stream);
         }
