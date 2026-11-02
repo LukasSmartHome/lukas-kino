@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Lukas Kino</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;height:100%;background:#07080B;overflow:hidden}</style>
+</head>
+<body>
+<!--
+  Lukas Kino für die LG-Fernseher. Diese Datei bleibt absichtlich klein und ändert sich nie:
+  Home Assistant liefert /local/ mit langem Zwischenspeicher aus, darum lädt sie app.css und app.js
+  bei jedem Start frisch nach (Zeitstempel). Neue Versionen = nur app.js / app.css austauschen.
+-->
+<script>
+(function () {
+  var t = Date.now();
+  var l = document.createElement('link');
+  l.rel = 'stylesheet';
+  l.href = 'app.css?t=' + t;
+  document.head.appendChild(l);
+  var s = document.createElement('script');
+  s.src = 'app.js?t=' + t;
+  document.body.appendChild(s);
+})();
+</script>
+</body>
+</html>

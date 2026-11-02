@@ -3,6 +3,7 @@ name: App bauen
 on:
   push:
     branches: ['**']
+    paths-ignore: ['lg/**']
   workflow_dispatch:
 
 permissions:
