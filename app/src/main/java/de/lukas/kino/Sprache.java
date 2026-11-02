@@ -114,6 +114,12 @@ public class Sprache extends Service {
     /** Claudes Antworttext, der erst erscheint, wenn die Stimme einsetzt. */
     private String wartendeAntwort;
     private final Runnable antwortZeigen = this::wartendeAntwortZeigen;
+
+    /** Jarvis (Voice PE) spricht gerade und der Rahmen zeigt das Gespräch. */
+    private boolean jarvisAnzeige;
+    private volatile int jarvisRunde;
+    private String jarvisAntwort;
+    private boolean jarvisSpricht;
     private static final long LIVE_TAKT_MS = 900;
     private static final int LIVE_MAX_BYTES = RATE * 2 * 30;
     private static final long GESPRAECH_OFFEN_MS = 10 * 60_000;
@@ -243,6 +249,10 @@ public class Sprache extends Service {
             vordergrund();
         } catch (Exception e) {
             Log.w(TAG, "Vordergrund erneut nicht möglich", e);
+        }
+        if (i != null && i.hasExtra("jarvis")) {
+            jarvisPhase(i.getStringExtra("jarvis"));
+            return START_STICKY;
         }
         if (i != null && einst != null) {
             SharedPreferences.Editor e = einst.edit();
@@ -430,6 +440,7 @@ public class Sprache extends Service {
         spielerStoppen();
         wartendeAntwortZeigen();
         sendeRunde++;   // eine noch ausstehende Antwort gilt nicht mehr
+        jarvisBeenden();
         duLive = null;
         if (!aufnahmeLaeuft) aufnahmeStarten();
         synchronized (sperre) {
@@ -758,6 +769,7 @@ public class Sprache extends Service {
         duLive = null;
         wartendeAntwort = null;
         haupt.removeCallbacks(antwortZeigen);
+        jarvisBeenden();
         verlauf.clear();
         sitzung = null;
         StartseitenWaechter.rahmenWeg();
@@ -775,6 +787,143 @@ public class Sprache extends Service {
             sitzung = UUID.randomUUID().toString().substring(0, 8);
             verlauf.clear();
             duLive = null;
+        }
+    }
+
+    // ------------------------------------------------------------------ Jarvis (Voice PE) am TV anzeigen
+
+    /**
+     * Phasen kommen von Home Assistant per ADB:
+     * am start-foreground-service -n de.lukas.kino/.Sprache --es jarvis hoert|denkt|antwortet|fertig
+     * Die Texte holt die App beim Laptop (GET /jarvis/letzte). Ton kommt vom Voice PE, der TV pausiert nur.
+     */
+    private void jarvisPhase(String phase) {
+        if (phase == null) return;
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        if (pm != null && !pm.isInteractive()) return;
+        if (istModus(PTT) || istModus(TIPP)) return;   // Push-to-Talk hat Vorrang
+        Log.i(TAG, "Jarvis: " + phase);
+        switch (phase) {
+            case "hoert": {
+                haupt.removeCallbacks(schliessen);
+                spielerStoppen();
+                wartendeAntwortZeigen();
+                sendeRunde++;
+                neueSitzungFallsNoetig();
+                jarvisAnzeige = true;
+                jarvisAntwort = null;
+                jarvisSpricht = false;
+                duLive = null;
+                fokusHolen();
+                zeige(SprachRahmen.HOERT, "");
+                jarvisAbfragen(++jarvisRunde);
+                haupt.postDelayed(schliessen, 40_000);
+                break;
+            }
+            case "denkt":
+                if (!jarvisAnzeige) return;
+                duAnlegen();
+                zeige(SprachRahmen.DENKT, "");
+                haupt.removeCallbacks(schliessen);
+                haupt.postDelayed(schliessen, 90_000);
+                break;
+            case "antwortet":
+                if (!jarvisAnzeige) return;
+                jarvisSpricht = true;
+                if (jarvisAntwort != null) jarvisAntwortZeigen();
+                break;
+            case "fertig":
+                if (!jarvisAnzeige) return;
+                jarvisSpricht = false;
+                if (jarvisAntwort != null) jarvisAntwortZeigen();
+                haupt.removeCallbacks(schliessen);
+                // Nichts gesagt (Fehlauslöser) → gleich weg, sonst kurz stehen lassen und dann Video weiter.
+                haupt.postDelayed(schliessen, verlauf.isEmpty() ? 500 : 9000);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void jarvisBeenden() {
+        jarvisAnzeige = false;
+        jarvisRunde++;
+        jarvisAntwort = null;
+        jarvisSpricht = false;
+    }
+
+    /** Holt erst den aktuellen Stand (Basis), dann alle 0,3 s, bis eine neue Anfrage samt Antwort da ist. */
+    private void jarvisAbfragen(final int runde) {
+        final String url = server() + "/jarvis/letzte";
+        new Thread(() -> {
+            JSONObject b = holeJson(url);
+            if (b == null) {
+                Log.i(TAG, "Jarvis-Text nicht abrufbar (Laptop?)");
+                return;
+            }
+            int basis = b.optInt("nr", 0);
+            long ende = SystemClock.uptimeMillis() + 90_000;
+            String erkZuletzt = "";
+            while (runde == jarvisRunde && SystemClock.uptimeMillis() < ende) {
+                SystemClock.sleep(300);
+                JSONObject j = holeJson(url);
+                if (j == null || j.optInt("nr", 0) <= basis) continue;
+                final String erk = j.optString("erkannt", "").trim();
+                final String ant = j.optString("antwort", "").trim();
+                if (!erk.equals(erkZuletzt) || !ant.isEmpty()) {
+                    erkZuletzt = erk;
+                    haupt.post(() -> jarvisText(runde, erk, ant));
+                }
+                if (!ant.isEmpty()) break;
+            }
+        }, "LukasKinoJarvis").start();
+    }
+
+    private void jarvisText(int runde, String erk, String ant) {
+        if (runde != jarvisRunde || !jarvisAnzeige) return;
+        if (!erk.isEmpty()) {
+            if (duLive == null) {
+                duLive = new String[]{"du", erk};
+                verlauf.add(duLive);
+            } else {
+                duLive[1] = erk;
+            }
+            zeige(SprachRahmen.DENKT, "");
+        }
+        if (!ant.isEmpty()) {
+            jarvisAntwort = ant;
+            if (jarvisSpricht) jarvisAntwortZeigen();
+        }
+    }
+
+    private void jarvisAntwortZeigen() {
+        String a = jarvisAntwort;
+        jarvisAntwort = null;
+        if (a == null) return;
+        if (duLive != null && "…".equals(duLive[1])) verlauf.remove(duLive);
+        duLive = null;
+        verlauf.add(new String[]{"claude", a});
+        zeige(SprachRahmen.ANTWORT, "");
+    }
+
+    private static JSONObject holeJson(String url) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(1500);
+            c.setReadTimeout(2500);
+            if (c.getResponseCode() != 200) return null;
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            try (InputStream ein = c.getInputStream()) {
+                byte[] p = new byte[4096];
+                int n;
+                while ((n = ein.read(p)) > 0) b.write(p, 0, n);
+            }
+            return new JSONObject(b.toString("UTF-8"));
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
         }
     }
 

@@ -108,9 +108,21 @@ final class SprachRahmen extends View {
         else if (zustand == FEHLER) puls = 0.5f;
         else puls = 0.62f + 0.06f * (float) Math.sin(t * 1.6);
 
+        abdunkeln(c, w, h, ein);
         leuchten(c, w, h, d, puls * ein);
         blasen(c, w, h, d, jetzt, t);
         postInvalidateOnAnimation();
+    }
+
+    /** Bild leicht abdunkeln, unten (wo die Blasen schweben) kräftiger – mehr Kontrast für die Blasen. */
+    private void abdunkeln(Canvas c, int w, int h, float ein) {
+        c.drawColor(((int) (0x3D * ein)) << 24);
+        int a = (int) (0x99 * ein);
+        float oben = h * 0.22f;
+        schein.setShader(new LinearGradient(0, h, 0, oben, new int[]{a << 24, (a / 3) << 24, 0},
+                new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
+        c.drawRect(0, oben, w, h, schein);
+        schein.setShader(null);
     }
 
     /** Nur weiches Leuchten: Verlauf von jedem Rand nach innen, in den Ecken zusätzlich ein runder Schein. */
