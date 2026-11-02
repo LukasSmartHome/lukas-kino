@@ -120,6 +120,8 @@ public class Sprache extends Service {
     private volatile int jarvisRunde;
     private String jarvisAntwort;
     private boolean jarvisSpricht;
+    /** Die Jarvis-Antwort läuft über den TV (Teufel hängt am TV, Voice-PE-Ton wäre nicht zu hören). */
+    private boolean jarvisTonAmTv;
     private static final long LIVE_TAKT_MS = 900;
     private static final int LIVE_MAX_BYTES = RATE * 2 * 30;
     private static final long GESPRAECH_OFFEN_MS = 10 * 60_000;
@@ -663,6 +665,11 @@ public class Sprache extends Service {
         }
         // Text und Stimme zeitgleich: bis der erste Ton kommt, tippt Claude (drei Punkte).
         zeige(SprachRahmen.DENKT, "");
+        abspielen(mp3, gesendet, this::gespraechWartet);
+    }
+
+    /** Spielt die Antwort ab; der wartende Antworttext erscheint mit dem ersten Ton (spätestens nach 8 s). */
+    private void abspielen(String mp3, final long seit, final Runnable danach) {
         haupt.removeCallbacks(antwortZeigen);
         haupt.postDelayed(antwortZeigen, 8000);
         spielerStoppen();
@@ -673,19 +680,19 @@ public class Sprache extends Service {
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
             p.setDataSource(mp3);
             p.setOnPreparedListener(x -> {
-                Log.i(TAG, "Ton ab " + (SystemClock.uptimeMillis() - gesendet) + " ms nach Loslassen");
+                Log.i(TAG, "Ton ab " + (SystemClock.uptimeMillis() - seit) + " ms");
                 x.start();
                 wartendeAntwortZeigen();
             });
             p.setOnCompletionListener(x -> {
                 spielerStoppen();
-                gespraechWartet();
+                danach.run();
             });
             p.setOnErrorListener((x, a, b) -> {
                 Log.w(TAG, "Wiedergabe-Fehler " + a + "/" + b);
                 wartendeAntwortZeigen();
                 spielerStoppen();
-                gespraechWartet();
+                danach.run();
                 return true;
             });
             spieler = p;
@@ -693,7 +700,7 @@ public class Sprache extends Service {
         } catch (Exception e) {
             Log.w(TAG, "Antwort lässt sich nicht abspielen", e);
             wartendeAntwortZeigen();
-            gespraechWartet();
+            danach.run();
         }
     }
 
@@ -813,6 +820,7 @@ public class Sprache extends Service {
                 jarvisAnzeige = true;
                 jarvisAntwort = null;
                 jarvisSpricht = false;
+                jarvisTonAmTv = false;
                 duLive = null;
                 fokusHolen();
                 zeige(SprachRahmen.HOERT, "");
@@ -828,12 +836,12 @@ public class Sprache extends Service {
                 haupt.postDelayed(schliessen, 90_000);
                 break;
             case "antwortet":
-                if (!jarvisAnzeige) return;
+                if (!jarvisAnzeige || jarvisTonAmTv) return;
                 jarvisSpricht = true;
                 if (jarvisAntwort != null) jarvisAntwortZeigen();
                 break;
             case "fertig":
-                if (!jarvisAnzeige) return;
+                if (!jarvisAnzeige || jarvisTonAmTv) return;   // spielt der TV, schließt dessen Ende
                 jarvisSpricht = false;
                 if (jarvisAntwort != null) jarvisAntwortZeigen();
                 haupt.removeCallbacks(schliessen);
@@ -850,6 +858,7 @@ public class Sprache extends Service {
         jarvisRunde++;
         jarvisAntwort = null;
         jarvisSpricht = false;
+        jarvisTonAmTv = false;
     }
 
     /** Holt erst den aktuellen Stand (Basis), dann alle 0,3 s, bis eine neue Anfrage samt Antwort da ist. */
@@ -870,16 +879,17 @@ public class Sprache extends Service {
                 if (j == null || j.optInt("nr", 0) <= basis) continue;
                 final String erk = j.optString("erkannt", "").trim();
                 final String ant = j.optString("antwort", "").trim();
+                final String ton = j.optString("audio", "").trim();
                 if (!erk.equals(erkZuletzt) || !ant.isEmpty()) {
                     erkZuletzt = erk;
-                    haupt.post(() -> jarvisText(runde, erk, ant));
+                    haupt.post(() -> jarvisText(runde, erk, ant, ton));
                 }
                 if (!ant.isEmpty()) break;
             }
         }, "LukasKinoJarvis").start();
     }
 
-    private void jarvisText(int runde, String erk, String ant) {
+    private void jarvisText(int runde, String erk, String ant, String ton) {
         if (runde != jarvisRunde || !jarvisAnzeige) return;
         if (!erk.isEmpty()) {
             if (duLive == null) {
@@ -890,10 +900,23 @@ public class Sprache extends Service {
             }
             zeige(SprachRahmen.DENKT, "");
         }
-        if (!ant.isEmpty()) {
-            jarvisAntwort = ant;
-            if (jarvisSpricht) jarvisAntwortZeigen();
+        if (ant.isEmpty() || jarvisTonAmTv) return;
+        if (!ton.isEmpty()) {
+            // Stimme über den TV: Text erscheint mit dem ersten Ton, danach noch kurz stehen lassen.
+            jarvisTonAmTv = true;
+            if (duLive != null && "…".equals(duLive[1])) verlauf.remove(duLive);
+            duLive = null;
+            wartendeAntwort = ant;
+            zeige(SprachRahmen.DENKT, "");
+            haupt.removeCallbacks(schliessen);
+            abspielen(ton, SystemClock.uptimeMillis(), () -> {
+                haupt.removeCallbacks(schliessen);
+                haupt.postDelayed(schliessen, 9000);
+            });
+            return;
         }
+        jarvisAntwort = ant;
+        if (jarvisSpricht) jarvisAntwortZeigen();
     }
 
     private void jarvisAntwortZeigen() {
