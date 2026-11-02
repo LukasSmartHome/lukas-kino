@@ -67,18 +67,29 @@ final class KinoHa {
         void abspielen(JSONObject film, boolean fortsetzen);
     }
 
+    /** Was gerade an den Fernsehern läuft (sensor.kino_jetzt → laeuft), für die Live-Kacheln. Haupt-Thread. */
+    interface Live {
+        void live(JSONObject laeuft, double serverJetzt);
+    }
+
     /** Schaut alle 4 Sekunden nach, solange die Activity vorne ist: an() in onResume, aus() in onPause. */
     static final class Waechter {
         private final Activity a;
         private final Ziel ziel;
+        private final Live live;
         private final Handler h = new Handler(Looper.getMainLooper());
         private final SharedPreferences prefs;
         private boolean laeuft, erster;
         private volatile boolean unterwegs;
 
         Waechter(Activity a, Ziel ziel) {
+            this(a, ziel, null);
+        }
+
+        Waechter(Activity a, Ziel ziel, Live live) {
             this.a = a;
             this.ziel = ziel;
+            this.live = live;
             prefs = a.getSharedPreferences("lukaskino", Context.MODE_PRIVATE);
         }
 
@@ -120,6 +131,13 @@ final class KinoHa {
             Jellyfin jf = Jellyfin.get(a);
             if (!jf.angemeldet()) return;
             JSONObject j = new JSONObject(Jellyfin.holen(Familie.BASIS + "auftrag.json?t=" + System.currentTimeMillis()));
+            if (live != null) {
+                final JSONObject l = j.optJSONObject("laeuft");
+                final double jetzt = j.optDouble("jetzt", System.currentTimeMillis() / 1000.0);
+                a.runOnUiThread(() -> {
+                    if (laeuft && !a.isFinishing()) live.live(l != null ? l : new JSONObject(), jetzt);
+                });
+            }
             JSONObject alle = j.optJSONObject("auftraege");
             JSONObject x = alle != null ? alle.optJSONObject(Merkliste.WER) : null;
             if (x == null || x.optString("id").isEmpty() || x.optDouble("ts", 0) <= 0) return;

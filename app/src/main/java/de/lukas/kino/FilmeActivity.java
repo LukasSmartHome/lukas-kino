@@ -88,6 +88,7 @@ public class FilmeActivity extends Activity {
         final int form;
         final List<JSONObject> eintraege = new ArrayList<>();
         int fokus;
+        int live;            // so viele Live-Kacheln stehen vorne (nur Weiterschauen)
         boolean geladen, laedt;
 
         Reihe(String titel, String quelle, int form) {
@@ -124,6 +125,8 @@ public class FilmeActivity extends Activity {
     // Raster-Masse: Ordner 6 nebeneinander (16:9), Fotos 7 nebeneinander (4:3), wenig Abstand
     static final int ORDNER_SPALTEN = 6, ORDNER_W = 268, ORDNER_H = 151, ORDNER_LUECKE = 17;
     static final int FOTO_SPALTEN = 7, FOTO_W = 230, FOTO_H = 172, FOTO_LUECKE = 14;
+    // Live-Kacheln ganz links in Weiterschauen: breiter, mit Abstand zu den normalen Postern
+    static final int LIVE_W = 470, LIVE_LUECKE = 64;
     static final int RASTER_OBEN_KLEIN = 112, RASTER_OBEN_GROSS = 300;
 
     /** Baut eine Raster-Seite: erst die Ordner, dann Fotos und Videos, zeilenweise. */
@@ -226,6 +229,10 @@ public class FilmeActivity extends Activity {
             {"7", "8", "9", "0", "-", "."}};
     static final int SUCH_SPALTEN = 5;
 
+    // Live: was gerade an den Fernsehern läuft (sensor.kino_jetzt über auftrag.json), ganz links in Weiterschauen
+    private final List<JSONObject> liveListe = new ArrayList<>();
+    private String liveSig = "";
+
     // Bewerten (nach dem Film ab 80 % oder über den Knopf in den Details)
     private boolean bew;
     private JSONObject bewFilm;
@@ -250,7 +257,7 @@ public class FilmeActivity extends Activity {
         buehne = new Buehne(this);
         setContentView(buehne);
         verstecken();
-        auftrag = new KinoHa.Waechter(this, this::abspielen);
+        auftrag = new KinoHa.Waechter(this, this::abspielen, this::liveNeu);
         if (jf.angemeldet()) laden();
         else anmelden();
     }
@@ -392,6 +399,7 @@ public class FilmeActivity extends Activity {
 
     private void zeigeStart(Bereich b, Seite s) {
         startseiten.put(b, s);
+        if (b == Bereich.FILME) liveEinsetzen();
         if (bereich != b) return;
         seite = s;
         ansicht = Ansicht.LISTE;
@@ -532,6 +540,158 @@ public class FilmeActivity extends Activity {
             fokusGeaendert();
         }
         buehne.invalidate();
+    }
+
+    // ------------------------------------------------------------------ Live (wer schaut gerade was, wo)
+
+    /** Alle 4 s aus auftrag.json (KinoHa.Waechter). Neue Filme werden bei Jellyfin geholt, Zeiten laufend übernommen. */
+    private void liveNeu(JSONObject laeuft, double serverJetzt) {
+        List<String> wer = new ArrayList<>();
+        Iterator<String> it = laeuft.keys();
+        while (it.hasNext()) {
+            String w = it.next();
+            JSONObject x = laeuft.optJSONObject(w);
+            String typ = x != null ? x.optString("typ", "movie") : "";
+            if (x != null && ("movie".equals(typ) || "episode".equals(typ))) wer.add(w);
+        }
+        // das Aktuellste ganz links
+        Collections.sort(wer, (a, b) -> Double.compare(laeuft.optJSONObject(b).optDouble("ts", 0), laeuft.optJSONObject(a).optDouble("ts", 0)));
+        StringBuilder sb = new StringBuilder();
+        for (String w : wer) sb.append(w).append('|').append(laeuft.optJSONObject(w).optString("id")).append(',');
+        final String sig = sb.toString();
+        if (sig.equals(liveSig)) {
+            // gleiche Filme: nur Stand, Pause und Zeit übernehmen
+            for (JSONObject e : liveListe) {
+                JSONObject li = e.optJSONObject("_live");
+                JSONObject x = li != null ? laeuft.optJSONObject(li.optString("wer")) : null;
+                if (x == null) continue;
+                try {
+                    if (li.optDouble("jetzt", 0) != serverJetzt) {
+                        li.put("jetzt", serverJetzt);
+                        li.put("empfangen", SystemClock.uptimeMillis());
+                    }
+                    li.put("pos", x.optDouble("pos", 0));
+                    li.put("dauer", x.optDouble("dauer", 0));
+                    li.put("status", x.optString("status", "playing"));
+                    li.put("ts", x.optDouble("ts", serverJetzt));
+                } catch (Exception ignored) {
+                }
+            }
+            buehne.invalidate();
+            return;
+        }
+        final long empfangen = SystemClock.uptimeMillis();
+        netz.execute(() -> {
+            Map<String, String> jfIds = new HashMap<>();
+            List<String> ids = new ArrayList<>();
+            for (String w : wer) {
+                String id = Merkliste.jfFuerHa(laeuft.optJSONObject(w).optString("id"));
+                if (id == null || id.isEmpty()) continue;
+                jfIds.put(w, id);
+                if (!ids.contains(id)) ids.add(id);
+            }
+            Map<String, JSONObject> items = new HashMap<>();
+            if (!ids.isEmpty()) {
+                try {
+                    JSONArray a = jf.nachIds(ids);
+                    for (int i = 0; i < a.length(); i++) {
+                        JSONObject o = a.optJSONObject(i);
+                        if (o != null) items.put(o.optString("Id"), o);
+                    }
+                } catch (Exception e) {
+                    return; // beim nächsten Mal nochmal
+                }
+            }
+            List<JSONObject> weiter = null;
+            try {
+                JSONArray a = jf.weiterschauen();
+                weiter = new ArrayList<>();
+                for (int i = 0; i < a.length(); i++) if (a.optJSONObject(i) != null) weiter.add(a.optJSONObject(i));
+            } catch (Exception ignored) {
+                // dann bleibt Weiterschauen, wie es ist
+            }
+            final List<JSONObject> weiterFertig = weiter;
+            List<JSONObject> neu = new ArrayList<>();
+            for (String w : wer) {
+                JSONObject f = items.get(jfIds.get(w));
+                if (f == null) continue;
+                try {
+                    JSONObject k = new JSONObject(f.toString());
+                    JSONObject x = laeuft.optJSONObject(w), li = new JSONObject();
+                    li.put("wer", w);
+                    li.put("pos", x.optDouble("pos", 0));
+                    li.put("dauer", x.optDouble("dauer", 0));
+                    li.put("status", x.optString("status", "playing"));
+                    li.put("ts", x.optDouble("ts", serverJetzt));
+                    li.put("jetzt", serverJetzt);
+                    li.put("empfangen", empfangen);
+                    k.put("_live", li);
+                    neu.add(k);
+                } catch (Exception ignored) {
+                }
+            }
+            h.post(() -> {
+                liveSig = sig;
+                liveListe.clear();
+                liveListe.addAll(neu);
+                liveEinsetzen(weiterFertig);
+                fokusGeaendert();
+            });
+        });
+    }
+
+    private void liveEinsetzen() {
+        liveEinsetzen(null);
+    }
+
+    /**
+     * Live-Kacheln vorne in die Reihe Weiterschauen der Filme-Startseite setzen (Reihe notfalls anlegen oder entfernen).
+     * weiter = frische Weiterschauen-Liste von Jellyfin oder null (dann bleibt der normale Teil, wie er ist).
+     */
+    private void liveEinsetzen(List<JSONObject> weiter) {
+        Seite start = startseiten.get(Bereich.FILME);
+        if (start == null) return;
+        Reihe w = start.reihen.isEmpty() ? null : start.reihen.get(0);
+        boolean da = w != null && "Weiterschauen".equals(w.titel);
+        int alt = da ? w.live : 0;
+        Set<String> liveIds = new HashSet<>();
+        for (JSONObject e : liveListe) liveIds.add(e.optString("Id"));
+        List<JSONObject> regulaer = new ArrayList<>();
+        if (weiter != null) regulaer.addAll(weiter);
+        else if (da) for (JSONObject e : w.eintraege) if (!e.has("_live")) regulaer.add(e);
+        regulaer.removeIf(e -> liveIds.contains(e.optString("Id")));
+        List<JSONObject> alle = new ArrayList<>(liveListe);
+        alle.addAll(regulaer);
+        if (alle.isEmpty()) {
+            if (da && start.reihen.size() > 1) {
+                start.reihen.remove(0);
+                if (start.akt > 0) start.akt--;
+                start.anim = start.akt;
+            }
+            buehne.invalidate();
+            return;
+        }
+        if (!da) {
+            w = new Reihe("Weiterschauen", null, POSTER);
+            w.geladen = true;
+            start.reihen.add(0, w);
+            if (seite == start) {
+                start.akt++;
+                start.anim = start.akt;
+            }
+        }
+        w.eintraege.clear();
+        w.eintraege.addAll(alle);
+        w.live = liveListe.size();
+        w.fokus = Math.max(0, Math.min(w.fokus + w.live - alt, w.eintraege.size() - 1));
+        buehne.invalidate();
+    }
+
+    /** „Mama und Papa · Wohnzimmer“, „Jonas · in seinem Zimmer“, „Du · dein Zimmer“. */
+    static String liveWo(String wer) {
+        if (wer.equals(Merkliste.WER)) return "Du  ·  dein Zimmer";
+        if ("Eltern".equals(wer)) return "Mama und Papa  ·  Wohnzimmer";
+        return wer + "  ·  in seinem Zimmer";
     }
 
     // ------------------------------------------------------------------ Gesehen (je Profil, ab 80 %)
@@ -961,6 +1121,7 @@ public class FilmeActivity extends Activity {
                             }
                         }
                     }
+                    if (b == Bereich.FILME) liveEinsetzen();
                     if (frisch != null && "Movie".equals(typ(frisch)) && quote >= Gesehen.GRENZE) gesehenGeaendert();
                     fokusGeaendert();
                 });
@@ -977,7 +1138,7 @@ public class FilmeActivity extends Activity {
         for (Seite s : alle)
             for (Reihe r : s.reihen)
                 for (int i = 0; i < r.eintraege.size(); i++)
-                    if (id.equals(r.eintraege.get(i).optString("Id"))) r.eintraege.set(i, neu);
+                    if (id.equals(r.eintraege.get(i).optString("Id")) && !r.eintraege.get(i).has("_live")) r.eintraege.set(i, neu);
     }
 
     // ------------------------------------------------------------------ Fokus und Hintergrund
@@ -2311,15 +2472,16 @@ public class FilmeActivity extends Activity {
             int al = Math.round(255 * alpha);
             int w = rh.form == QUER ? QW : PW, hh = rh.form == QUER ? QH : PH;
             float schritt = w + ABSTAND;
-            if (!rh.titel.isEmpty()) {
-                reiheText.setAlpha(Math.round((aktiv ? 230 : 170) * alpha));
-                c.drawText(rh.titel, LINKS, y - 24, reiheText);
-            }
             float soll = rh.fokus;
             Float ist = scrolls.get(rh);
             float sc = ist == null ? soll : naeher(ist, soll, dt, 80);
             scrolls.put(rh, sc);
             if (sc != soll) weiter = true;
+            if (rh.live > 0 && rh.form == POSTER) return liveReiheZeichnen(c, rh, y, aktiv, alpha, sc) | weiter;
+            if (!rh.titel.isEmpty()) {
+                reiheText.setAlpha(Math.round((aktiv ? 230 : 170) * alpha));
+                c.drawText(rh.titel, LINKS, y - 24, reiheText);
+            }
             if (!rh.geladen && rh.eintraege.isEmpty()) {
                 for (int k = 0; k < 8; k++) {
                     r.set(LINKS + k * schritt, y, LINKS + k * schritt + w, y + hh);
@@ -2473,6 +2635,177 @@ public class FilmeActivity extends Activity {
             klein.setAlpha(0xB3);
             p.setAlpha(255);
             return false;
+        }
+
+        // -------------------------------------------------- Weiterschauen mit Live-Kacheln vorne
+
+        /** x-Position einer (auch gebrochenen) Stelle in einer Reihe mit Live-Kacheln vorne. */
+        private float liveX(Reihe rh, float k) {
+            int a = (int) Math.floor(k);
+            float xa = livePunkt(rh, a), xb = livePunkt(rh, a + 1);
+            return xa + (xb - xa) * (k - a);
+        }
+
+        private float livePunkt(Reihe rh, int k) {
+            int n = rh.live;
+            float lw = LIVE_W + ABSTAND, sw = PW + ABSTAND;
+            return k < n ? k * lw : n * lw + LIVE_LUECKE + (k - n) * sw;
+        }
+
+        private boolean liveReiheZeichnen(Canvas c, Reihe rh, float y, boolean aktiv, float alpha, float sc) {
+            int al = Math.round(255 * alpha);
+            float basis = liveX(rh, sc);
+            // zwei Überschriften, die mitwandern: „Läuft gerade“ über den Live-Kacheln, „Weiterschauen“ darüber
+            reiheText.setAlpha(Math.round((aktiv ? 230 : 170) * alpha));
+            float tx = LINKS + livePunkt(rh, 0) - basis;
+            if (tx > -400) {
+                p.setColor(0xFFE5484D);
+                p.setAlpha(al);
+                c.drawCircle(Math.max(tx, -300) + 8, y - 34, 8, p);
+                c.drawText("Läuft gerade", tx + 26, y - 24, reiheText);
+            }
+            if (rh.eintraege.size() > rh.live)
+                c.drawText("Weiterschauen", LINKS + livePunkt(rh, rh.live) - basis, y - 24, reiheText);
+            int erster = Math.max(0, (int) Math.floor(sc) - 1);
+            int letzter = Math.min(rh.eintraege.size() - 1, (int) Math.ceil(sc) + 10);
+            for (int k = erster; k <= letzter; k++) {
+                if (aktiv && k == rh.fokus) continue;
+                float px = LINKS + livePunkt(rh, k) - basis;
+                if (px > 1920) break;
+                float bw = k < rh.live ? LIVE_W : PW;
+                float links = Math.max(0f, Math.min(1f, (px - LINKS + bw * 0.5f) / (bw * 0.5f)));
+                int a2 = Math.round(al * (0.25f + 0.75f * links));
+                if (k < rh.live) liveKarte(c, rh.eintraege.get(k), px, y, 1f, a2, false);
+                else karteZeichnen(c, rh.eintraege.get(k), POSTER, px, y, 1f, a2, false);
+            }
+            if (aktiv && rh.fokus >= erster && rh.fokus <= letzter) {
+                float px = LINKS + livePunkt(rh, rh.fokus) - basis;
+                if (rh.fokus < rh.live) liveKarte(c, rh.eintraege.get(rh.fokus), px, y, fokusZoom, al, true);
+                else karteZeichnen(c, rh.eintraege.get(rh.fokus), POSTER, px, y, fokusZoom, al, true);
+            }
+            p.setAlpha(255);
+            return false;
+        }
+
+        /** Live-Kachel: Szenenbild, LIVE, wer wo, Titel, Fortschritt in der Farbe der Person, „noch … · fertig ca. …“. */
+        private void liveKarte(Canvas c, JSONObject e, float x, float y, float zoom, int al, boolean fokus) {
+            JSONObject li = e.optJSONObject("_live");
+            if (li == null) return;
+            float cx = x + LIVE_W / 2f, cy = y + PH / 2f, w = LIVE_W * zoom, hh = PH * zoom;
+            r.set(cx - w / 2, cy - hh / 2, cx + w / 2, cy + hh / 2);
+            float rad = 18 * zoom;
+            if (fokus) {
+                p.setColor(0xFF000000);
+                p.setAlpha(al);
+                p.setShadowLayer(Ani.schatten(50), 0, 22, Ani.farbe(0x000000, 0.6f * al / 255f));
+                c.drawRoundRect(r, rad, rad, p);
+                p.clearShadowLayer();
+            }
+            String wer = li.optString("wer");
+            Integer pf = Familie.FARBEN.get(wer);
+            int farbe = pf != null ? pf : GELB;
+            // Bild: Szene des Films (bei Folgen der Serie), sonst das Poster
+            String url = null;
+            String tag = Jellyfin.hintergrundTag(e);
+            if (tag != null) url = Jellyfin.szene(e.optString("Id"), tag, LIVE_W * 2);
+            else {
+                JSONArray pt = e.optJSONArray("ParentBackdropImageTags");
+                String pid = e.optString("ParentBackdropItemId", null);
+                if (pt != null && pt.length() > 0 && pid != null) url = Jellyfin.szene(pid, pt.optString(0), LIVE_W * 2);
+                else url = kartenUrl(e, POSTER);
+            }
+            Bitmap b = url != null ? bilder.sofort(url) : null;
+            if (b == null && url != null && !bilder.fehlgeschlagen(url)) bilder.laden(url, (u, bm) -> invalidate());
+            c.save();
+            Path clip = new Path();
+            clip.addRoundRect(r, rad, rad, Path.Direction.CW);
+            c.clipPath(clip);
+            if (b != null) {
+                float sk = Math.max(r.width() / b.getWidth(), r.height() / b.getHeight());
+                m.setScale(sk, sk);
+                m.postTranslate(r.left + (r.width() - b.getWidth() * sk) / 2f, r.top + (r.height() - b.getHeight() * sk) / 2f);
+                p.setAlpha(al);
+                c.drawBitmap(b, m, p);
+            } else {
+                p.setColor(0xFF1D2027);
+                p.setAlpha(al);
+                c.drawRect(r, p);
+            }
+            // dunkler Verlauf unten für die Schrift, leichter Farbschimmer der Person
+            p.setShader(new LinearGradient(0, r.top, 0, r.bottom, new int[]{0x26000000, 0x8C000000, 0xF2000000},
+                    new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP));
+            p.setAlpha(al);
+            c.drawRect(r, p);
+            p.setShader(null);
+            c.restore();
+            // Rand in der Farbe der Person
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(3f * zoom);
+            p.setColor(farbe);
+            p.setAlpha(Math.round((fokus ? 255 : 170) * al / 255f));
+            c.drawRoundRect(r, rad, rad, p);
+            p.setStyle(Paint.Style.FILL);
+            float l = r.left + 22 * zoom, breite = r.width() - 44 * zoom;
+            // LIVE
+            knopf.setTextSize(20 * zoom);
+            float lw = knopf.measureText("LIVE") + 44 * zoom;
+            RectF pill = new RectF(l, r.top + 18 * zoom, l + lw, r.top + 52 * zoom);
+            p.setColor(0xFFE5484D);
+            p.setAlpha(al);
+            c.drawRoundRect(pill, 17 * zoom, 17 * zoom, p);
+            p.setColor(0xFFFFFFFF);
+            p.setAlpha(al);
+            c.drawCircle(pill.left + 16 * zoom, pill.centerY(), 5 * zoom, p);
+            knopf.setAlpha(al);
+            c.drawText("LIVE", pill.left + 28 * zoom, pill.centerY() + 7 * zoom, knopf);
+            knopf.setTextSize(30);
+            knopf.setAlpha(255);
+            // wer und wo
+            karte.setTextSize(22 * zoom);
+            karte.setColor(farbe);
+            karte.setAlpha(al);
+            c.drawText(kuerzen(liveWo(wer), karte, breite), l, r.bottom - 124 * zoom, karte);
+            karte.setColor(0xFFFFFFFF);
+            // Titel
+            String titel = e.optString("Name");
+            if ("Episode".equals(typ(e)))
+                titel = e.optString("SeriesName") + "  ·  S" + e.optInt("ParentIndexNumber", 0) + " E" + e.optInt("IndexNumber", 0);
+            karte.setTextSize(31 * zoom);
+            karte.setAlpha(al);
+            c.drawText(kuerzen(titel, karte, breite), l, r.bottom - 84 * zoom, karte);
+            // Stand: läuft weiter, solange gespielt wird
+            double dauer = li.optDouble("dauer", 0), pos = li.optDouble("pos", 0);
+            boolean pause = !"playing".equals(li.optString("status"));
+            if (!pause)
+                pos += Math.max(0, li.optDouble("jetzt", 0) - li.optDouble("ts", 0)) + (SystemClock.uptimeMillis() - li.optLong("empfangen", SystemClock.uptimeMillis())) / 1000.0;
+            if (dauer > 0) pos = Math.min(pos, dauer);
+            float anteil = dauer > 0 ? (float) (pos / dauer) : 0f;
+            RectF bahn = new RectF(l, r.bottom - 62 * zoom, l + breite, r.bottom - 55 * zoom);
+            p.setColor(0x4DFFFFFF);
+            p.setAlpha(Math.round(0x4D * al / 255f));
+            c.drawRoundRect(bahn, 4 * zoom, 4 * zoom, p);
+            bahn.right = l + breite * anteil;
+            p.setColor(farbe);
+            p.setAlpha(al);
+            c.drawRoundRect(bahn, 4 * zoom, 4 * zoom, p);
+            long rest = Math.max(0, Math.round((dauer - pos) / 60.0));
+            String restText = rest >= 60 ? (rest / 60) + " Std. " + (rest % 60) + " Min." : rest + " Min.";
+            String zeile;
+            if (dauer <= 0) zeile = pause ? "pausiert" : "läuft";
+            else if (pause) zeile = "pausiert  ·  noch " + restText;
+            else {
+                java.util.Calendar cal = java.util.Calendar.getInstance();
+                cal.add(java.util.Calendar.SECOND, (int) Math.round(dauer - pos));
+                zeile = "noch " + restText + "  ·  fertig ca. " + String.format(Locale.GERMAN, "%d:%02d", cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE));
+            }
+            klein.setTextSize(22 * zoom);
+            klein.setAlpha(Math.round(0xE6 * al / 255f));
+            c.drawText(kuerzen(zeile, klein, breite), l, r.bottom - 22 * zoom, klein);
+            klein.setTextSize(26);
+            klein.setAlpha(0xB3);
+            karte.setTextSize(26);
+            karte.setAlpha(255);
+            p.setAlpha(255);
         }
 
         // -------------------------------------------------- Foto-Wand (wie in Plex)

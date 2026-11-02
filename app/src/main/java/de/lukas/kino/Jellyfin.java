@@ -236,6 +236,11 @@ final class Jellyfin {
         return SERVER + "/Items/" + id + "/Images/Primary?fillHeight=" + hoehe + "&quality=90" + (tag != null ? "&tag=" + tag : "");
     }
 
+    /** Kleines Szenenbild (für die Live-Kacheln). */
+    static String szene(String id, String tag, int breite) {
+        return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillWidth=" + breite + "&quality=85" + (tag != null ? "&tag=" + tag : "");
+    }
+
     static String hintergrund(String id, String tag) {
         return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillWidth=1920&quality=85" + (tag != null ? "&tag=" + tag : "");
     }
