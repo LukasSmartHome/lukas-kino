@@ -1081,3 +1081,44 @@ body {
   white-space: nowrap;
   z-index: 5;
 }
+
+/* ------------------------------------------------------------ Familien-Bewertungen (nur in der Detailansicht) */
+
+#info:not(.detail) .nur-detail { display: none; }
+
+.i-familie {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  max-width: 1300px;
+}
+
+.f-schnitt {
+  font-size: 28px;
+  font-weight: 800;
+  color: #F2B705;
+  margin-right: 18px;
+}
+
+.f-note {
+  height: 46px;
+  line-height: 46px;
+  padding: 0 18px;
+  margin: 4px 12px 4px 0;
+  border-radius: 23px;
+  background: rgba(255, 255, 255, .12);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .14);
+  font-size: 26px;
+  white-space: nowrap;
+}
+
+.f-note b { font-weight: 700; margin-right: 10px; }
+.f-note span { font-weight: 800; }
+
+.f-gesehen {
+  font-size: 24px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, .7);
+  margin-left: 6px;
+}

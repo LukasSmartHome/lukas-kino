@@ -559,6 +559,85 @@
     return tr;
   }
 
+  // ------------------------------------------------------------------ Familien-Bewertungen aus Home Assistant
+  // HA schreibt sie alle 5 Minuten nach /share/kino/bewertungen.json (Paket kino_export.yaml).
+  // Plex-Titel "Name (Jahr)" werden über Name und Jahr den Jellyfin-Filmen zugeordnet.
+
+  const FAMILIE = { Lukas: '#F2B705', Moni: '#E8559A', Uli: '#1FA463', Jonas: '#2F6FEB', Eltern: '#E8559A' };
+  const familie = { noten: {}, gesehen: {}, nurName: {} };
+
+  function familienSchluessel(name, jahr) { return Suche.normal(name) + '|' + (jahr || ''); }
+
+  function plexTitel(t) {
+    const m = String(t || '').match(/^(.*)\s\((\d{4})\)\s*$/);
+    return m ? { name: m[1], jahr: m[2] } : { name: String(t || ''), jahr: '' };
+  }
+
+  async function familieLaden() {
+    try {
+      const r = await fetch('../bewertungen.json?t=' + Date.now());
+      if (!r.ok) return;
+      const j = await r.json();
+      const noten = {}, gesehen = {}, nurName = {};
+      Object.keys(j.bewertungen || {}).forEach(function (id) {
+        const f = j.bewertungen[id], t = plexTitel(f.t);
+        const k = familienSchluessel(t.name, t.jahr);
+        noten[k] = f.w || {};
+        nurName[Suche.normal(t.name)] = nurName[Suche.normal(t.name)] === undefined ? k : null; // null = mehrdeutig
+      });
+      (j.verlauf || []).forEach(function (v) {
+        if (v.typ && v.typ !== 'movie') return;
+        const t = plexTitel(v.titel), k = familienSchluessel(t.name, t.jahr);
+        (gesehen[k] = gesehen[k] || []);
+        if (v.wer && gesehen[k].indexOf(v.wer) < 0) gesehen[k].push(v.wer);
+        if (nurName[Suche.normal(t.name)] === undefined) nurName[Suche.normal(t.name)] = k;
+      });
+      familie.noten = noten;
+      familie.gesehen = gesehen;
+      familie.nurName = nurName;
+      infoSchluessel = '';
+      if (ansicht === A.LISTE || ansicht === A.DETAIL) zeichnen();
+    } catch (e) { /* ohne Bewertungen weiter */ }
+  }
+
+  function familieFuer(e) {
+    if (!e || typ(e) !== 'Movie') return null;
+    let k = familienSchluessel(e.Name, e.ProductionYear);
+    if (!familie.noten[k] && !familie.gesehen[k]) {
+      const n = familie.nurName[Suche.normal(e.Name)];
+      if (n) k = n;
+      else if (e.OriginalTitle) k = familienSchluessel(e.OriginalTitle, e.ProductionYear);
+    }
+    const w = familie.noten[k] || {}, g = familie.gesehen[k] || [];
+    if (!Object.keys(w).length && !g.length) return null;
+    return { noten: w, gesehen: g };
+  }
+
+  function familienZeile(e) {
+    const f = familieFuer(e);
+    if (!f) return null;
+    const d = div('i-familie nur-detail');
+    const namen = Object.keys(f.noten).sort(function (a, b) { return f.noten[b] - f.noten[a]; });
+    if (namen.length) {
+      const summe = namen.reduce(function (a, n) { return a + Number(f.noten[n] || 0); }, 0);
+      const schnitt = div('f-schnitt', 'Ø ' + (summe / namen.length).toFixed(1).replace('.', ','));
+      d.appendChild(schnitt);
+      namen.forEach(function (n) {
+        const p = div('f-note');
+        const nm = document.createElement('b');
+        nm.textContent = n;
+        nm.style.color = FAMILIE[n] || '#fff';
+        const z = document.createElement('span');
+        z.textContent = f.noten[n];
+        p.appendChild(nm);
+        p.appendChild(z);
+        d.appendChild(p);
+      });
+    }
+    if (f.gesehen.length) d.appendChild(div('f-gesehen', 'Gesehen: ' + f.gesehen.join(', ')));
+    return d;
+  }
+
   // ------------------------------------------------------------------ Zustand
 
   function neueReihe(titel, quelle, form) {
@@ -816,6 +895,9 @@
         else if ((t === 'homevideos' || t === 'photos') && !fotosId) fotosId = v.Id;
       });
       try { await merk.laden(); } catch (e) { /* ohne Merkliste weiter */ }
+      familieLaden();
+      clearInterval(laden.familieTimer);
+      laden.familieTimer = setInterval(familieLaden, 600000);
       const s = await filmeSeite();
       zeigeStart('filme', s);
     } catch (e) {
@@ -1511,6 +1593,9 @@
       meta.appendChild(sp);
     }
     box.appendChild(meta);
+
+    const fam = familienZeile(e);
+    if (fam) box.appendChild(fam);
 
     const pos = position(e), ges = e.RunTimeTicks || 0;
     if (pos > 0 && ges > pos && !gesehen(e)) {
