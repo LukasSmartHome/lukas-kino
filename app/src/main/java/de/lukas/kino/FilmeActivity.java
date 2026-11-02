@@ -170,7 +170,7 @@ public class FilmeActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         jf = Jellyfin.get(this);
         bilder = Bilder.get(jf);
-        titelSpeicher = getSharedPreferences("lukaskino_titelbilder", MODE_PRIVATE);
+        titelSpeicher = getSharedPreferences("lukaskino_titelbilder2", MODE_PRIVATE);
         buehne = new Buehne(this);
         setContentView(buehne);
         verstecken();
@@ -683,7 +683,7 @@ public class FilmeActivity extends Activity {
             String url = "";
             try {
                 JSONObject f = jf.erstesFoto(ordner);
-                if (f != null) url = Jellyfin.quer(f.optString("Id"), Jellyfin.tag(f, "Primary"), QW * 2);
+                if (f != null && Jellyfin.tag(f, "Primary") != null) url = Jellyfin.quer(f.optString("Id"), Jellyfin.tag(f, "Primary"), QW * 2);
             } catch (Exception ignored) {
             }
             final String fertig = url;

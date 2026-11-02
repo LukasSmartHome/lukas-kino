@@ -158,9 +158,12 @@ final class Jellyfin {
      * Bewusst ohne Sortierung – sortiert dauert es bei 48.000 Fotos rund 5 Sekunden pro Ordner.
      */
     JSONObject erstesFoto(String ordner) throws Exception {
-        JSONArray a = liste("/Items?userId=" + benutzer + "&parentId=" + ordner + "&includeItemTypes=Photo&limit=1&fields=ImageTags");
+        // nur Fotos, die schon ein Vorschaubild haben (imageTypes=Primary) – der Scan erzeugt sie erst nach und nach
+        JSONArray a = liste("/Items?userId=" + benutzer + "&parentId=" + ordner
+                + "&includeItemTypes=Photo&imageTypes=Primary&limit=1&fields=ImageTags");
         if (a.length() == 0)
-            a = liste("/Items?userId=" + benutzer + "&parentId=" + ordner + "&recursive=true&includeItemTypes=Photo&limit=1&fields=ImageTags");
+            a = liste("/Items?userId=" + benutzer + "&parentId=" + ordner
+                    + "&recursive=true&includeItemTypes=Photo&imageTypes=Primary&limit=1&fields=ImageTags");
         return a.length() > 0 ? a.getJSONObject(0) : null;
     }
 

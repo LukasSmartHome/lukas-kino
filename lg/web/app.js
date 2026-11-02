@@ -34,7 +34,7 @@
   const POSTER = 0, QUER = 1;
 
   const FELDER = 'Overview,Genres,OfficialRating,CommunityRating,ProductionYear,RunTimeTicks,'
-    + 'ImageTags,BackdropImageTags,UserData,ChildCount,OriginalTitle,ParentBackdropImageTags,DateCreated,PremiereDate,EndDate';
+    + 'ImageTags,BackdropImageTags,UserData,ChildCount,OriginalTitle,ParentBackdropImageTags,DateCreated,PremiereDate,EndDate,ProviderIds,RemoteTrailers';
   const FELDER_FOTO = 'ImageTags,ChildCount,DateCreated,PremiereDate,RunTimeTicks,UserData,Width,Height';
 
   const FARBEN = {
@@ -44,8 +44,8 @@
     'Familie und Animation': '#3E9BF0', 'Kriegsfilme': '#5E6B2B', 'Historienfilme': '#9C7442', 'Western': '#E9A23B'
   };
 
-  const LEISTE = ['Suche', 'Filme', 'Serien', 'Fotos'];
-  const BEREICHE = ['filme', 'serien', 'fotos'];
+  const LEISTE = ['Suche', 'Filme', 'Serien', 'Merkliste', 'Fotos'];
+  const BEREICHE = ['filme', 'serien', 'merkliste', 'fotos'];
   const TASTEN = [
     ['a', 'b', 'c', 'd', 'e', 'f'], ['g', 'h', 'i', 'j', 'k', 'l'], ['m', 'n', 'o', 'p', 'q', 'r'],
     ['s', 't', 'u', 'v', 'w', 'x'], ['y', 'z', 'ä', 'ö', 'ü', 'ß'], ['1', '2', '3', '4', '5', '6'],
@@ -83,6 +83,7 @@
     '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
     '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9l5 3-5 3z"/>',
     '<rect x="3" y="7" width="18" height="11" rx="2.5"/><path d="M8.5 3L12 7l3.5-4M8 21h8"/>',
+    '<path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-1z"/>',
     '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3.5 17L9 11.5l4 4 2.5-2.5 5 4.5"/><circle cx="16.2" cy="9.2" r="1.6"/>'
   ];
 
@@ -246,10 +247,12 @@
     },
     // Erstes Foto eines Ordners: erst direkt (ca. 40 ms), sonst in Unterordnern – ohne Sortierung (sortiert ca. 5 s)
     erstesFoto: async function (ordner) {
-      let a = await this.liste('/Items?userId=' + this.benutzer + '&parentId=' + ordner + '&includeItemTypes=Photo&limit=1&fields=ImageTags');
+      // nur Fotos, die schon ein Vorschaubild haben (imageTypes=Primary) – der Scan erzeugt sie erst nach und nach
+      let a = await this.liste('/Items?userId=' + this.benutzer + '&parentId=' + ordner
+        + '&includeItemTypes=Photo&imageTypes=Primary&limit=1&fields=ImageTags');
       if (!a.length) {
         a = await this.liste('/Items?userId=' + this.benutzer + '&parentId=' + ordner
-          + '&recursive=true&includeItemTypes=Photo&limit=1&fields=ImageTags');
+          + '&recursive=true&includeItemTypes=Photo&imageTypes=Primary&limit=1&fields=ImageTags');
       }
       return a[0] || null;
     },
@@ -402,6 +405,160 @@
   };
   window.LukasKinoSuche = Suche; // für Tests
 
+  // ------------------------------------------------------------------ Merkliste (je Gerät)
+  // Gespeichert in Jellyfin (DisplayPreferences des Benutzers, je Gerät eine eigene Liste):
+  // übersteht App-Updates und ist am Eltern-Fernseher eine andere Liste als an Lukas' TCL.
+
+  const merk = {
+    ids: [],
+    items: {},
+    dto: null,
+
+    client: function () {
+      const d = window.DeviceInfo || {};
+      const name = parameter.liste || d.modelName || d.model || geraetId;
+      return 'lukaskino-' + String(name).replace(/[^A-Za-z0-9_-]/g, '');
+    },
+
+    pfad: function () {
+      return '/DisplayPreferences/lukaskino-merkliste?userId=' + jf.benutzer + '&client=' + encodeURIComponent(this.client());
+    },
+
+    laden: async function () {
+      try { this.dto = await jf.anfrage('GET', this.pfad()); } catch (e) { this.dto = null; }
+      const roh = this.dto && this.dto.CustomPrefs && this.dto.CustomPrefs.merkliste;
+      const ids = roh ? String(roh).split(',').filter(Boolean) : [];
+      if (ids.length) {
+        const a = await jf.liste('/Items?userId=' + jf.benutzer + '&ids=' + ids.join(',') + '&fields=' + FELDER);
+        const self = this;
+        a.forEach(function (i) { self.items[i.Id] = i; });
+      }
+      const self = this;
+      this.ids = ids.filter(function (id) { return !!self.items[id]; });
+    },
+
+    hat: function (id) { return this.ids.indexOf(id) >= 0; },
+
+    liste: function () {
+      const self = this;
+      return this.ids.map(function (id) { return self.items[id]; }).filter(Boolean);
+    },
+
+    umschalten: function (e) {
+      if (this.hat(e.Id)) this.ids = this.ids.filter(function (x) { return x !== e.Id; });
+      else {
+        this.ids.unshift(e.Id);
+        this.items[e.Id] = e;
+      }
+      merklisteGeaendert();
+      this.speichern();
+    },
+
+    speichern: async function () {
+      const dto = this.dto || {
+        Id: 'lukaskino-merkliste', SortBy: 'SortName', SortOrder: 'Ascending', RememberIndexing: false,
+        RememberSorting: false, ScrollDirection: 'Horizontal', ShowBackdrop: true, ShowSidebar: false,
+        PrimaryImageHeight: 250, PrimaryImageWidth: 250, CustomPrefs: {}
+      };
+      dto.Client = this.client();
+      dto.CustomPrefs = Object.assign({}, dto.CustomPrefs || {}, { merkliste: this.ids.join(',') });
+      this.dto = dto;
+      try {
+        await jf.anfrage('POST', this.pfad(), dto);
+      } catch (e) {
+        hinweis('Merkliste ließ sich nicht speichern');
+      }
+    }
+  };
+
+  function merklisteSeite() {
+    const s = neueSeite('Merkliste');
+    const l = merk.liste();
+    const filme = l.filter(function (e) { return typ(e) !== 'Series'; });
+    const serien = l.filter(function (e) { return typ(e) === 'Series'; });
+    for (let i = 0; i < filme.length; i += 8) s.reihen.push(reiheAus(i === 0 ? 'Filme' : '', filme.slice(i, i + 8), POSTER));
+    for (let i = 0; i < serien.length; i += 8) s.reihen.push(reiheAus(i === 0 ? 'Serien' : '', serien.slice(i, i + 8), POSTER));
+    if (!s.reihen.length) s.leer = 'Noch nichts gemerkt';
+    return s;
+  }
+
+  /** Merkliste geändert: Reihe auf der Filme-Startseite und die Merkliste-Seite nachziehen. */
+  function merklisteGeaendert() {
+    const l = merk.liste();
+    const start = startseiten.filme;
+    if (start) {
+      let i = -1;
+      start.reihen.forEach(function (r, k) { if (r.titel === 'Merkliste' && r._merk) i = k; });
+      if (l.length && i >= 0) {
+        const r = start.reihen[i];
+        r.eintraege = l.slice();
+        r.fokus = Math.min(r.fokus, l.length - 1);
+        r.version++;
+      } else if (l.length) {
+        const r = reiheAus('Merkliste', l, POSTER);
+        r._merk = true;
+        const pos = start.reihen.length && start.reihen[0].titel === 'Weiterschauen' ? 1 : 0;
+        start.reihen.splice(pos, 0, r);
+        if (start.akt >= pos && start.reihen.length > 1) start.akt++;
+      } else if (i >= 0) {
+        start.reihen.splice(i, 1);
+        if (start.akt > i || start.akt >= start.reihen.length) start.akt = Math.max(0, start.akt - 1);
+      }
+    }
+    const alt = startseiten.merkliste;
+    const neu = merklisteSeite();
+    startseiten.merkliste = neu;
+    if (alt && seite === alt) {
+      neu.akt = Math.min(alt.akt, Math.max(0, neu.reihen.length - 1));
+      seite = neu;
+    }
+    zeichnen();
+  }
+
+  // ------------------------------------------------------------------ Trailer (KinoCheck auf Deutsch, sonst Jellyfin)
+
+  let trailerSpeicher = {};
+  try { trailerSpeicher = JSON.parse(speicherLesen('lk_trailer') || '{}') || {}; } catch (e) { trailerSpeicher = {}; }
+
+  function ytId(u) {
+    const m = String(u || '').match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
+    return m ? m[1] : null;
+  }
+
+  function deutschWert(name) { return /german|deutsch|\bde\b|offiziell/i.test(name || '') ? 1 : 0; }
+
+  async function trailerSuchen(e) {
+    const tmdb = e.ProviderIds && (e.ProviderIds.Tmdb || e.ProviderIds.tmdb);
+    const key = tmdb ? 'm' + tmdb : 'j' + e.Id;
+    const s = trailerSpeicher[key];
+    if (s && (s.yt || Date.now() - s.z < 3 * 86400000)) return s.yt ? s : null;
+    let tr = null;
+    if (tmdb) {
+      try {
+        const r = await fetch('https://api.kinocheck.de/movies?tmdb_id=' + encodeURIComponent(tmdb) + '&language=de&categories=Trailer');
+        if (r.ok) {
+          const j = await r.json();
+          let v = j && j.trailer && j.trailer.youtube_video_id ? j.trailer : null;
+          if (!v && j && j.videos) {
+            v = j.videos.filter(function (x) {
+              return x.youtube_video_id && x.language === 'de' && (x.categories || []).indexOf('Trailer') >= 0;
+            })[0] || null;
+          }
+          if (v) tr = { yt: v.youtube_video_id, titel: v.title || '', quelle: 'KinoCheck' };
+        }
+      } catch (x) { /* KinoCheck nicht erreichbar – dann Jellyfin */ }
+    }
+    if (!tr && e.RemoteTrailers && e.RemoteTrailers.length) {
+      const l = e.RemoteTrailers.map(function (t) { return { yt: ytId(t.Url), titel: t.Name || '' }; })
+        .filter(function (t) { return t.yt; });
+      l.sort(function (a, b) { return deutschWert(b.titel) - deutschWert(a.titel); });
+      if (l.length) tr = { yt: l[0].yt, titel: l[0].titel, quelle: 'Jellyfin' };
+    }
+    trailerSpeicher[key] = tr ? Object.assign({ z: Date.now() }, tr) : { yt: '', z: Date.now() };
+    speicherSetzen('lk_trailer', JSON.stringify(trailerSpeicher));
+    return tr;
+  }
+
   // ------------------------------------------------------------------ Zustand
 
   function neueReihe(titel, quelle, form) {
@@ -427,6 +584,8 @@
 
   let qcCode = null, qcSecret = null, qcTimer = 0, qcFehler = 0, fehlerText = null;
   let detailKnopf = 0, detailEintrag = null, detailZurueck = A.LISTE;
+  let detailKnoepfe = [];        // [{art, text}] – Abspielen/Fortsetzen, Von vorne, Trailer, Merken
+  let detailTrailer = null;      // {id, yt, titel} zum Film in der Detailansicht
 
   let leiste = false, leistePos = 0, leisteMaus = false;
 
@@ -443,7 +602,7 @@
   const titelbildLaedt = {};
   // gefundene Titelbilder bleiben am Fernseher gespeichert (Fotos in alten Ordnern ändern sich praktisch nie)
   let titelSpeicher = {};
-  try { titelSpeicher = JSON.parse(speicherLesen('lk_titelbilder') || '{}') || {}; } catch (e) { titelSpeicher = {}; }
+  try { titelSpeicher = JSON.parse(speicherLesen('lk_titelbilder2') || '{}') || {}; } catch (e) { titelSpeicher = {}; }
   const titelWarteschlange = [];
   let titelLaufend = 0;
 
@@ -468,6 +627,13 @@
       + '  <div class="f-video aus"></div><div class="f-pille aus"></div></div>'
       + '<div class="ebene" id="leiste-dunkel"></div>'
       + '<div class="glas" id="leiste"><div class="marke">Lukas Kino</div><div class="pille"></div><div class="punkt"></div></div>'
+      + '<div class="ebene aus" id="trailer"><div class="t-box"></div>'
+      + '  <div class="ebene p-leiste t-leiste"><div class="p-oben"></div><div class="p-unten"></div>'
+      + '    <div class="t-marke">Trailer</div><div class="p-titel t-titel"></div>'
+      + '    <div class="p-bahn"><div class="p-pos t-pos"></div><div class="p-knubbel t-knubbel"></div></div>'
+      + '    <div class="p-zeit t-zeit"></div><div class="p-rest t-rest"></div>'
+      + '    <div class="p-pause t-pause aus"></div><div class="p-meldung t-meldung aus"></div></div></div>'
+      + '<div class="hinweis aus"></div>'
       + '<div class="ebene aus" id="player">'
       + '  <video preload="auto"></video>'
       + '  <div class="p-untertitel"></div>'
@@ -520,6 +686,17 @@
     el.pPause = q('.p-pause');
     el.pMeldung = q('.p-meldung');
     el.pMenue = q('.p-menue');
+    el.trailer = q('#trailer');
+    el.tBox = q('#trailer .t-box');
+    el.tLeiste = q('#trailer .t-leiste');
+    el.tTitel = q('#trailer .t-titel');
+    el.tPos = q('#trailer .t-pos');
+    el.tKnubbel = q('#trailer .t-knubbel');
+    el.tZeit = q('#trailer .t-zeit');
+    el.tRest = q('#trailer .t-rest');
+    el.tPause = q('#trailer .t-pause');
+    el.tMeldung = q('#trailer .t-meldung');
+    el.hinweis = q('.hinweis');
 
     // Seitenleiste
     el.lEintraege = LEISTE.map(function (name, i) {
@@ -638,6 +815,7 @@
         else if (t === 'tvshows') serienId = v.Id;
         else if ((t === 'homevideos' || t === 'photos') && !fotosId) fotosId = v.Id;
       });
+      try { await merk.laden(); } catch (e) { /* ohne Merkliste weiter */ }
       const s = await filmeSeite();
       zeigeStart('filme', s);
     } catch (e) {
@@ -648,6 +826,7 @@
 
   async function bereichOeffnen(b) {
     stapel.length = 0;
+    if (b === 'merkliste') startseiten.merkliste = merklisteSeite();
     const fertig = startseiten[b];
     bereich = b;
     if (fertig) {
@@ -681,6 +860,12 @@
     const l = await Promise.all([jf.weiterschauen(), jf.neu(), jf.sammlungen()]);
     const weiter = l[0], neu = l[1], samml = l[2];
     if (weiter.length) s.reihen.push(reiheAus('Weiterschauen', weiter, POSTER));
+    const gemerkt = merk.liste();
+    if (gemerkt.length) {
+      const r = reiheAus('Merkliste', gemerkt, POSTER);
+      r._merk = true;
+      s.reihen.push(r);
+    }
     s.reihen.push(reiheAus('Neu', neu, POSTER));
     if (samml.length) {
       s.reihen.push(reiheAus('Kategorien', samml, POSTER));
@@ -931,12 +1116,12 @@
     let url = '';
     try {
       const f = await jf.erstesFoto(ordner);
-      if (f) url = querUrl(f.Id, tag(f, 'Primary'), QW * 2);
+      if (f && tag(f, 'Primary')) url = querUrl(f.Id, tag(f, 'Primary'), QW * 2);
     } catch (e) { /* später nochmal */ }
     titelbilder[ordner] = url;
     if (url) {
       titelSpeicher[ordner] = url;
-      speicherSetzen('lk_titelbilder', JSON.stringify(titelSpeicher));
+      speicherSetzen('lk_titelbilder2', JSON.stringify(titelSpeicher));
     } else {
       setTimeout(function () {
         delete titelbilder[ordner];
@@ -1042,6 +1227,7 @@
     const mitte = ansicht === A.LADEN || ansicht === A.ANMELDEN || ansicht === A.FEHLER;
 
     el.player.classList.toggle('aus', !player);
+    el.trailer.classList.toggle('aus', !T.offen);
     el.bgs.classList.toggle('aus', !(liste || suche));
     el.verlauf.classList.toggle('aus', !(liste || suche));
     el.liste.classList.toggle('aus', !liste);
@@ -1250,8 +1436,7 @@
         el.info.appendChild(k);
       }
     }
-    const knoepfe = el.info.querySelectorAll('.knopf');
-    for (let i = 0; i < knoepfe.length; i++) knoepfe[i].classList.toggle('fokus', detail && i === detailKnopf);
+    knoepfeAktualisieren();
   }
 
   function filmInfo(box, e) {
@@ -1340,20 +1525,73 @@
 
     if (abspielbar(e)) {
       box.appendChild(div('i-platz'));
-      const k = div('i-knoepfe');
-      const namen = pos > 0 ? ['Fortsetzen  ·  ' + zeit(pos / 10000000), 'Von vorne'] : ['Abspielen'];
-      namen.forEach(function (n, i) {
+      box.appendChild(div('i-knoepfe'));
+    }
+  }
+
+  const KNOPF_SYMBOL = {
+    abspielen: '<svg viewBox="0 0 30 30"><path d="M8 4l18 11-18 11z" fill="currentColor"/></svg>',
+    vorne: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round">'
+      + '<path d="M21.5 6.3A13 13 0 1 1 9 4.5"/><path d="M19 1.5l3.5 5-6 1.5" fill="currentColor" stroke-width="1"/></svg>',
+    trailer: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round">'
+      + '<rect x="3" y="6" width="24" height="18" rx="4"/><path d="M12.5 11l6 4-6 4z" fill="currentColor"/></svg>',
+    merken: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round">'
+      + '<path d="M15 5v20M5 15h20"/></svg>',
+    gemerkt: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" '
+      + 'stroke-linejoin="round"><path d="M5 15.5l6.5 6.5L25 8.5"/></svg>'
+  };
+
+  function knoepfeFuer(e) {
+    const l = [];
+    if (!e) return l;
+    if (abspielbar(e)) {
+      const pos = position(e);
+      if (pos > 0) {
+        l.push({ art: 'weiter', text: 'Fortsetzen  ·  ' + zeit(pos / 10000000), symbol: 'abspielen' });
+        l.push({ art: 'vorne', text: 'Von vorne', symbol: 'vorne' });
+      } else {
+        l.push({ art: 'abspielen', text: 'Abspielen', symbol: 'abspielen' });
+      }
+    }
+    if (detailTrailer && detailTrailer.id === e.Id && detailTrailer.yt) l.push({ art: 'trailer', text: 'Trailer', symbol: 'trailer' });
+    if (typ(e) === 'Movie') {
+      const drin = merk.hat(e.Id);
+      l.push({ art: 'merken', text: drin ? 'Gemerkt' : 'Merken', symbol: drin ? 'gemerkt' : 'merken' });
+    }
+    return l;
+  }
+
+  function knoepfeAktualisieren() {
+    const k = el.info.querySelector('.i-knoepfe');
+    const detail = ansicht === A.DETAIL;
+    detailKnoepfe = detail ? knoepfeFuer(detailEintrag) : [];
+    if (!k) return;
+    if (!detail) return; // außerhalb der Detailansicht unsichtbar, Inhalt bleibt
+    const sig = detailKnoepfe.map(function (x) { return x.art + ':' + x.text; }).join('|');
+    if (k._sig !== sig) {
+      k._sig = sig;
+      k.innerHTML = '';
+      detailKnoepfe.forEach(function (x, i) {
         const b = div('knopf');
         b._knopf = i;
-        const symbol = i === 0 || pos === 0
-          ? '<svg viewBox="0 0 30 30"><path d="M8 4l18 11-18 11z" fill="currentColor"/></svg>'
-          : '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round">'
-            + '<path d="M21.5 6.3A13 13 0 1 1 9 4.5"/><path d="M19 1.5l3.5 5-6 1.5" fill="currentColor" stroke-width="1"/></svg>';
-        b.innerHTML = symbol + '<span></span>';
-        b.querySelector('span').textContent = n;
+        b.innerHTML = KNOPF_SYMBOL[x.symbol] + '<span></span>';
+        b.querySelector('span').textContent = x.text;
         k.appendChild(b);
       });
-      box.appendChild(k);
+    }
+    detailKnopf = Math.max(0, Math.min(detailKnopf, detailKnoepfe.length - 1));
+    for (let i = 0; i < k.children.length; i++) k.children[i].classList.toggle('fokus', i === detailKnopf);
+  }
+
+  function knopfAusfuehren(x) {
+    const f = detailEintrag;
+    if (!x || !f) return;
+    if (x.art === 'weiter' || x.art === 'abspielen') abspielen(f, true);
+    else if (x.art === 'vorne') abspielen(f, false);
+    else if (x.art === 'trailer' && detailTrailer) trailerAbspielen(detailTrailer, f.Name || '');
+    else if (x.art === 'merken') {
+      merk.umschalten(f);
+      hinweis(merk.hat(f.Id) ? 'Auf der Merkliste' : 'Von der Merkliste entfernt');
     }
   }
 
@@ -1585,7 +1823,16 @@
       detailZurueck = von;
       ansicht = A.DETAIL;
       detailKnopf = 0;
+      detailTrailer = null;
       fokusGeaendert();
+      if (t === 'Movie') {
+        trailerSuchen(e).then(function (tr) {
+          if (tr && detailEintrag && detailEintrag.Id === e.Id) {
+            detailTrailer = { id: e.Id, yt: tr.yt, titel: tr.titel };
+            zeichnen();
+          }
+        }, function () {});
+      }
     }
   }
 
@@ -2186,6 +2433,176 @@
     return true;
   }
 
+  // ------------------------------------------------------------------ Trailer-Player (YouTube im eigenen Vollbild)
+
+  const T = { offen: false, player: null, tick: 0, bis: 0, an: false, meldung: null, zeitZiel: -1 };
+  let ytBereit = null;
+
+  function ytLaden() {
+    if (ytBereit) return ytBereit;
+    ytBereit = new Promise(function (ok, nein) {
+      if (window.YT && window.YT.Player) {
+        ok();
+        return;
+      }
+      const vorher = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = function () {
+        if (vorher) try { vorher(); } catch (e) { /* egal */ }
+        ok();
+      };
+      const sc = document.createElement('script');
+      sc.src = 'https://www.youtube.com/iframe_api';
+      sc.onerror = function () {
+        ytBereit = null;
+        nein(new Error('YouTube nicht erreichbar'));
+      };
+      document.head.appendChild(sc);
+      setTimeout(function () { nein(new Error('YouTube antwortet nicht')); }, 15000);
+    });
+    return ytBereit;
+  }
+
+  async function trailerAbspielen(tr, titel) {
+    T.offen = true;
+    T.meldung = 'Trailer wird geladen …';
+    T.zeitZiel = -1;
+    el.tTitel.textContent = titel;
+    el.tBox.innerHTML = '';
+    trailerLeiste(0);
+    zeichnen();
+    try {
+      await ytLaden();
+    } catch (e) {
+      T.meldung = 'YouTube ist gerade nicht erreichbar';
+      trailerLeiste(0);
+      setTimeout(trailerSchliessen, 3000);
+      return;
+    }
+    if (!T.offen) return;
+    const ziel = document.createElement('div');
+    ziel.id = 'yt-ziel';
+    el.tBox.appendChild(ziel);
+    T.player = new window.YT.Player('yt-ziel', {
+      width: 1920,
+      height: 1080,
+      videoId: tr.yt,
+      playerVars: {
+        autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, iv_load_policy: 3, modestbranding: 1,
+        playsinline: 1, hl: 'de', cc_load_policy: 0, origin: location.origin
+      },
+      events: {
+        onReady: function (ev) {
+          try {
+            const f = ev.target.getIframe();
+            f.setAttribute('tabindex', '-1');
+            f.style.pointerEvents = 'none';
+          } catch (e) { /* egal */ }
+          ev.target.playVideo();
+          T.meldung = null;
+          trailerLeiste(3000);
+          window.focus();
+        },
+        onStateChange: function (ev) {
+          if (ev.data === 0) trailerSchliessen();           // zu Ende
+          else if (ev.data === 1) {
+            T.meldung = null;
+            trailerLeiste(2500);
+          } else if (ev.data === 2) trailerLeiste(0);       // Pause
+          window.focus();
+        },
+        onError: function () {
+          T.meldung = 'Dieser Trailer lässt sich hier leider nicht abspielen';
+          trailerLeiste(0);
+          setTimeout(trailerSchliessen, 3500);
+        }
+      }
+    });
+    clearInterval(T.tick);
+    T.tick = setInterval(trailerTick, 250);
+  }
+
+  function trailerSchliessen() {
+    if (!T.offen) return;
+    T.offen = false;
+    clearInterval(T.tick);
+    try { if (T.player) T.player.destroy(); } catch (e) { /* egal */ }
+    T.player = null;
+    el.tBox.innerHTML = '';
+    zeichnen();
+    window.focus();
+  }
+
+  function trailerLeiste(ms) {
+    T.an = true;
+    T.bis = ms <= 0 ? Infinity : Date.now() + ms;
+    trailerZeichnen();
+  }
+
+  function trailerZustand() {
+    try { return T.player && T.player.getPlayerState ? T.player.getPlayerState() : -1; } catch (e) { return -1; }
+  }
+
+  function trailerTick() {
+    if (!T.offen) return;
+    if (T.an && Date.now() > T.bis && trailerZustand() === 1 && !T.meldung) T.an = false;
+    trailerZeichnen();
+  }
+
+  function trailerZeichnen() {
+    el.tLeiste.classList.toggle('an', T.an);
+    let pos = 0, ges = 0;
+    try {
+      if (T.player && T.player.getDuration) {
+        ges = T.player.getDuration() || 0;
+        pos = T.zeitZiel >= 0 ? T.zeitZiel : T.player.getCurrentTime() || 0;
+      }
+    } catch (e) { /* noch nicht bereit */ }
+    const anteil = ges > 0 ? begrenzen(pos / ges, 0, 1) : 0;
+    el.tPos.style.width = (anteil * 1700) + 'px';
+    el.tKnubbel.style.left = (anteil * 1700) + 'px';
+    el.tZeit.textContent = ges > 0 ? zeit(pos) : '';
+    el.tRest.textContent = ges > 0 ? '−' + zeit(ges - pos) : '';
+    el.tPause.classList.toggle('aus', !(trailerZustand() === 2 && !T.meldung));
+    el.tMeldung.classList.toggle('aus', !T.meldung);
+    el.tMeldung.textContent = T.meldung || '';
+  }
+
+  function trailerTaste(k) {
+    const p = T.player;
+    if (k === TASTE.ZURUECK || k === MEDIEN.STOP) {
+      trailerSchliessen();
+      return;
+    }
+    if (!p || !p.getPlayerState) return;
+    try {
+      if (k === TASTE.OK || k === MEDIEN.PLAYPAUSE) {
+        if (p.getPlayerState() === 1) p.pauseVideo();
+        else p.playVideo();
+      } else if (k === MEDIEN.PLAY) p.playVideo();
+      else if (k === MEDIEN.PAUSE) p.pauseVideo();
+      else if (k === TASTE.LINKS || k === TASTE.RECHTS || k === MEDIEN.RUECK || k === MEDIEN.VOR) {
+        const r = k === TASTE.LINKS || k === MEDIEN.RUECK ? -10 : 10;
+        const ges = p.getDuration() || 0;
+        const ziel = begrenzen((T.zeitZiel >= 0 ? T.zeitZiel : p.getCurrentTime()) + r, 0, Math.max(0, ges - 1));
+        T.zeitZiel = ziel;
+        p.seekTo(ziel, true);
+        setTimeout(function () { T.zeitZiel = -1; }, 800);
+      }
+    } catch (e) { /* Player noch nicht bereit */ }
+    trailerLeiste(3000);
+  }
+
+  // ------------------------------------------------------------------ kurzer Hinweis unten
+
+  let hinweisTimer = 0;
+
+  function hinweis(text) {
+    el.hinweis.textContent = text;
+    el.hinweis.classList.remove('aus');
+    clearTimeout(hinweisTimer);
+    hinweisTimer = setTimeout(function () { el.hinweis.classList.add('aus'); }, 2200);
+  }
+
   // ------------------------------------------------------------------ Tasten
 
   const TASTE = { LINKS: 37, HOCH: 38, RECHTS: 39, RUNTER: 40, OK: 13, ZURUECK: 461 };
@@ -2229,6 +2646,7 @@
     ev.preventDefault();
     ev.stopPropagation();
 
+    if (T.offen) return trailerTaste(k);
     if (P.offen) return playerTaste(k);
     if (leiste) return leisteTaste(k);
     switch (ansicht) {
@@ -2325,17 +2743,21 @@
 
   function detailTaste(k) {
     const f = detailEintrag;
-    const knoepfe = f && position(f) > 0 ? 2 : 1;
     if (k === TASTE.ZURUECK) {
       ansicht = detailZurueck;
       detailEintrag = null;
+      detailTrailer = null;
       fokusGeaendert();
       return;
     }
     if (k === TASTE.LINKS) detailKnopf = Math.max(0, detailKnopf - 1);
-    else if (k === TASTE.RECHTS) detailKnopf = Math.min(knoepfe - 1, detailKnopf + 1);
-    else if (k === TASTE.OK || k === MEDIEN.PLAY || k === MEDIEN.PLAYPAUSE) {
-      if (f) abspielen(f, detailKnopf === 0);
+    else if (k === TASTE.RECHTS) detailKnopf = Math.min(detailKnoepfe.length - 1, detailKnopf + 1);
+    else if (k === TASTE.OK) {
+      knopfAusfuehren(detailKnoepfe[detailKnopf]);
+      return;
+    } else if ((k === MEDIEN.PLAY || k === MEDIEN.PLAYPAUSE) && f && abspielbar(f)) {
+      abspielen(f, true);
+      return;
     }
     zeichnen();
   }
@@ -2506,6 +2928,10 @@
     while (t && t !== document.body && !(t._reihe || t._treffer != null || t._taste || t._leiste != null || t._knopf != null)) {
       t = t.parentNode;
     }
+    if (T.offen) {
+      trailerTaste(TASTE.OK);
+      return;
+    }
     if (P.offen) {
       if (P.menue) return;
       const v = el.video;
@@ -2530,7 +2956,7 @@
     }
     if (t._knopf != null && ansicht === A.DETAIL) {
       detailKnopf = t._knopf;
-      if (detailEintrag) abspielen(detailEintrag, t._knopf === 0);
+      knopfAusfuehren(detailKnoepfe[detailKnopf]);
       return;
     }
     if (t._taste && ansicht === A.SUCHE) {
@@ -2559,6 +2985,10 @@
   });
 
   document.addEventListener('mousemove', function (ev) {
+    if (T.offen) {
+      trailerLeiste(2500);
+      return;
+    }
     if (P.offen) {
       leisteZeigen(2500);
       return;
@@ -2587,6 +3017,7 @@
 
   // App in den Hintergrund (andere App, Fernseher aus): Film anhalten und melden
   document.addEventListener('visibilitychange', function () {
+    if (document.hidden && T.offen) trailerSchliessen();
     if (document.hidden && P.offen) {
       el.video.pause();
       melde(1);
