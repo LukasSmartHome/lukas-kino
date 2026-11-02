@@ -585,9 +585,11 @@ def tmdb_treffer(name, jahr, cache):
         if any(x.get("fehler") for x in kand):
             return None, False, "TMDB-Abfrage ging nicht (%s) – später nochmal pruefen" % kand[0]["fehler"][:60], []
         cache[k] = kand
-    kand = [x for x in cache[k] if not x.get("fehler")]
-    if not kand:
+    alle = [x for x in cache[k] if not x.get("fehler")]
+    if not alle:
         return None, False, "kein Treffer bei TMDB", []
+    # Jellyfin liefert jeden Film oft doppelt (TMDB und IMDb/OMDb) – mit TMDB-ID zählt, IMDb nur als Rückfall
+    kand = [x for x in alle if x.get("tmdb")] or alle
     nn = normal(name)
     exakt = [x for x in kand if normal(x.get("name")) == nn]
     if jahr:
