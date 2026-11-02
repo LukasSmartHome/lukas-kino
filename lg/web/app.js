@@ -169,7 +169,8 @@
   const istWebos = /web0s|webos/i.test(navigator.userAgent);
 
   function geraetName() {
-    let n = parameter.name || (window.AppInfo && window.AppInfo.deviceName) || (istWebos ? 'LG Fernseher' : 'Browser');
+    // eindeutiger Name je Fernseher (in Jellyfin unter Geräte/Aktivität zu sehen)
+    let n = parameter.name || ('Kino ' + PERSON.name);
     n = String(n).replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
     return n.replace(/[^\x20-\x7e]/g, '').replace(/"/g, '') || 'LG Fernseher';
   }
@@ -558,8 +559,9 @@
       return this.ids.map(function (id) { return self.items[id]; }).filter(Boolean);
     },
 
-    /** Plex-ID zu einem Jellyfin-Film (für dieselbe Liste wie im Dashboard), sonst null. */
+    /** HA-ID zu einem Jellyfin-Film (alte Plex-ID oder jf:<ID>, für dieselbe Liste wie im Dashboard), sonst null. */
     plexIdFuer: function (e) {
+      if (this.jfZuHa && this.jfZuHa[e.Id]) return this.jfZuHa[e.Id];
       if (!this.plex) return null;
       const j = parseInt(e.ProductionYear, 10) || 0;
       const namen = [e.Name, e.OriginalTitle].filter(Boolean);
@@ -571,18 +573,23 @@
       return null;
     },
 
+    // plexfilme.json = Film-Katalog aus HA (seit 02.11.2026 aus Jellyfin, sensor.jellyfin_katalog):
+    // { filme: { HA-ID: {t, j, jf} } } – HA-ID ist die alte Plex-ID, sonst jf:<Jellyfin-ID>
     plexLaden: async function () {
-      if (this.plex) return;
-      const p = {};
+      if (this.plex && Date.now() - (this.plexZeit || 0) < 1800000) return;
+      const p = {}, zuHa = {};
       try {
         const r = await fetch('../plexfilme.json?t=' + Date.now());
         if (r.ok) {
           const f = ((await r.json()) || {}).filme || {};
           Object.keys(f).forEach(function (id) {
             if (f[id] && f[id].t) p[familienSchluessel(f[id].t, f[id].j || '')] = id;
+            if (f[id] && f[id].jf) zuHa[f[id].jf] = id;
           });
         }
-      } catch (e) { /* ohne Plex-Katalog: dann jf:<ID> */ }
+      } catch (e) { /* ohne Katalog: dann jf:<ID> */ }
+      this.jfZuHa = zuHa;
+      this.plexZeit = Date.now();
       const roh = this.roh || {};
       [roh.bewertungen || {}, roh.merktitel || {}].forEach(function (q, art) {
         Object.keys(q).forEach(function (id) {
@@ -1176,6 +1183,9 @@
       laden.familieTimer = setInterval(familieLaden, 180000);
       const s = await filmeSeite();
       zeigeStart('filme', s);
+      clearInterval(laden.auftragTimer);
+      laden.auftragTimer = setInterval(auftragPruefen, 4000);
+      auftragPruefen();
     } catch (e) {
       if (!jf.angemeldet()) anmelden();
       else fehler('Jellyfin ist nicht erreichbar');
@@ -2495,7 +2505,7 @@
     clearInterval(P.tick);
     clearInterval(P.meldeTick);
     P.tick = setInterval(playerTick, 250);
-    P.meldeTick = setInterval(function () { if (P.gemeldet && !v.paused) melde(1); }, 10000);
+    P.meldeTick = setInterval(function () { if (P.gemeldet) melde(1); }, 10000); // auch pausiert: HA soll wissen, dass noch geschaut wird
     requestAnimationFrame(untertitelSchleife);
   }
 
@@ -2589,6 +2599,84 @@
     if (ton && ton.stream) body.AudioStreamIndex = ton.stream.Index;
     body.SubtitleStreamIndex = P.uAktiv >= 0 ? P.uAktiv : -1;
     jf.anfrage('POST', pfad, body).catch(function () { /* nicht kritisch */ });
+    haWiedergabe(art === 0 ? 'start' : art === 2 ? 'stopp' : 'stand');
+  }
+
+  // Home Assistant erfährt, wer was schaut (Automation 84 → sensor.kino_jetzt): für den Verlauf im Dashboard,
+  // den Hinweis bei Lukas, wenn jemand etwas startet, und das Abspann-Licht. Stand höchstens jede Minute,
+  // Start, Pause/Weiter und Stopp sofort.
+  let haLetzte = 0, haPause = null;
+
+  function zweistellig(n) { n = parseInt(n, 10) || 0; return (n < 10 ? '0' : '') + n; }
+
+  function haWiedergabe(art) {
+    const e = P.eintrag, v = el.video;
+    if (!e || !P.id) return;
+    const jetzt = Date.now(), pause = !!v.paused;
+    if (art === 'stand' && jetzt - haLetzte < 55000 && pause === haPause) return;
+    haLetzte = jetzt;
+    haPause = pause;
+    const folge = typ(e) === 'Episode';
+    let titel = e.Name || '';
+    if (folge) titel = (e.SeriesName || '') + ' – S' + zweistellig(e.ParentIndexNumber) + 'E' + zweistellig(e.IndexNumber);
+    else if (e.ProductionYear) titel += ' (' + e.ProductionYear + ')';
+    const bildId = folge && e.SeriesId ? e.SeriesId : e.Id;
+    const dauer = v.duration && isFinite(v.duration) ? v.duration : (e.RunTimeTicks || 0) / 10000000;
+    const daten = {
+      art: art, wer: PERSON.ha, id: 'jf:' + e.Id, titel: titel, typ: folge ? 'episode' : 'movie',
+      serie: folge ? (e.SeriesName || '') : '', pos: Math.round(v.currentTime || 0), dauer: Math.round(dauer || 0),
+      status: art === 'stopp' ? 'stopped' : pause ? 'paused' : 'playing',
+      bild: SERVER + '/Items/' + bildId + '/Images/Primary?fillHeight=450&quality=90'
+    };
+    (async function () {
+      // Filme mit derselben ID wie im Dashboard melden (alte Plex-ID), damit Verlauf, Bewertungen und Poster passen
+      if (!folge) {
+        try { await merk.plexLaden(); } catch (x) { /* dann jf:<ID> */ }
+        daten.id = merk.plexIdFuer(e) || daten.id;
+      }
+      await merk.senden(daten);
+    })().catch(function () { /* HA nicht erreichbar – nicht schlimm */ });
+  }
+
+  // ------------------------------------------------------------------ Film vom Dashboard starten
+  // Skript 01g (script.kino_film_abspielen) legt in HA einen Auftrag für diesen Fernseher ab, kino_export schreibt ihn
+  // nach /share/kino/auftrag.json: { auftraege: { Eltern|Jonas|Lukas: {id, titel, ts} } }. Die Oberfläche schaut alle
+  // 4 Sekunden nach und spielt einen neuen Auftrag einmal ab (gemerkt über ts, auch über einen Neustart der App).
+
+  let auftragZuletzt = null, auftragErster = true, auftragLaeuft = false;
+  try { auftragZuletzt = localStorage.getItem('lk_auftrag'); } catch (e) { /* ohne Speicher */ }
+
+  async function auftragPruefen() {
+    if (auftragLaeuft || document.hidden || !jf.angemeldet() || ansicht === A.LADEN) return;
+    auftragLaeuft = true;
+    const erster = auftragErster;
+    auftragErster = false;
+    try {
+      const r = await fetch('../auftrag.json?t=' + Date.now());
+      if (!r.ok) return;
+      const j = await r.json();
+      const a = j && j.auftraege && j.auftraege[PERSON.ha];
+      if (!a || !a.id || !a.ts) return;
+      const kennung = String(a.ts) + '|' + a.id;
+      if (kennung === auftragZuletzt) return;
+      auftragZuletzt = kennung;
+      try { localStorage.setItem('lk_auftrag', kennung); } catch (e) { /* egal */ }
+      // Beim ersten Blick nach dem Start (App gerade vom Skript geöffnet) nur, wenn er frisch ist –
+      // danach ist jeder neue Auftrag frisch, egal wie die Uhr des Fernsehers geht.
+      if (erster && Math.abs(Date.now() / 1000 - Number(a.ts)) > 150) return;
+      let id = String(a.id);
+      if (id.indexOf('jf:') === 0) id = id.substring(3);
+      const f = await jf.film(id);
+      if (!f || !f.Id) return;
+      if (T.offen) trailerSchliessen();
+      if (P.offen) playerSchliessen();
+      const lauf = f.RunTimeTicks || 0, pos = position(f);
+      abspielen(f, pos > 0 && (!lauf || pos < lauf * 0.95));
+    } catch (e) {
+      /* kein Auftrag oder HA/Pi nicht erreichbar */
+    } finally {
+      auftragLaeuft = false;
+    }
   }
 
   function playerSchliessen() {
@@ -3499,6 +3587,8 @@
 
   // App in den Hintergrund (andere App, Fernseher aus): Film anhalten und melden
   document.addEventListener('visibilitychange', function () {
+    if (document.hidden) auftragErster = true; // nach dem Zurückkommen nur frische Aufträge
+    else setTimeout(auftragPruefen, 300);
     if (document.hidden && T.offen) trailerSchliessen();
     if (document.hidden && P.offen) {
       el.video.pause();
