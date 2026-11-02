@@ -58,11 +58,11 @@ public class StartseitenWaechter extends AccessibilityService {
 
     // ---------------------------------------------------------------- Sprach-Rahmen (Overlay)
 
-    /** Zeigt bzw. aktualisiert den orangen Rahmen. null bei erkannt/antwort = unverändert lassen. */
-    static void rahmen(int zustand, String status, String erkannt, String antwort) {
+    /** Zeigt bzw. aktualisiert den orangen Rahmen mit Gesprächsverlauf ({"du"|"claude", text}). */
+    static void rahmen(int zustand, String status, java.util.List<String[]> verlauf) {
         HAUPT.post(() -> {
             StartseitenWaechter w = aktiv;
-            if (w != null) w.rahmenSetzen(zustand, status, erkannt, antwort);
+            if (w != null) w.rahmenSetzen(zustand, status, verlauf);
         });
     }
 
@@ -73,7 +73,7 @@ public class StartseitenWaechter extends AccessibilityService {
         });
     }
 
-    private void rahmenSetzen(int zustand, String status, String erkannt, String antwort) {
+    private void rahmenSetzen(int zustand, String status, java.util.List<String[]> verlauf) {
         if (rahmen == null) {
             try {
                 rahmen = new SprachRahmen(this);
@@ -92,7 +92,7 @@ public class StartseitenWaechter extends AccessibilityService {
                 return;
             }
         }
-        rahmen.setze(zustand, status, erkannt, antwort);
+        rahmen.setze(zustand, status, verlauf);
     }
 
     private void rahmenEntfernen() {
@@ -119,7 +119,7 @@ public class StartseitenWaechter extends AccessibilityService {
                     boolean gestartet = Sprache.starten(this);
                     rahmen(SprachRahmen.FEHLER, Sprache.mikrofonErlaubt(this)
                             ? (gestartet ? "Claude startet gerade – gleich nochmal drücken" : "Claude konnte nicht starten")
-                            : "Mikrofon ist für Lukas Kino nicht freigegeben", "", "");
+                            : "Mikrofon ist für Lukas Kino nicht freigegeben", new java.util.ArrayList<>());
                     HAUPT.postDelayed(StartseitenWaechter::rahmenWeg, 3500);
                 }
                 return true;

@@ -37,6 +37,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 
 /**
  * Claude am Fernseher.
@@ -95,6 +98,12 @@ public class Sprache extends Service {
     private int rauschStuecke;
     private boolean spracheGehoert;
     private long letzteSprache;
+
+    /** Gesprächsverlauf, solange der Rahmen offen ist: {"du"|"claude", text}. Zurück beendet das Gespräch. */
+    private final List<String[]> verlauf = new ArrayList<>();
+    private String sitzung;
+    private static final long GESPRAECH_OFFEN_MS = 120_000;
+    private static final String HINWEIS = "Info-Taste halten für Rückfrage · Zurück beendet";
 
     private MiniWebSocket ws;
     private Thread wsSchleife;
@@ -415,8 +424,9 @@ public class Sprache extends Service {
             for (byte[] v : vorlauf) aufnahme.write(v, 0, v.length);
         }
         fokusHolen();
-        StartseitenWaechter.rahmen(SprachRahmen.HOERT, "Ich höre zu …", "", "");
-        Log.i(TAG, "Push-to-Talk Start");
+        neueSitzungFallsNoetig();
+        zeige(SprachRahmen.HOERT, "Ich höre zu … (loslassen zum Senden)");
+        Log.i(TAG, "Push-to-Talk Start, Gespräch " + sitzung);
     }
 
     /** Mikro-Taste losgelassen. */
@@ -432,7 +442,7 @@ public class Sprache extends Service {
                 rauschStuecke = 0;
                 spracheGehoert = false;
                 Log.i(TAG, "Kurzer Druck – Tipp-Modus (Ende über Sprechpause)");
-                StartseitenWaechter.rahmen(SprachRahmen.HOERT, "Ich höre zu … (zum Senden nochmal drücken)", "", "");
+                haupt.post(() -> zeige(SprachRahmen.HOERT, "Ich höre zu … (zum Senden nochmal drücken)"));
                 return;
             }
         }
@@ -453,8 +463,10 @@ public class Sprache extends Service {
             fehler("Zu kurz – halte die Taste, solange du sprichst");
             return;
         }
-        StartseitenWaechter.rahmen(SprachRahmen.DENKT, "Ich denke …", null, null);
-        final String url = server() + "/tv";
+        if (!wachwortAn()) aufnahmeStoppen();
+        verlauf.add(new String[]{"du", "…"});
+        zeige(SprachRahmen.DENKT, "Ich denke …");
+        final String url = server() + "/tv?sitzung=" + sitzung;
         new Thread(() -> {
             try {
                 JSONObject j = postWav(url, pcm);
@@ -541,11 +553,13 @@ public class Sprache extends Service {
         synchronized (sperre) {
             modus = BESCHAEFTIGT;
         }
-        StartseitenWaechter.rahmen(SprachRahmen.ANTWORT, "Claude", erk, ant);
+        duErsetzen(erk);
+        if (!ant.isEmpty()) verlauf.add(new String[]{"claude", ant});
         if (mp3.isEmpty()) {
-            haupt.postDelayed(schliessen, 6000 + ant.length() * 40L);
+            gespraechWartet();
             return;
         }
+        zeige(SprachRahmen.ANTWORT, "Claude spricht …");
         spielerStoppen();
         try {
             MediaPlayer p = new MediaPlayer();
@@ -556,19 +570,39 @@ public class Sprache extends Service {
             p.setOnPreparedListener(MediaPlayer::start);
             p.setOnCompletionListener(x -> {
                 spielerStoppen();
-                haupt.postDelayed(schliessen, 4000);
+                gespraechWartet();
             });
             p.setOnErrorListener((x, a, b) -> {
                 spielerStoppen();
-                haupt.postDelayed(schliessen, 6000);
+                gespraechWartet();
                 return true;
             });
             spieler = p;
             p.prepareAsync();
         } catch (Exception e) {
             Log.w(TAG, "Antwort lässt sich nicht abspielen", e);
-            haupt.postDelayed(schliessen, 6000);
+            gespraechWartet();
         }
+    }
+
+    /** Ersetzt die „…“-Blase durch das Erkannte (oder entfernt sie, wenn nichts erkannt wurde). */
+    private void duErsetzen(String erkannt) {
+        for (int i = verlauf.size() - 1; i >= 0; i--) {
+            String[] e = verlauf.get(i);
+            if ("du".equals(e[0]) && "…".equals(e[1])) {
+                if (erkannt == null || erkannt.isEmpty()) verlauf.remove(i);
+                else e[1] = erkannt;
+                return;
+            }
+        }
+    }
+
+    /** Antwort fertig: Rahmen bleibt offen für Rückfragen, Film darf weiterlaufen. */
+    private void gespraechWartet() {
+        fokusAbgeben();
+        zeige(SprachRahmen.ANTWORT, HINWEIS);
+        haupt.removeCallbacks(schliessen);
+        haupt.postDelayed(schliessen, GESPRAECH_OFFEN_MS);
     }
 
     private void spielerStoppen() {
@@ -587,9 +621,16 @@ public class Sprache extends Service {
         synchronized (sperre) {
             modus = BESCHAEFTIGT;
         }
-        StartseitenWaechter.rahmen(SprachRahmen.FEHLER, text, "", "");
+        duErsetzen("");
+        if (!wachwortAn()) aufnahmeStoppen();
+        zeige(SprachRahmen.FEHLER, text);
         haupt.removeCallbacks(schliessen);
-        haupt.postDelayed(schliessen, 3500);
+        if (verlauf.isEmpty()) {
+            haupt.postDelayed(schliessen, 3500);
+        } else {
+            haupt.postDelayed(() -> zeige(SprachRahmen.ANTWORT, HINWEIS), 3500);
+            haupt.postDelayed(schliessen, GESPRAECH_OFFEN_MS);
+        }
     }
 
     /** Zurück-Taste oder Bildschirm aus: alles sofort beenden. */
@@ -605,10 +646,23 @@ public class Sprache extends Service {
             ausWachwort = false;
             aufnahme.reset();
         }
+        verlauf.clear();
+        sitzung = null;
         StartseitenWaechter.rahmenWeg();
         fokusAbgeben();
         // Ohne Wachwort das Mikrofon wieder schließen (dann ist auch der grüne Punkt weg).
         if (!wachwortAn()) aufnahmeStoppen();
+    }
+
+    private void zeige(int zustand, String status) {
+        StartseitenWaechter.rahmen(zustand, status, new ArrayList<>(verlauf));
+    }
+
+    private void neueSitzungFallsNoetig() {
+        if (sitzung == null) {
+            sitzung = UUID.randomUUID().toString().substring(0, 8);
+            verlauf.clear();
+        }
     }
 
     // ------------------------------------------------------------------ Audiofokus
@@ -693,7 +747,8 @@ public class Sprache extends Service {
                     modusStart = SystemClock.uptimeMillis();
                 }
                 fokusHolen();
-                StartseitenWaechter.rahmen(SprachRahmen.HOERT, "Ich höre zu …", "", "");
+                neueSitzungFallsNoetig();
+                zeige(SprachRahmen.HOERT, "Ich höre zu …");
                 // Sicherheitsnetz, falls vom Laptop nichts mehr kommt.
                 haupt.postDelayed(schliessen, 20_000);
                 Log.i(TAG, "Wachwort erkannt");
@@ -705,7 +760,8 @@ public class Sprache extends Service {
                 }
                 haupt.removeCallbacks(schliessen);
                 haupt.postDelayed(schliessen, 90_000);
-                StartseitenWaechter.rahmen(SprachRahmen.DENKT, "Ich denke …", null, null);
+                verlauf.add(new String[]{"du", "…"});
+                zeige(SprachRahmen.DENKT, "Ich denke …");
                 break;
             case "antwort":
                 if (!vomWachwort) return;
