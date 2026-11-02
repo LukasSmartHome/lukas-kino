@@ -517,7 +517,10 @@ public class FilmeActivity extends Activity {
             return;
         }
         final String url = hintergrundUrl(e);
-        if (url == null) return;
+        if (url == null) {
+            setzeHintergrund(null, 0xFF1D2027);
+            return;
+        }
         bildUrl = url;
         bilder.laden(url, (u, bm) -> {
             if (u.equals(bildUrl) && bm != null) setzeHintergrund(bm, 0);
@@ -535,10 +538,8 @@ public class FilmeActivity extends Activity {
                 return pr != null ? Jellyfin.quer(id, pr, 1280) : null;
             }
             case "Photo":
-            case "Video": {
-                String pr = Jellyfin.tag(e, "Primary");
-                return pr != null ? Jellyfin.quer(id, pr, 1280) : null;
-            }
+            case "Video":
+                return Jellyfin.quer(id, Jellyfin.tag(e, "Primary"), 1280);
             case "Folder":
             case "PhotoAlbum":
             case "CollectionFolder": {
@@ -627,7 +628,7 @@ public class FilmeActivity extends Activity {
                 return tb == null || tb.isEmpty() ? null : tb;
             }
             String pr = Jellyfin.tag(e, "Primary");
-            if (pr != null) return Jellyfin.quer(id, pr, QW * 2);
+            if (pr != null || "Photo".equals(t) || "Video".equals(t)) return Jellyfin.quer(id, pr, QW * 2);
             String tag = Jellyfin.hintergrundTag(e);
             return tag != null ? Jellyfin.hintergrund(id, tag) : null;
         }
@@ -658,6 +659,11 @@ public class FilmeActivity extends Activity {
             final String fertig = url;
             h.post(() -> {
                 titelbilder.put(ordner, fertig);
+                if (fertig.isEmpty()) h.postDelayed(() -> {
+                    titelbilder.remove(ordner);
+                    titelbildLaedt.remove(ordner);
+                    buehne.invalidate();
+                }, 90_000);
                 buehne.invalidate();
                 JSONObject e = heldEintrag();
                 if (e != null && ordner.equals(e.optString("Id"))) fokusGeaendert();
@@ -1714,7 +1720,7 @@ public class FilmeActivity extends Activity {
                 p.setColor(ordner ? 0x33FFFFFF : 0x26FFFFFF);
                 p.setAlpha(Math.round((ordner ? 0x33 : 0x26) * al / 255f));
                 c.drawRoundRect(r, rad, rad, p);
-                if (!ordner) {
+                if (!ordner && !"Photo".equals(t) && !"Video".equals(t)) {
                     klein.setAlpha(al);
                     StaticLayout sl = umbruch(e.optString("Name"), klein, (int) (r.width() - 32), 4);
                     c.save();
