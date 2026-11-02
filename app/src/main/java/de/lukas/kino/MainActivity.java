@@ -160,6 +160,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // Claude am Fernseher: Mikrofon-Dienst starten (geht nur aus dem Vordergrund zuverlässig).
+        if (!Sprache.starten(this) && !Sprache.mikrofonErlaubt(this) && Build.VERSION.SDK_INT >= 23
+                && !einst.getBoolean("sprach_rechte_gefragt", false)) {
+            einst.edit().putBoolean("sprach_rechte_gefragt", true).apply();
+            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 41);
+        }
         vollbild();
         wiederda();
         auftrag.an();

@@ -2,9 +2,13 @@ package de.lukas.kino;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.Intent;
+import android.graphics.PixelFormat;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.KeyEvent;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 
 /**
@@ -12,7 +16,9 @@ import android.view.accessibility.AccessibilityEvent;
  *  1. fängt die Home-Taste ab und öffnet direkt Lukas Kino (Google blitzt dann nicht auf),
  *  2. holt Lukas Kino nach vorn, falls die Google-Startseite trotzdem aufgeht
  *     (z. B. eine App beendet sich selbst),
- *  3. holt Lukas Kino einmal nach dem Hochfahren des Fernsehers.
+ *  3. holt Lukas Kino einmal nach dem Hochfahren des Fernsehers,
+ *  4. leitet die Mikro-Taste an Claude weiter (Push-to-Talk, Google kommt darüber nie mehr)
+ *     und zeigt den orangen Sprach-Rahmen als Overlay über allem an.
  * Es wird kein Systempaket angefasst. Abschalten: Dienst in den Bedienungshilfen aus
  * oder per ADB aus enabled_accessibility_services entfernen.
  */
@@ -29,19 +35,107 @@ public class StartseitenWaechter extends AccessibilityService {
 
     private long letzterStart = 0;
 
+    private static StartseitenWaechter aktiv;
+    private static final Handler HAUPT = new Handler(Looper.getMainLooper());
+    private SprachRahmen rahmen;
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
+        aktiv = this;
         long seitStart = SystemClock.elapsedRealtime();
         Log.i(TAG, "Waechter verbunden, " + (seitStart / 1000) + " s nach dem Hochfahren");
         if (seitStart < BOOT_FENSTER_MS) holen("hochgefahren");
+        Sprache.starten(this);
+    }
+
+    @Override
+    public void onDestroy() {
+        rahmenEntfernen();
+        if (aktiv == this) aktiv = null;
+        super.onDestroy();
+    }
+
+    // ---------------------------------------------------------------- Sprach-Rahmen (Overlay)
+
+    /** Zeigt bzw. aktualisiert den orangen Rahmen. null bei erkannt/antwort = unverändert lassen. */
+    static void rahmen(int zustand, String status, String erkannt, String antwort) {
+        HAUPT.post(() -> {
+            StartseitenWaechter w = aktiv;
+            if (w != null) w.rahmenSetzen(zustand, status, erkannt, antwort);
+        });
+    }
+
+    static void rahmenWeg() {
+        HAUPT.post(() -> {
+            StartseitenWaechter w = aktiv;
+            if (w != null) w.rahmenEntfernen();
+        });
+    }
+
+    private void rahmenSetzen(int zustand, String status, String erkannt, String antwort) {
+        if (rahmen == null) {
+            try {
+                rahmen = new SprachRahmen(this);
+                WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                        PixelFormat.TRANSLUCENT);
+                ((WindowManager) getSystemService(WINDOW_SERVICE)).addView(rahmen, lp);
+            } catch (Exception e) {
+                Log.w(TAG, "Sprach-Rahmen kann nicht angezeigt werden", e);
+                rahmen = null;
+                return;
+            }
+        }
+        rahmen.setze(zustand, status, erkannt, antwort);
+    }
+
+    private void rahmenEntfernen() {
+        if (rahmen == null) return;
+        try {
+            ((WindowManager) getSystemService(WINDOW_SERVICE)).removeView(rahmen);
+        } catch (Exception ignored) {
+        }
+        rahmen = null;
     }
 
     @Override
     protected boolean onKeyEvent(KeyEvent e) {
         if (e == null) return false;
         if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0) {
-            Log.i(TAG, "Waechter Taste " + KeyEvent.keyCodeToString(e.getKeyCode()));
+            Log.i(TAG, "Waechter Taste " + KeyEvent.keyCodeToString(e.getKeyCode())
+                    + " scan " + e.getScanCode() + " geraet " + e.getDeviceId());
+        }
+        // Mikro-Taste: Claude per Push-to-Talk. Immer schlucken, damit Google nicht aufgeht.
+        if (Sprache.istSprachTaste(e.getKeyCode())) {
+            Sprache s = Sprache.instanz;
+            if (s == null) {
+                if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0) {
+                    boolean gestartet = Sprache.starten(this);
+                    rahmen(SprachRahmen.FEHLER, Sprache.mikrofonErlaubt(this)
+                            ? (gestartet ? "Claude startet gerade – gleich nochmal drücken" : "Claude konnte nicht starten")
+                            : "Mikrofon ist für Lukas Kino nicht freigegeben", "", "");
+                    HAUPT.postDelayed(StartseitenWaechter::rahmenWeg, 3500);
+                }
+                return true;
+            }
+            if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0) s.tasteRunter();
+            else if (e.getAction() == KeyEvent.ACTION_UP) s.tasteHoch();
+            return true;
+        }
+        // Zurück schließt den Sprach-Rahmen, solange er zu sehen ist.
+        if (rahmen != null && e.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            if (e.getAction() == KeyEvent.ACTION_UP) {
+                Sprache s = Sprache.instanz;
+                if (s != null) s.abbrechen();
+                else rahmenEntfernen();
+            }
+            return true;
         }
         // Einstellungstaste (die TCL-Fernbedienung sendet KEYCODE_NOTIFICATION, das öffnete das
         // Google-Seitenmenü – das gibt es nicht mehr), also die Einstellungen-App öffnen.
