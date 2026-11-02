@@ -19,6 +19,15 @@ Eigene, werbefreie Startseite für Lukas' TCL-Fernseher (Google TV, Android 14).
 - Schrift: Inter Tight (SIL Open Font License, `assets/fonts/OFL-InterTight.txt`).
 - Hintergrundbilder liegen nur auf dem Fernseher in `Android/data/de.lukas.kino/files/hintergruende/` (nicht im Repository). Der Dateiname ohne Endung wird rechts oben angezeigt; beginnt er mit `_`, wird nichts angezeigt.
 
+## Filmbereich (Kachel „Filme“)
+
+Eigene Oberfläche für die Filme auf dem Jellyfin-Server im Heimnetz (`http://192.168.178.44:8096`, Raspberry Pi).
+
+- `FilmeActivity.java` – Bühne 1920x1080: großes Hintergrundbild des ausgewählten Films, Logo bzw. Titel, Jahr, Dauer, FSK, Bewertung, Inhalt. Darunter Reihen nur mit Postern (kein Text): Weiterschauen, Neu, Kategorien, jede Kategorie einzeln, Alle Filme. OK = Details mit Abspielen/Fortsetzen/Von vorne, Kategorie öffnen = alle Filme der Kategorie.
+- `PlayerActivity.java` – eigener Player (Media3/ExoPlayer, Direct Play der Originaldatei): OK Pause/Weiter, links/rechts spulen (halten = schneller), hoch/runter Ton und Untertitel, Zurück beendet. Meldet den Fortschritt alle 10 s an Jellyfin.
+- `Jellyfin.java` – Anmeldung nur per Quick Connect (Code am Fernseher, in Jellyfin bestätigen), Listen, Bilder, Wiedergabe-Meldungen.
+- `Bilder.java` – sparsamer Bildlader (RGB_565, 40 MB Zwischenspeicher), weil der Fernseher nur 2,4 GB Arbeitsspeicher hat.
+
 ## Bauen
 
 GitHub Actions baut bei jedem Push die APK und hängt sie als `lukas-kino.apk` an ein Release.

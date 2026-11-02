@@ -806,7 +806,11 @@ public class FilmeActivity extends Activity {
             // erst die anderen, dann der Fokus obendrauf
             for (int k = erster; k <= letzter; k++) {
                 if (aktiv && k == rh.fokus) continue;
-                posterZeichnen(c, rh.eintraege.get(k), LINKS + (k - sc) * SCHRITT, y, 1f, al, false);
+                float px = LINKS + (k - sc) * SCHRITT;
+                // was links aus dem Bild rutscht, wird sanft ausgeblendet
+                float links = Math.max(0f, Math.min(1f, (px - LINKS + SCHRITT * 0.5f) / (SCHRITT * 0.5f)));
+                int a2 = Math.round(al * (0.25f + 0.75f * links));
+                posterZeichnen(c, rh.eintraege.get(k), px, y, 1f, a2, false);
             }
             if (rh.fokus >= erster && rh.fokus <= letzter && aktiv) {
                 posterZeichnen(c, rh.eintraege.get(rh.fokus), LINKS + (rh.fokus - sc) * SCHRITT, y,
@@ -905,7 +909,7 @@ public class FilmeActivity extends Activity {
                 float sk = Math.min(maxW / logo.getWidth(), maxH / logo.getHeight());
                 float w = logo.getWidth() * sk, hh = logo.getHeight() * sk;
                 r.set(LINKS, y + (maxH - hh), LINKS + w, y + maxH);
-                c.drawBitmap(logo, null, r, p);
+                Logo.malen(c, logo, r, p, 255);
                 y += maxH + 46;
             } else {
                 titel.setShadowLayer(Ani.schatten(24), 0, 3, 0x80000000);

@@ -477,8 +477,7 @@ public class PlayerActivity extends Activity {
                 float hoehe = 110, breite = Math.min(520, hoehe * logo.getWidth() / logo.getHeight());
                 hoehe = breite * logo.getHeight() / logo.getWidth();
                 r.set(110, 70, 110 + breite, 70 + hoehe);
-                p.setAlpha(al);
-                c.drawBitmap(logo, null, r, p);
+                Logo.malen(c, logo, r, p, al);
             } else if (titel != null) {
                 text.setTypeface(schriftFett);
                 text.setTextSize(54);
