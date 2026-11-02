@@ -28,7 +28,7 @@ final class Jellyfin {
     static String VERSION = "1";
 
     static final String FELDER = "Overview,Genres,OfficialRating,CommunityRating,ProductionYear,RunTimeTicks,"
-            + "ImageTags,BackdropImageTags,UserData,ChildCount,OriginalTitle,ParentBackdropImageTags,DateCreated,PremiereDate,EndDate";
+            + "ImageTags,BackdropImageTags,UserData,ChildCount,OriginalTitle,ParentBackdropImageTags,DateCreated,PremiereDate,EndDate,ProviderIds,RemoteTrailers";
     static final String FELDER_FOTO = "ImageTags,ChildCount,DateCreated,PremiereDate,RunTimeTicks,UserData,Width,Height";
 
     private static Jellyfin instanz;
@@ -176,6 +176,34 @@ final class Jellyfin {
     /** Alles Durchsuchbare (Filme und Serien) für die Suche, einmal laden und im Speicher halten. */
     JSONArray suchIndex() throws Exception {
         return liste("/Items?userId=" + benutzer + "&includeItemTypes=Movie,Series&recursive=true&sortBy=SortName&fields=" + FELDER);
+    }
+
+    // ---------------------------------------------------------------- Merkliste (DisplayPreferences je Gerät)
+
+    JSONObject einstellungen(String id, String client) throws Exception {
+        return new JSONObject(anfrage("GET", "/DisplayPreferences/" + id + "?userId=" + benutzer + "&client=" + enc(client), null));
+    }
+
+    void einstellungenSpeichern(String id, String client, JSONObject dto) throws Exception {
+        anfrage("POST", "/DisplayPreferences/" + id + "?userId=" + benutzer + "&client=" + enc(client), dto.toString());
+    }
+
+    JSONArray nachIds(java.util.List<String> ids) throws Exception {
+        return liste("/Items?userId=" + benutzer + "&ids=" + String.join(",", ids) + "&fields=" + FELDER);
+    }
+
+    /** Einfaches GET ohne Anmeldung (KinoCheck, Bewertungen vom Pi). */
+    static String holen(String url) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(5000);
+        c.setReadTimeout(10000);
+        c.setRequestProperty("Accept", "application/json");
+        int code = c.getResponseCode();
+        InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+        String text = in == null ? "" : lesen(in);
+        c.disconnect();
+        if (code >= 400) throw new Exception("HTTP " + code + " " + url);
+        return text;
     }
 
     static String foto(String id, String tag) {

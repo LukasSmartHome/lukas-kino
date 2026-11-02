@@ -113,7 +113,7 @@ public class FilmeActivity extends Activity {
         }
     }
 
-    enum Bereich { FILME, SERIEN, FOTOS }
+    enum Bereich { FILME, SERIEN, MERKLISTE, FOTOS }
 
     enum Ansicht { LADEN, ANMELDEN, FEHLER, LISTE, DETAIL, SUCHE, FOTO }
 
@@ -125,6 +125,11 @@ public class FilmeActivity extends Activity {
     // Titelbilder der Foto-Ordner eigen, damit sie das Öffnen von Ordnern und Reihen nicht ausbremsen
     private final ExecutorService bildSuche = Executors.newFixedThreadPool(2);
     private SharedPreferences titelSpeicher;
+    private final Merkliste merkliste = new Merkliste();
+    private String[] detailTrailer;          // {youtubeId, titel} zum Film in der Detailansicht
+    private String detailTrailerId;
+    private String hinweisText;              // kurzer Hinweis unten (z. B. „Auf der Merkliste“)
+    private long hinweisBis, familieZeit;
 
     private Ansicht ansicht = Ansicht.LADEN;
     private Bereich bereich = Bereich.FILME;
@@ -142,7 +147,7 @@ public class FilmeActivity extends Activity {
     // Seitenleiste
     private boolean leiste;
     private int leistePos;
-    private static final String[] LEISTE = {"Suche", "Filme", "Serien", "Fotos"};
+    private static final String[] LEISTE = {"Suche", "Filme", "Serien", "Merkliste", "Fotos"};
 
     // Suche
     private final StringBuilder suchText = new StringBuilder();
@@ -186,6 +191,7 @@ public class FilmeActivity extends Activity {
             ausPlayer = false;
             nachDemFilm();
         }
+        if (jf.angemeldet() && SystemClock.uptimeMillis() - familieZeit > 600_000) netz.execute(this::familieLaden);
     }
 
     @Override
@@ -267,6 +273,12 @@ public class FilmeActivity extends Activity {
                     else if ("tvshows".equals(typ)) serienId = v.optString("Id");
                     else if ("homevideos".equals(typ) || "photos".equals(typ)) fotosId = v.optString("Id");
                 }
+                try {
+                    merkliste.laden(jf);
+                } catch (Exception ignored) {
+                    // ohne Merkliste weiter
+                }
+                familieLaden();
                 Seite s = filmeSeite();
                 h.post(() -> zeigeStart(Bereich.FILME, s));
             } catch (Exception e) {
@@ -279,6 +291,7 @@ public class FilmeActivity extends Activity {
     /** Bereich wechseln (Seitenleiste). Startseiten werden einmal geladen und dann gemerkt. */
     private void bereichOeffnen(Bereich b) {
         stapel.clear();
+        if (b == Bereich.MERKLISTE) startseiten.put(Bereich.MERKLISTE, merklisteSeite());
         Seite fertig = startseiten.get(b);
         if (fertig != null) {
             bereich = b;
@@ -315,6 +328,8 @@ public class FilmeActivity extends Activity {
         JSONArray neu = jf.neu();
         JSONArray samml = jf.sammlungen();
         if (weiter.length() > 0) s.reihen.add(reihe("Weiterschauen", weiter, POSTER));
+        List<JSONObject> gemerkt = merkliste.liste();
+        if (!gemerkt.isEmpty()) s.reihen.add(reiheAus("Merkliste", gemerkt, POSTER));
         s.reihen.add(reihe("Neu", neu, POSTER));
         if (samml.length() > 0) {
             s.reihen.add(reihe("Kategorien", samml, POSTER));
@@ -325,6 +340,123 @@ public class FilmeActivity extends Activity {
         }
         s.reihen.add(new Reihe("Alle Filme", "@alle", POSTER));
         return s;
+    }
+
+    private Seite merklisteSeite() {
+        Seite s = new Seite("Merkliste");
+        List<JSONObject> filme = new ArrayList<>(), serien = new ArrayList<>();
+        for (JSONObject o : merkliste.liste()) {
+            if ("Series".equals(typ(o))) serien.add(o);
+            else filme.add(o);
+        }
+        for (int i = 0; i < filme.size(); i += 8)
+            s.reihen.add(reiheAus(i == 0 ? "Filme" : "", filme.subList(i, Math.min(filme.size(), i + 8)), POSTER));
+        for (int i = 0; i < serien.size(); i += 8)
+            s.reihen.add(reiheAus(i == 0 ? "Serien" : "", serien.subList(i, Math.min(serien.size(), i + 8)), POSTER));
+        if (s.reihen.isEmpty()) s.leer = "Noch nichts gemerkt";
+        return s;
+    }
+
+    /** Merkliste geändert: Reihe auf der Filme-Startseite und die Merkliste-Seite nachziehen. */
+    private void merklisteGeaendert() {
+        List<JSONObject> l = merkliste.liste();
+        Seite start = startseiten.get(Bereich.FILME);
+        if (start != null) {
+            int i = -1;
+            for (int k = 0; k < start.reihen.size(); k++) if ("Merkliste".equals(start.reihen.get(k).titel)) i = k;
+            if (!l.isEmpty() && i >= 0) {
+                Reihe r = start.reihen.get(i);
+                r.eintraege.clear();
+                r.eintraege.addAll(l);
+                r.fokus = Math.min(r.fokus, l.size() - 1);
+            } else if (!l.isEmpty()) {
+                int pos = !start.reihen.isEmpty() && "Weiterschauen".equals(start.reihen.get(0).titel) ? 1 : 0;
+                start.reihen.add(pos, reiheAus("Merkliste", l, POSTER));
+                if (start.akt >= pos && start.reihen.size() > 1) {
+                    start.akt++;
+                    start.anim = start.akt;
+                }
+            } else if (i >= 0) {
+                start.reihen.remove(i);
+                if (start.akt > i || start.akt >= start.reihen.size()) start.akt = Math.max(0, start.akt - 1);
+                start.anim = start.akt;
+            }
+        }
+        Seite alt = startseiten.get(Bereich.MERKLISTE);
+        Seite neu = merklisteSeite();
+        startseiten.put(Bereich.MERKLISTE, neu);
+        if (alt != null && seite == alt) {
+            neu.akt = Math.min(alt.akt, Math.max(0, neu.reihen.size() - 1));
+            neu.anim = neu.akt;
+            seite = neu;
+        }
+        buehne.invalidate();
+    }
+
+    /** Bewertungen der Familie vom Pi holen (blockiert – im Hintergrund). */
+    private void familieLaden() {
+        try {
+            Familie.laden();
+            familieZeit = SystemClock.uptimeMillis();
+            h.post(buehne::invalidate);
+        } catch (Exception ignored) {
+            // ohne Bewertungen weiter
+        }
+    }
+
+    private void hinweis(String text) {
+        hinweisText = text;
+        hinweisBis = SystemClock.uptimeMillis() + 2200;
+        buehne.invalidate();
+    }
+
+    /** Knöpfe der Detailansicht: {art, text}. */
+    private List<String[]> knoepfeFuer(JSONObject e) {
+        List<String[]> l = new ArrayList<>();
+        if (e == null) return l;
+        if (abspielbar(e)) {
+            long pos = Jellyfin.position(e);
+            if (pos > 0) {
+                l.add(new String[]{"weiter", "Fortsetzen  ·  " + PlayerActivity.zeit(pos / 10_000L)});
+                l.add(new String[]{"vorne", "Von vorne"});
+            } else {
+                l.add(new String[]{"abspielen", "Abspielen"});
+            }
+        }
+        if (detailTrailer != null && e.optString("Id").equals(detailTrailerId)) l.add(new String[]{"trailer", "Trailer"});
+        if ("Movie".equals(typ(e)))
+            l.add(merkliste.hat(e.optString("Id")) ? new String[]{"gemerkt", "Gemerkt"} : new String[]{"merken", "Merken"});
+        return l;
+    }
+
+    private void knopfAusfuehren(String art, JSONObject f) {
+        switch (art) {
+            case "weiter":
+            case "abspielen":
+                abspielen(f, true);
+                break;
+            case "vorne":
+                abspielen(f, false);
+                break;
+            case "trailer":
+                if (detailTrailer != null) TrailerActivity.starten(this, detailTrailer[0], f.optString("Name"));
+                break;
+            case "merken":
+            case "gemerkt": {
+                final boolean drin = merkliste.umschalten(f);
+                merklisteGeaendert();
+                hinweis(drin ? "Auf der Merkliste" : "Von der Merkliste entfernt");
+                netz.execute(() -> {
+                    try {
+                        merkliste.speichern(jf);
+                    } catch (Exception ex) {
+                        h.post(() -> hinweis("Merkliste ließ sich nicht speichern"));
+                    }
+                });
+                break;
+            }
+            default:
+        }
     }
 
     private Seite serienSeite() throws Exception {
@@ -447,7 +579,8 @@ public class FilmeActivity extends Activity {
     /** Nach dem Film: Weiterschauen und den Film selbst frisch holen. */
     private void nachDemFilm() {
         final JSONObject f = detailEintrag != null ? detailEintrag : fokusEintrag();
-        final Bereich b = bereich;
+        // Weiterschauen gibt es nur auf den Startseiten von Filme und Serien (aus Merkliste oder Suche: Filme)
+        final Bereich b = bereich == Bereich.SERIEN ? Bereich.SERIEN : Bereich.FILME;
         netz.execute(() -> {
             try {
                 JSONObject frisch = f != null ? jf.film(f.optString("Id")) : null;
@@ -455,6 +588,7 @@ public class FilmeActivity extends Activity {
                 h.post(() -> {
                     if (frisch != null) {
                         ersetzen(frisch);
+                        merkliste.ersetzen(frisch);
                         if (detailEintrag != null && frisch.optString("Id").equals(detailEintrag.optString("Id")))
                             detailEintrag = frisch;
                     }
@@ -868,23 +1002,41 @@ public class FilmeActivity extends Activity {
                 detailZurueck = von;
                 ansicht = Ansicht.DETAIL;
                 detailKnopf = 0;
+                detailTrailer = null;
+                detailTrailerId = null;
                 fokusGeaendert();
+                if ("Movie".equals(t)) {
+                    netz.execute(() -> {
+                        final String[] tr = Trailer.suchen(this, e);
+                        if (tr == null) return;
+                        h.post(() -> {
+                            if (detailEintrag != null && e.optString("Id").equals(detailEintrag.optString("Id"))) {
+                                detailTrailer = tr;
+                                detailTrailerId = e.optString("Id");
+                                buehne.invalidate();
+                            }
+                        });
+                    });
+                }
         }
     }
 
     private boolean detailTaste(int k, boolean ok, boolean zurueck) {
         JSONObject f = detailEintrag;
-        int knoepfe = f != null && Jellyfin.position(f) > 0 ? 2 : 1;
+        List<String[]> kn = knoepfeFuer(f);
         if (zurueck) {
             ansicht = detailZurueck;
             detailEintrag = null;
+            detailTrailer = null;
             fokusGeaendert();
         } else if (k == KeyEvent.KEYCODE_DPAD_LEFT) {
             detailKnopf = Math.max(0, detailKnopf - 1);
         } else if (k == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            detailKnopf = Math.min(knoepfe - 1, detailKnopf + 1);
-        } else if (ok || k == KeyEvent.KEYCODE_MEDIA_PLAY || k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
-            if (f != null) abspielen(f, detailKnopf == 0);
+            detailKnopf = Math.min(Math.max(0, kn.size() - 1), detailKnopf + 1);
+        } else if (ok) {
+            if (f != null && detailKnopf < kn.size()) knopfAusfuehren(kn.get(detailKnopf)[0], f);
+        } else if ((k == KeyEvent.KEYCODE_MEDIA_PLAY || k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) && f != null && abspielbar(f)) {
+            abspielen(f, true);
         }
         buehne.invalidate();
         return true;
@@ -1314,7 +1466,7 @@ public class FilmeActivity extends Activity {
         private final Map<Reihe, Float> scrolls = new HashMap<>();
         private float fokusZoom = 1f, detailAnim, leisteAnim, leisteFokusY = -1, sucheScroll;
         private JSONObject letzterFokus;
-        private final Path[] symbole = new Path[4];
+        private final Path[] symbole = new Path[5];
 
         Buehne(Context c) {
             super(c);
@@ -1333,7 +1485,8 @@ public class FilmeActivity extends Activity {
             symbole[0] = Symbole.SUCHE;
             symbole[1] = symbolFilm();
             symbole[2] = symbolSerie();
-            symbole[3] = symbolFoto();
+            symbole[3] = symbolMerk();
+            symbole[4] = symbolFoto();
         }
 
         private TextPaint stift(Context c, float g, int w, int farbe) {
@@ -1362,6 +1515,17 @@ public class FilmeActivity extends Activity {
             s.lineTo(15.5f, 3);
             s.moveTo(8, 21);
             s.lineTo(16, 21);
+            return s;
+        }
+
+        private Path symbolMerk() {
+            Path s = new Path();
+            s.moveTo(6.5f, 3.5f);
+            s.lineTo(17.5f, 3.5f);
+            s.lineTo(17.5f, 20.5f);
+            s.lineTo(12f, 16.5f);
+            s.lineTo(6.5f, 20.5f);
+            s.close();
             return s;
         }
 
@@ -1419,6 +1583,22 @@ public class FilmeActivity extends Activity {
             if (leisteAnim != ziel) weiter = true;
             if (leisteAnim > 0.002f) weiter |= leisteZeichnen(c, dt);
 
+            if (hinweisText != null && SystemClock.uptimeMillis() < hinweisBis) {
+                knopf.setTextSize(30);
+                float hw = knopf.measureText(hinweisText) + 80;
+                RectF pl = new RectF(960 - hw / 2, 948, 960 + hw / 2, 1020);
+                p.setColor(0xD91A1C22);
+                c.drawRoundRect(pl, 36, 36, p);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(1.5f);
+                p.setColor(0x40FFFFFF);
+                c.drawRoundRect(pl, 36, 36, p);
+                p.setStyle(Paint.Style.FILL);
+                knopf.setTextAlign(Paint.Align.CENTER);
+                c.drawText(hinweisText, 960, 995, knopf);
+                knopf.setTextAlign(Paint.Align.LEFT);
+                weiter = true;
+            }
             c.restore();
             if (weiter) postInvalidateOnAnimation();
         }
@@ -1926,6 +2106,11 @@ public class FilmeActivity extends Activity {
             }
             y += 56;
 
+            if (detailAnim > 0.01f) {
+                Familie.Info fam = Familie.fuer(e);
+                if (fam != null) y = familieZeichnen(c, fam, y, detailAnim);
+            }
+
             long pos = Jellyfin.position(e), ges = e.optLong("RunTimeTicks", 0);
             if (pos > 0 && ges > pos && !Jellyfin.gesehen(e)) {
                 float bw = 220;
@@ -1954,13 +2139,12 @@ public class FilmeActivity extends Activity {
         }
 
         private void knoepfe(Canvas c, JSONObject e, float y, float a) {
-            long pos = Jellyfin.position(e);
-            String[] k = pos > 0 ? new String[]{"Fortsetzen  ·  " + PlayerActivity.zeit(pos / 10_000L), "Von vorne"}
-                    : new String[]{"Abspielen"};
+            List<String[]> k = knoepfeFuer(e);
             float x = LINKS;
-            for (int i = 0; i < k.length; i++) {
+            for (int i = 0; i < k.size(); i++) {
+                String art = k.get(i)[0], text = k.get(i)[1];
                 boolean f = i == detailKnopf;
-                float w = knopf.measureText(k[i]) + 120;
+                float w = knopf.measureText(text) + 120;
                 r.set(x, y, x + w, y + 84);
                 if (f) {
                     p.setColor(0xFFFFFFFF);
@@ -1976,33 +2160,107 @@ public class FilmeActivity extends Activity {
                 int farbe = f ? 0xFF111317 : 0xFFFFFFFF;
                 p.setColor(farbe);
                 p.setAlpha(Math.round(255 * a));
-                Path d = new Path();
                 float tx = x + 42, ty = y + 42;
-                if (i == 0 || pos == 0) {
-                    d.moveTo(tx - 9, ty - 13);
-                    d.lineTo(tx + 13, ty);
-                    d.lineTo(tx - 9, ty + 13);
-                    d.close();
-                    c.drawPath(d, p);
-                } else {
-                    p.setStyle(Paint.Style.STROKE);
-                    p.setStrokeWidth(3.5f);
-                    p.setStrokeCap(Paint.Cap.ROUND);
-                    c.drawArc(new RectF(tx - 13, ty - 13, tx + 13, ty + 13), -60, 300, false, p);
-                    p.setStyle(Paint.Style.FILL);
-                    d.moveTo(tx + 4, ty - 19);
-                    d.lineTo(tx + 13, ty - 12);
-                    d.lineTo(tx + 3, ty - 6);
-                    d.close();
-                    c.drawPath(d, p);
+                Path d = new Path();
+                switch (art) {
+                    case "vorne":
+                        p.setStyle(Paint.Style.STROKE);
+                        p.setStrokeWidth(3.5f);
+                        p.setStrokeCap(Paint.Cap.ROUND);
+                        c.drawArc(new RectF(tx - 13, ty - 13, tx + 13, ty + 13), -60, 300, false, p);
+                        p.setStyle(Paint.Style.FILL);
+                        d.moveTo(tx + 4, ty - 19);
+                        d.lineTo(tx + 13, ty - 12);
+                        d.lineTo(tx + 3, ty - 6);
+                        d.close();
+                        c.drawPath(d, p);
+                        break;
+                    case "trailer":
+                        p.setStyle(Paint.Style.STROKE);
+                        p.setStrokeWidth(3f);
+                        c.drawRoundRect(new RectF(tx - 15, ty - 11, tx + 15, ty + 11), 5, 5, p);
+                        p.setStyle(Paint.Style.FILL);
+                        d.moveTo(tx - 4, ty - 6);
+                        d.lineTo(tx + 6, ty);
+                        d.lineTo(tx - 4, ty + 6);
+                        d.close();
+                        c.drawPath(d, p);
+                        break;
+                    case "merken":
+                        p.setStyle(Paint.Style.STROKE);
+                        p.setStrokeWidth(3.6f);
+                        p.setStrokeCap(Paint.Cap.ROUND);
+                        c.drawLine(tx, ty - 12, tx, ty + 12, p);
+                        c.drawLine(tx - 12, ty, tx + 12, ty, p);
+                        p.setStyle(Paint.Style.FILL);
+                        break;
+                    case "gemerkt":
+                        p.setStyle(Paint.Style.STROKE);
+                        p.setStrokeWidth(3.6f);
+                        p.setStrokeCap(Paint.Cap.ROUND);
+                        p.setStrokeJoin(Paint.Join.ROUND);
+                        d.moveTo(tx - 12, ty + 1);
+                        d.lineTo(tx - 3, ty + 9);
+                        d.lineTo(tx + 12, ty - 9);
+                        c.drawPath(d, p);
+                        p.setStyle(Paint.Style.FILL);
+                        break;
+                    default:
+                        d.moveTo(tx - 9, ty - 13);
+                        d.lineTo(tx + 13, ty);
+                        d.lineTo(tx - 9, ty + 13);
+                        d.close();
+                        c.drawPath(d, p);
                 }
                 knopf.setColor(farbe);
                 knopf.setAlpha(Math.round(255 * a));
-                c.drawText(k[i], x + 74, y + 53, knopf);
+                c.drawText(text, x + 74, y + 53, knopf);
                 knopf.setColor(0xFFFFFFFF);
                 x += w + 24;
             }
             p.setAlpha(255);
+        }
+
+        /** Bewertungen der Familie als kleine Pillen (Name in der eigenen Farbe, Note) und „Gesehen: …“. */
+        private float familieZeichnen(Canvas c, Familie.Info f, float y, float a) {
+            float x = LINKS;
+            int al = Math.round(255 * a);
+            if (!f.namen.isEmpty()) {
+                int summe = 0;
+                for (String n : f.namen) summe += f.noten.get(n);
+                String sch = "Ø " + String.format(Locale.GERMAN, "%.1f", summe / (float) f.namen.size());
+                meta.setColor(GELB);
+                meta.setAlpha(al);
+                c.drawText(sch, x, y, meta);
+                x += meta.measureText(sch) + 22;
+                meta.setColor(0xE6FFFFFF);
+                karte.setTextSize(26);
+                for (String n : f.namen) {
+                    String z = String.valueOf(f.noten.get(n));
+                    float wn = karte.measureText(n), wz = karte.measureText(z);
+                    float w = wn + wz + 10 + 36;
+                    r.set(x, y - 33, x + w, y + 13);
+                    p.setColor(0x1FFFFFFF);
+                    p.setAlpha(Math.round(0x1F * a));
+                    c.drawRoundRect(r, 23, 23, p);
+                    Integer fc = Familie.FARBEN.get(n);
+                    karte.setColor(fc != null ? fc : 0xFFFFFFFF);
+                    karte.setAlpha(al);
+                    c.drawText(n, x + 18, y, karte);
+                    karte.setColor(0xFFFFFFFF);
+                    karte.setAlpha(al);
+                    c.drawText(z, x + 18 + wn + 10, y, karte);
+                    x += w + 12;
+                }
+                karte.setColor(0xFFFFFFFF);
+            }
+            if (!f.gesehen.isEmpty()) {
+                klein.setAlpha(Math.round(0xB3 * a));
+                c.drawText("Gesehen: " + TextUtils.join(", ", f.gesehen), x + 6, y, klein);
+                klein.setAlpha(0xB3);
+            }
+            p.setAlpha(255);
+            return y + 58;
         }
 
         private void kategorieInfo(Canvas c, JSONObject e) {

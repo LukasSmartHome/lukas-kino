@@ -59,6 +59,13 @@
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
 
+        <!-- Trailer im Vollbild (YouTube-Player in einer WebView, nur solange der Trailer läuft). -->
+        <activity
+            android:name=".TrailerActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
+
         <!-- Einmaliger Umzug der alten Kachel-Reihenfolge aus der WebView (eigener Prozess, beendet sich selbst). -->
         <service
             android:name=".UmzugDienst"
