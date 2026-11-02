@@ -17,6 +17,7 @@ Befehle (alles ohne --los ist nur Anschauen, es wird nichts verändert):
                                 in /media/Filme verschieben (Titel und Jahr von TMDB), Jellyfin neu einlesen.
                                 Ohne TMDB-Eintrag mit IMDb-ID: [imdbid-tt...].
   stapel ID,ZIEL[,--titel=..] ... [--los]   mehrere auf einmal
+  scan                          nur die Film-Bibliothek in Jellyfin neu einlesen
   titel ID Neuer_Titel          Anzeigename in Jellyfin setzen und sperren
                                 Jede Verschiebung steht in /media/Filme/.filmsortierer_log.jsonl (Rückweg).
   zurueck [--los]               letzte Verschiebung rückgängig machen
@@ -298,6 +299,14 @@ def cmd_stapel(a):
     print("FERTIG")
 
 
+def cmd_scan(_):
+    """Nur die Film-Bibliothek in Jellyfin neu einlesen (nicht die Fotos)."""
+    for v in jf("/Library/VirtualFolders"):
+        if v.get("CollectionType") == "movies":
+            jf("/Items/%s/Refresh?Recursive=true&MetadataRefreshMode=Default&ImageRefreshMode=Default" % v["ItemId"], {})
+            print("Scan gestartet:", v.get("Name"))
+
+
 def cmd_titel(a):
     """titel ITEM-ID Neuer_Titel – Anzeigename in Jellyfin setzen und sperren (z. B. deutscher Titel statt Original)"""
     item_id, name = a[0], a[1].replace("_", " ")
@@ -330,7 +339,7 @@ def cmd_zurueck(a):
 
 
 BEFEHLE = {"inventar": cmd_inventar, "offen": cmd_offen, "suche": cmd_suche, "bilder": cmd_bilder,
-           "doppelte": cmd_doppelte, "umbenennen": cmd_umbenennen, "stapel": cmd_stapel, "titel": cmd_titel, "zurueck": cmd_zurueck}
+           "doppelte": cmd_doppelte, "umbenennen": cmd_umbenennen, "stapel": cmd_stapel, "scan": cmd_scan, "titel": cmd_titel, "zurueck": cmd_zurueck}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in BEFEHLE:
