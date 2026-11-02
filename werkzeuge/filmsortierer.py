@@ -115,7 +115,7 @@ def kurzinfo(f):
     st = ms.get("MediaStreams") or []
     v = [s for s in st if s.get("Type") == "Video"]
     return {"id": f["Id"], "name": f.get("Name"), "jahr": f.get("ProductionYear"), "pfad": f.get("Path"),
-            "gb": round((ms.get("Size") or 0) / 1e9, 2), "min": round((f.get("RunTimeTicks") or 0) / 6e8, 1),
+            "gb": round((ms.get("Size") or 0) / 1e9, 2), "bytes": ms.get("Size") or 0, "min": round((f.get("RunTimeTicks") or 0) / 6e8, 1),
             "bild": ("%sx%s" % (v[0].get("Width"), v[0].get("Height"))) if v else "",
             "videotitel": v[0].get("Title") if v else None,
             "ton": ["%s %s %sch" % (s.get("Language"), s.get("Codec"), s.get("Channels")) for s in st if s.get("Type") == "Audio"],
@@ -150,6 +150,15 @@ def cmd_offen(_):
 
 
 def cmd_suche(a):
+    """suche NAME [JAHR] – oder mehrere auf einmal: suche Name_mit_Unterstrichen:Jahr Anderer_Film:2011 ..."""
+    if len(a) >= 1 and ":" in a[0] or (len(a) > 2):
+        for x in a:
+            name, _, j = x.partition(":")
+            print("##", name.replace("_", " "), j)
+            for k in kandidaten(name.replace("_", " "), int(j) if j.isdigit() else None):
+                print(json.dumps(k, ensure_ascii=False))
+        print("FERTIG")
+        return
     name = a[0]
     jahr = int(a[1]) if len(a) > 1 and a[1].isdigit() else None
     for k in kandidaten(name, jahr):
@@ -199,8 +208,8 @@ def cmd_doppelte(_):
     gruppen = {}
     for x in l:
         for k in (("tmdb", x["tmdb"]), ("titel", normal(x["name"]) + "|" + str(x["jahr"] or "")),
-                  ("groesse", "%s|%s" % (x["gb"], round(x["min"])))):
-            if k[1] and not k[1].endswith("|") and k[1] != "0.0|0":
+                  ("groesse", "%s|%s|%s" % (x["bytes"], round(x["min"]), x["bild"]))):
+            if k[1] and not k[1].endswith("|") and not k[1].startswith("0|"):
                 gruppen.setdefault(k, []).append(x)
     gefunden = False
     for (art, wert), xs in gruppen.items():
