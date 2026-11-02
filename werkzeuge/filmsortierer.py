@@ -11,7 +11,8 @@ A) Eingang – eine ganze Platte oder einen Ordner mit unsortierten Filmen, Seri
   pruefen QUELLE                alles einordnen (Film, Serie, Musik, Untertitel, Zusatzkram), Filme bei TMDB erkennen,
                                 Doppelte finden (exakt gleiche Datei, gleicher Film, schon in der Bibliothek)
                                 -> Kino/_sortierer/plan.json, bericht.md (für Lukas), unsicher.tsv (für Claude)
-                                Optionen: --ohne-tmdb  --ohne-ffprobe
+                                Optionen: --ohne-tmdb  --ohne-ffprobe  --ohne-bibliothek (beim großen Umzug: die
+                                SSD-Filme sollen ja mit auf die Platte und nicht als „schon da“ gelten)
   vorschau QUELLE NR [NR ...]   Kontaktbogen mit 12 Standbildern für unsichere Fälle (braucht ffmpeg)
   entscheiden QUELLE NR=AKTION [NR=AKTION ...]
                                 unsichere Fälle festlegen. AKTION: tmdb:603 | imdb:tt0133093 | titel:Name_mit_Unterstrich:1999
@@ -700,7 +701,7 @@ def ziel_setzen(e):
         e["ziel"] = None
 
 
-def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, still=False):
+def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False):
     d = sdir(quelle)
     tcache = lade(os.path.join(d, "tmdb_cache.json"), {})
     icache = lade(os.path.join(d, "info_cache.json"), {})
@@ -862,7 +863,7 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, still=False):
 
     # c) schon in der Jellyfin-Bibliothek?
     besser = []
-    if not ohne_tmdb:
+    if not ohne_tmdb and not ohne_bib:
         try:
             lib = bibliothek()
         except Exception as x:
@@ -1026,7 +1027,8 @@ def cmd_pruefen(a):
     quelle = os.path.abspath(a[0])
     if not os.path.isdir(quelle):
         sys.exit("Ordner gibt es nicht: " + quelle)
-    plan = plan_bauen(quelle, ohne_tmdb="--ohne-tmdb" in sys.argv, ohne_ff="--ohne-ffprobe" in sys.argv)
+    plan = plan_bauen(quelle, ohne_tmdb="--ohne-tmdb" in sys.argv, ohne_ff="--ohne-ffprobe" in sys.argv,
+                      ohne_bib="--ohne-bibliothek" in sys.argv)
     zusammenfassung(quelle, plan)
 
 
@@ -1047,7 +1049,8 @@ def cmd_entscheiden(a):
         entsch[nach_nr[nr]["pfad"]] = aktion
         print(nr, nach_nr[nr]["pfad"], "->", aktion)
     speichere(os.path.join(d, "entscheidungen.json"), entsch)
-    plan = plan_bauen(quelle, ohne_tmdb="--ohne-tmdb" in sys.argv, ohne_ff=True)  # Caches machen das schnell
+    plan = plan_bauen(quelle, ohne_tmdb="--ohne-tmdb" in sys.argv, ohne_ff=True,
+                      ohne_bib="--ohne-bibliothek" in sys.argv)  # Caches machen das schnell
     for x in a[1:]:
         nr = x.partition("=")[0]
         alt = nach_nr.get(nr)

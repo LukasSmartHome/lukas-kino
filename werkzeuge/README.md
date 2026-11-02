@@ -26,14 +26,14 @@ dann nur `cat /media/Filme4/Kino/_sortierer/fortschritt.txt` und am Ende `tail -
 | Schritt | Befehl | Was passiert |
 |---|---|---|
 | 1 | `bestand /media/Filme4` | Liste aller Dateien mit Größe und Datum → `Kino/_sortierer/bestand_*.tsv` (vorhandene Ordnung festhalten, Vorgabe Lukas) |
-| 2 | `pruefen /media/Filme4` | alles einordnen, Filme bei TMDB erkennen, Doppelte suchen → `bericht.md`, `unsicher.tsv`, `plan.json` |
+| 2 | `pruefen /media/Filme4 --ohne-bibliothek` | alles einordnen, Filme bei TMDB erkennen, Doppelte suchen → `bericht.md`, `unsicher.tsv`, `plan.json`. `--ohne-bibliothek` beim großen Umzug (sonst gelten die SSD-Filme als „schon in der Bibliothek“); später bei neuen Filmen weglassen |
 | 3 | `vorschau /media/Filme4 12 47` | nur wenn der Name nichts hergibt: Kontaktbogen (12 Standbilder) → `http://192.168.178.44:8098/pruefung/e12.jpg` (braucht ffmpeg) |
 | 4 | `entscheiden /media/Filme4 12=tmdb:603 47=beiseite 50=serie:Dark:2` | Unsichere festlegen (viele auf einmal) |
 | 5 | `ausfuehren /media/Filme4` | Vorschau: was wohin geht, Konflikte |
 | 6 | `ausfuehren /media/Filme4 --los` | verschieben (gleiche Platte = sofort, nichts wird kopiert) |
 | 7 | Lukas liest `Kino/_sortierer/bericht.md` | und entscheidet über `_Pruefen/Doppelt` und `_Pruefen/Beiseite` |
 | zurück | `zurueck-lauf /media/Filme4 --los` | letzten Lauf komplett rückgängig |
-| kopieren | `kopieren /media/Filme /media/Filme4/Kino/Filme --los` | z. B. die SSD-Filme auf die große Platte: jede Datei mit Prüfsumme geprüft, Quelle bleibt |
+| kopieren | `kopieren /media/Filme /media/Filme4/Von_SSD --los` | die SSD-Filme als weiteren Eingang auf die große Platte (vor Schritt 2): jede Datei mit Prüfsumme geprüft, die SSD bleibt unberührt |
 
 Ergebnis auf der Platte:
 
