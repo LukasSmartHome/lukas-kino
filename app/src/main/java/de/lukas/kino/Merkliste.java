@@ -33,6 +33,7 @@ final class Merkliste {
     // Katalog (plexfilme.json, seit 02.11.2026 aus Jellyfin: { filme: { HA-ID: {t, j, jf} } }) und Webhook – für alle gleich
     private static Map<String, String> plex;                         // Name|Jahr -> HA-ID (alte Plex-ID oder jf:<ID>)
     private static Map<String, String> jfZuHa = new HashMap<>();     // Jellyfin-ID -> HA-ID
+    private static Map<String, String> haZuJf = new HashMap<>();     // HA-ID -> Jellyfin-ID (für „Gesehen“)
     private static long plexZeit;
     private static String webhook;
 
@@ -183,6 +184,16 @@ final class Merkliste {
         return id != null ? id : "jf:" + film.optString("Id");
     }
 
+    /** Jellyfin-ID zu einer HA-ID (alte Plex-ID oder jf:<ID>) oder null. Blockiert. */
+    static String jfFuerHa(String haId) {
+        if (haId == null) return null;
+        if (haId.startsWith("jf:")) return haId.substring(3);
+        plexLaden();
+        synchronized (Merkliste.class) {
+            return haZuJf.get(haId);
+        }
+    }
+
     private static synchronized String webhook() throws Exception {
         if (webhook != null) return webhook;
         JSONObject j = new JSONObject(Jellyfin.holen(Familie.BASIS + "kino_geheim.json?t=" + System.currentTimeMillis()));
@@ -196,7 +207,7 @@ final class Merkliste {
         synchronized (Merkliste.class) {
             if (plex != null && System.currentTimeMillis() - plexZeit < 1_800_000) return;
         }
-        Map<String, String> p = new HashMap<>(), zuHa = new HashMap<>();
+        Map<String, String> p = new HashMap<>(), zuHa = new HashMap<>(), zuJf = new HashMap<>();
         try {
             JSONObject f = new JSONObject(Jellyfin.holen(Familie.BASIS + "plexfilme.json?t=" + System.currentTimeMillis())).optJSONObject("filme");
             Iterator<String> it = f != null ? f.keys() : null;
@@ -205,7 +216,10 @@ final class Merkliste {
                 JSONObject o = f.optJSONObject(id);
                 if (o != null && !o.optString("t").isEmpty())
                     p.put(Familie.schluessel(o.optString("t"), o.has("j") ? String.valueOf(o.optInt("j")) : ""), id);
-                if (o != null && !o.optString("jf").isEmpty()) zuHa.put(o.optString("jf"), id);
+                if (o != null && !o.optString("jf").isEmpty()) {
+                    zuHa.put(o.optString("jf"), id);
+                    zuJf.put(id, o.optString("jf"));
+                }
             }
         } catch (Exception ignored) {
             // ohne Katalog: dann jf:<ID>
@@ -227,6 +241,7 @@ final class Merkliste {
         synchronized (Merkliste.class) {
             plex = p;
             jfZuHa = zuHa;
+            haZuJf = zuJf;
             plexZeit = System.currentTimeMillis();
         }
     }

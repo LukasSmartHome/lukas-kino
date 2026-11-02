@@ -246,11 +246,20 @@ public class PlayerActivity extends Activity {
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     }
 
+    // Für den Kino-Bereich: welcher Film zuletzt lief und wie weit (ab 80 % gesehen und bewerten)
+    static volatile String zuletztId;
+    static volatile float zuletztQuote;
+
     @Override
     protected void onPause() {
         super.onPause();
         if (auftrag != null) auftrag.aus();
         if (player != null) {
+            long d = player.getDuration();
+            if (d > 0 && d != C.TIME_UNSET) {
+                zuletztId = id;
+                zuletztQuote = Math.min(1f, player.getCurrentPosition() / (float) d);
+            }
             melde(2);
             player.pause();
         }

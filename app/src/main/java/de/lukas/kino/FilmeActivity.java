@@ -77,6 +77,7 @@ public class FilmeActivity extends Activity {
         FARBEN.put("Kriegsfilme", 0xFF5E6B2B);
         FARBEN.put("Historienfilme", 0xFF9C7442);
         FARBEN.put("Western", 0xFFE9A23B);
+        FARBEN.put("Gesehen", 0xFF3E4A5E);
     }
 
     // ------------------------------------------------------------------ Daten
@@ -108,9 +109,70 @@ public class FilmeActivity extends Activity {
         String leer; // Text, wenn nichts da ist
         JSONObject kopf; // Serie oder Ordner, zu dem die Seite gehoert
 
+        // Raster (Fotos wie in Plex): jede Reihe ist eine Zeile der Wand, fokus = Spalte
+        boolean raster;
+        int spalten, kw, kh, luecke;
+        float kopfAnim = 1f;      // 1 = grosser Kopf (erste Zeile), 0 = kleine Zeile ganz oben
+        String kopfInfo = "";     // Zeile unter dem Namen (Zeitraum, Anzahl)
+        boolean ohneFilter;       // Merkliste und Gesehen zeigen auch Gesehenes
+
         Seite(String titel) {
             this.titel = titel;
         }
+    }
+
+    // Raster-Masse: Ordner 6 nebeneinander (16:9), Fotos 7 nebeneinander (4:3), wenig Abstand
+    static final int ORDNER_SPALTEN = 6, ORDNER_W = 268, ORDNER_H = 151, ORDNER_LUECKE = 17;
+    static final int FOTO_SPALTEN = 7, FOTO_W = 230, FOTO_H = 172, FOTO_LUECKE = 14;
+    static final int RASTER_OBEN_KLEIN = 112, RASTER_OBEN_GROSS = 300;
+
+    /** Baut eine Raster-Seite: erst die Ordner, dann Fotos und Videos, zeilenweise. */
+    static void rasterFuellen(Seite s, List<JSONObject> eintraege) {
+        boolean nurOrdner = true;
+        for (JSONObject o : eintraege) if (!o.optBoolean("IsFolder", false)) nurOrdner = false;
+        s.raster = true;
+        s.spalten = nurOrdner ? ORDNER_SPALTEN : FOTO_SPALTEN;
+        s.kw = nurOrdner ? ORDNER_W : FOTO_W;
+        s.kh = nurOrdner ? ORDNER_H : FOTO_H;
+        s.luecke = nurOrdner ? ORDNER_LUECKE : FOTO_LUECKE;
+        s.reihen.clear();
+        for (int i = 0; i < eintraege.size(); i += s.spalten) {
+            Reihe r = new Reihe("", null, QUER);
+            r.eintraege.addAll(eintraege.subList(i, Math.min(eintraege.size(), i + s.spalten)));
+            r.geladen = true;
+            s.reihen.add(r);
+        }
+        s.akt = 0;
+        s.anim = 0;
+    }
+
+    /** Zeitraum der Aufnahmen („3.–12. April 2025“), aus dem Aufnahmedatum der Fotos. */
+    static String zeitraum(List<JSONObject> l) {
+        String von = null, bis = null;
+        for (JSONObject o : l) {
+            String d = o.optString("PremiereDate", "");
+            if (d.length() < 10 || o.optBoolean("IsFolder", false)) continue;
+            d = d.substring(0, 10);
+            if (von == null || d.compareTo(von) < 0) von = d;
+            if (bis == null || d.compareTo(bis) > 0) bis = d;
+        }
+        if (von == null) return null;
+        String[] monate = {"Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"};
+        try {
+            String[] a = von.split("-"), b = bis.split("-");
+            int ta = Integer.parseInt(a[2]), tb = Integer.parseInt(b[2]);
+            String ma = monate[Integer.parseInt(a[1]) - 1], mb = monate[Integer.parseInt(b[1]) - 1];
+            if (von.equals(bis)) return ta + ". " + ma + " " + a[0];
+            if (a[0].equals(b[0]) && a[1].equals(b[1])) return ta + ".–" + tb + ". " + ma + " " + a[0];
+            if (a[0].equals(b[0])) return ta + ". " + ma + " – " + tb + ". " + mb + " " + a[0];
+            return ma + " " + a[0] + " – " + mb + " " + b[0];
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    static String ordnerName(JSONObject e) {
+        return e.optString("Name").trim().replaceAll("\\s+", " ");
     }
 
     enum Bereich { FILME, SERIEN, MERKLISTE, EMPFOHLEN, FOTOS }
@@ -163,6 +225,14 @@ public class FilmeActivity extends Activity {
             {"s", "t", "u", "v", "w", "x"}, {"y", "z", "ä", "ö", "ü", "ß"}, {"1", "2", "3", "4", "5", "6"},
             {"7", "8", "9", "0", "-", "."}};
     static final int SUCH_SPALTEN = 5;
+
+    // Bewerten (nach dem Film ab 80 % oder über den Knopf in den Details)
+    private boolean bew;
+    private JSONObject bewFilm;
+    private String[] bewNamen;
+    private int[] bewNoten;
+    private int bewAktiv;
+    private long bewDanke;      // > 0: „Danke“ wird gezeigt (seit)
 
     // Foto-Vollbild
     private final List<JSONObject> fotos = new ArrayList<>();
@@ -337,9 +407,11 @@ public class FilmeActivity extends Activity {
         if (weiter.length() > 0) s.reihen.add(reihe("Weiterschauen", weiter, POSTER));
         List<JSONObject> gemerkt = merkliste.liste();
         if (!gemerkt.isEmpty()) s.reihen.add(reiheAus("Merkliste", gemerkt, POSTER));
-        s.reihen.add(reihe("Neu", neu, POSTER));
-        if (samml.length() > 0) {
-            s.reihen.add(reihe("Kategorien", samml, POSTER));
+        s.reihen.add(ohneGesehenes(reihe("Neu", neu, POSTER)));
+        if (samml.length() > 0 || Gesehen.anzahl() > 0) {
+            Reihe kat = reihe("Kategorien", samml, POSTER);
+            if (Gesehen.anzahl() > 0) kat.eintraege.add(gesehenKachel());
+            s.reihen.add(kat);
             for (int i = 0; i < samml.length(); i++) {
                 JSONObject k = samml.getJSONObject(i);
                 s.reihen.add(new Reihe(k.optString("Name"), "samml:" + k.optString("Id"), POSTER));
@@ -351,6 +423,7 @@ public class FilmeActivity extends Activity {
 
     private Seite merklisteSeite() {
         Seite s = new Seite("Merkliste");
+        s.ohneFilter = true;
         List<JSONObject> filme = new ArrayList<>(), serien = new ArrayList<>();
         for (JSONObject o : merkliste.liste()) {
             if ("Series".equals(typ(o))) serien.add(o);
@@ -408,21 +481,27 @@ public class FilmeActivity extends Activity {
         } catch (Exception ignored) {
             return; // ohne Bewertungen weiter
         }
-        boolean m = false, e = false;
+        boolean m = false, e = false, g = false;
         try {
             m = merkliste.ausHa(jf);
         } catch (Exception ignored) {
             // Merkliste bleibt, wie sie war
         }
         try {
+            g = Gesehen.ausHa(jf);
+        } catch (Exception ignored) {
+            // Gesehen bleibt, wie es war
+        }
+        try {
             e = Empfohlen.berechnen(jf);
         } catch (Exception ignored) {
             // Empfohlen bleibt, wie es war
         }
-        final boolean mm = m, ee = e;
+        final boolean mm = m, ee = e, gg = g;
         h.post(() -> {
             if (mm) merklisteGeaendert();
             if (ee) empfohlenGeaendert();
+            if (gg) gesehenGeaendert();
             buehne.invalidate();
         });
     }
@@ -430,9 +509,10 @@ public class FilmeActivity extends Activity {
     private Seite empfohlenSeite() {
         Seite s = new Seite("Empfohlen");
         for (Empfohlen.Gruppe g : Empfohlen.gruppen()) {
-            for (int i = 0; i < g.eintraege.size(); i += 8)
-                s.reihen.add(reiheAus(i == 0 ? "Mit " + g.note + " bewertet" : "",
-                        g.eintraege.subList(i, Math.min(g.eintraege.size(), i + 8)), POSTER));
+            List<JSONObject> l = new ArrayList<>();
+            for (JSONObject o : g.eintraege) if (!Gesehen.hat(o)) l.add(o);
+            for (int i = 0; i < l.size(); i += 8)
+                s.reihen.add(reiheAus(i == 0 ? "Mit " + g.note + " bewertet" : "", l.subList(i, Math.min(l.size(), i + 8)), POSTER));
         }
         if (s.reihen.isEmpty())
             s.leer = Empfohlen.geladen() ? "Noch nichts mit 7 oder besser bewertet" : "Bewertungen werden geladen …";
@@ -451,6 +531,172 @@ public class FilmeActivity extends Activity {
             seite = neu;
             fokusGeaendert();
         }
+        buehne.invalidate();
+    }
+
+    // ------------------------------------------------------------------ Gesehen (je Profil, ab 80 %)
+
+    private static Reihe ohneGesehenes(Reihe r) {
+        r.eintraege.removeIf(Gesehen::hat);
+        return r;
+    }
+
+    /** Kachel „Gesehen“ ganz rechts in der Reihe Kategorien. */
+    private static JSONObject gesehenKachel() {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("Type", "Gesehen");
+            o.put("Id", "@gesehen");
+            o.put("Name", "Gesehen");
+            o.put("ChildCount", Gesehen.anzahl());
+        } catch (Exception ignored) {
+        }
+        return o;
+    }
+
+    /** Neue Gesehen-Liste: Gesehenes aus allen offenen Reihen nehmen, Kachel nachziehen. */
+    private void gesehenGeaendert() {
+        List<Seite> alle = new ArrayList<>(startseiten.values());
+        alle.addAll(stapel);
+        if (!alle.contains(seite)) alle.add(seite);
+        for (Seite s : alle) {
+            if (s.ohneFilter || s.raster) continue;
+            for (int i = s.reihen.size() - 1; i >= 0; i--) {
+                Reihe r = s.reihen.get(i);
+                if ("Weiterschauen".equals(r.titel) || "Merkliste".equals(r.titel)) continue;
+                if (!r.eintraege.removeIf(Gesehen::hat)) continue;
+                r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.size() - 1));
+                if (r.eintraege.isEmpty() && r.geladen && s.reihen.size() > 1) {
+                    s.reihen.remove(i);
+                    if (s.akt > i || s.akt >= s.reihen.size()) s.akt = Math.max(0, s.akt - 1);
+                    s.anim = s.akt;
+                }
+            }
+        }
+        Seite start = startseiten.get(Bereich.FILME);
+        if (start != null) {
+            for (Reihe r : start.reihen) {
+                if (!"Kategorien".equals(r.titel)) continue;
+                r.eintraege.removeIf(o -> "Gesehen".equals(typ(o)));
+                if (Gesehen.anzahl() > 0) r.eintraege.add(gesehenKachel());
+                r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.size() - 1));
+            }
+        }
+        if (bereich == Bereich.EMPFOHLEN || startseiten.containsKey(Bereich.EMPFOHLEN)) empfohlenGeaendert();
+        fokusGeaendert();
+    }
+
+    /** Kategorie „Gesehen“: alle Filme, die dieses Profil schon gesehen hat, zuletzt gesehen zuerst. */
+    private void gesehenOeffnen(JSONObject kachel) {
+        final Seite neu = new Seite("Gesehen");
+        neu.kopf = kachel;
+        neu.ohneFilter = true;
+        neu.reihen.add(new Reihe("Gesehen", null, POSTER));
+        neueSeite(neu);
+        final List<String> ids = Gesehen.liste();
+        netz.execute(() -> {
+            Map<String, JSONObject> gefunden = new HashMap<>();
+            for (int i = 0; i < ids.size(); i += 60) {
+                try {
+                    JSONArray a = jf.nachIds(ids.subList(i, Math.min(ids.size(), i + 60)));
+                    for (int k = 0; k < a.length(); k++) {
+                        JSONObject o = a.optJSONObject(k);
+                        if (o != null) gefunden.put(o.optString("Id"), o);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            h.post(() -> {
+                List<JSONObject> l = new ArrayList<>();
+                for (String id : ids) if (gefunden.containsKey(id)) l.add(gefunden.get(id));
+                neu.reihen.clear();
+                for (int i = 0; i < l.size(); i += 8)
+                    neu.reihen.add(reiheAus(i == 0 ? (l.size() == 1 ? "1 Film" : l.size() + " Filme") : "", l.subList(i, Math.min(l.size(), i + 8)), POSTER));
+                if (neu.reihen.isEmpty()) neu.leer = "Noch nichts gesehen";
+                if (seite == neu) {
+                    nachladen();
+                    fokusGeaendert();
+                }
+            });
+        });
+    }
+
+    // ------------------------------------------------------------------ Bewerten
+
+    /** Fenster „Lukas, wie hat dir der Film gefallen?“ – Eltern bekommen zwei Zähler (Papa links, Mama rechts). */
+    private void bewertenOeffnen(JSONObject film) {
+        if (film == null || !"Movie".equals(typ(film))) return;
+        bewFilm = film;
+        bewNamen = Bewerten.namen();
+        bewNoten = new int[bewNamen.length];
+        Familie.Info info = Familie.fuer(film);
+        for (int i = 0; i < bewNamen.length; i++) {
+            Integer n = info != null ? info.noten.get(bewNamen[i]) : null;
+            bewNoten[i] = n != null && n >= 1 && n <= 10 ? n : 5;
+        }
+        bewAktiv = 0;
+        bewDanke = 0;
+        bew = true;
+        leiste = false;
+        buehne.invalidate();
+    }
+
+    private boolean bewertenTaste(int k, boolean ok, boolean zurueck, int wiederholung) {
+        if (bewDanke > 0) {
+            if (zurueck || ok) bewSchliessen();
+            return true;
+        }
+        if (zurueck) {
+            bewSchliessen();
+            return true;
+        }
+        switch (k) {
+            case KeyEvent.KEYCODE_DPAD_UP:
+                bewNoten[bewAktiv] = Math.min(10, bewNoten[bewAktiv] + 1);
+                break;
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                bewNoten[bewAktiv] = Math.max(1, bewNoten[bewAktiv] - 1);
+                break;
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                if (wiederholung == 0) bewAktiv = Math.max(0, bewAktiv - 1);
+                break;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                if (wiederholung == 0) bewAktiv = Math.min(bewNamen.length - 1, bewAktiv + 1);
+                break;
+            default:
+                if (ok && wiederholung == 0) bewSenden();
+        }
+        buehne.invalidate();
+        return true;
+    }
+
+    private void bewSenden() {
+        final JSONObject film = bewFilm;
+        final String[] namen = bewNamen.clone();
+        final int[] noten = bewNoten.clone();
+        bewDanke = SystemClock.uptimeMillis();
+        buehne.invalidate();
+        h.postDelayed(() -> {
+            if (bewDanke > 0) bewSchliessen();
+        }, 2200);
+        netz.execute(() -> {
+            boolean alles = true;
+            for (int i = 0; i < namen.length; i++) {
+                try {
+                    Bewerten.senden(film, namen[i], noten[i]);
+                } catch (Exception e) {
+                    alles = false;
+                }
+            }
+            if (!alles) h.post(() -> hinweis("Bewertung ließ sich nicht speichern"));
+            // HA schreibt die Datei sofort neu – kurz danach abholen
+            h.postDelayed(() -> netz.execute(this::familieLaden), 3000);
+        });
+    }
+
+    private void bewSchliessen() {
+        bew = false;
+        bewDanke = 0;
         buehne.invalidate();
     }
 
@@ -474,9 +720,22 @@ public class FilmeActivity extends Activity {
             }
         }
         if (detailTrailer != null && e.optString("Id").equals(detailTrailerId)) l.add(new String[]{"trailer", "Trailer"});
-        if ("Movie".equals(typ(e)))
+        if ("Movie".equals(typ(e))) {
             l.add(merkliste.hat(e.optString("Id")) ? new String[]{"gemerkt", "Gemerkt"} : new String[]{"merken", "Merken"});
+            l.add(new String[]{"bewerten", eigeneNoten(e)});
+        }
         return l;
+    }
+
+    /** Text des Knopfs „Bewerten“: mit den eigenen Noten, wenn schon bewertet (z. B. „Bewertet · 8“). */
+    private static String eigeneNoten(JSONObject e) {
+        Familie.Info info = Familie.fuer(e);
+        StringBuilder sb = new StringBuilder();
+        for (String n : Bewerten.namen()) {
+            Integer w = info != null ? info.noten.get(n) : null;
+            if (w != null) sb.append(sb.length() > 0 ? " / " : "").append(w);
+        }
+        return sb.length() > 0 ? "Bewertet  ·  " + sb : "Bewerten";
     }
 
     private void knopfAusfuehren(String art, JSONObject f) {
@@ -490,6 +749,9 @@ public class FilmeActivity extends Activity {
                 break;
             case "trailer":
                 if (detailTrailer != null) TrailerActivity.starten(this, detailTrailer[0], f.optString("Name"));
+                break;
+            case "bewerten":
+                bewertenOeffnen(f);
                 break;
             case "merken":
             case "gemerkt": {
@@ -554,22 +816,21 @@ public class FilmeActivity extends Activity {
                 }
             });
         }
-        List<JSONObject> jahre = new ArrayList<>(), tage = new ArrayList<>(), lose = new ArrayList<>();
-        JSONObject urlaube = null;
+        // Wie in Plex: alle Ordner der Fotos-Bibliothek nach Namen als Kachel-Wand, lose Bilder dahinter
+        List<JSONObject> ordner = new ArrayList<>(), lose = new ArrayList<>();
         for (int i = 0; i < inhalt.length(); i++) {
             JSONObject o = inhalt.getJSONObject(i);
-            String name = o.optString("Name").trim();
-            if (!o.optBoolean("IsFolder", false)) lose.add(o);
-            else if (name.toLowerCase(Locale.GERMAN).startsWith("urlaube")) urlaube = o;
-            else if (name.matches("\\d{4}")) jahre.add(o);
-            else tage.add(o);
+            if (o.optBoolean("IsFolder", false)) ordner.add(o);
+            else lose.add(o);
         }
-        Collections.reverse(jahre); // neueste Jahre zuerst
-        if (urlaube != null) s.reihen.add(new Reihe("Urlaube", "ordner:" + urlaube.optString("Id"), QUER));
-        if (!jahre.isEmpty()) s.reihen.add(reiheAus("Jahre", jahre, QUER));
-        if (!tage.isEmpty()) s.reihen.add(reiheAus("Erinnerungen", tage, QUER));
-        if (!lose.isEmpty()) s.reihen.add(reiheAus("Einzelne Bilder", lose, QUER));
-        if (s.reihen.isEmpty()) s.leer = "Die Fotos werden gerade eingelesen";
+        List<JSONObject> alle = new ArrayList<>(ordner);
+        alle.addAll(lose);
+        if (alle.isEmpty()) {
+            s.leer = "Die Fotos werden gerade eingelesen";
+            return s;
+        }
+        rasterFuellen(s, alle);
+        s.kopfInfo = ordner.size() + " Ordner" + (lose.isEmpty() ? "" : " · " + anzahlText(lose));
         return s;
     }
 
@@ -593,6 +854,16 @@ public class FilmeActivity extends Activity {
     /** Reihen in der Naehe des Fokus nachladen. */
     private void nachladen() {
         final Seite s = seite;
+        if (s.raster) {
+            // Wand: sichtbare Zeilen plus ein paar darunter vorladen (nach Nähe zum Fokus)
+            for (int d = 0; d <= 7; d++)
+                for (int i : new int[]{s.akt + d, s.akt - d}) {
+                    if (i < 0 || i >= s.reihen.size() || (i < s.akt && d > 2)) continue;
+                    for (JSONObject o : s.reihen.get(i).eintraege)
+                        bilder.laden(rasterUrl(o), (u, bm) -> buehne.invalidate());
+                }
+            return;
+        }
         for (int i = Math.max(0, s.akt - 1); i < Math.min(s.reihen.size(), s.akt + 3); i++) {
             final Reihe r = s.reihen.get(i);
             if (r.geladen || r.laedt || r.quelle == null) continue;
@@ -601,7 +872,10 @@ public class FilmeActivity extends Activity {
                 try {
                     JSONArray a = holen(r.quelle);
                     h.post(() -> {
-                        for (int k = 0; k < a.length(); k++) r.eintraege.add(a.optJSONObject(k));
+                        for (int k = 0; k < a.length(); k++) {
+                            JSONObject o = a.optJSONObject(k);
+                            if (o != null && (s.ohneFilter || !Gesehen.hat(o))) r.eintraege.add(o);
+                        }
                         r.geladen = true;
                         r.laedt = false;
                         if (seite == s && s.reihen.indexOf(r) == s.akt) fokusGeaendert();
@@ -632,14 +906,34 @@ public class FilmeActivity extends Activity {
 
     /** Nach dem Film: Weiterschauen und den Film selbst frisch holen. */
     private void nachDemFilm() {
-        final JSONObject f = detailEintrag != null ? detailEintrag : fokusEintrag();
+        final JSONObject f0 = detailEintrag != null ? detailEintrag : fokusEintrag();
+        // Zuletzt gespielt (auch bei Filmen vom Dashboard) und wie weit
+        final String zuletzt = PlayerActivity.zuletztId;
+        final float quote = zuletzt != null ? PlayerActivity.zuletztQuote : 0f;
+        PlayerActivity.zuletztId = null;
+        final JSONObject f = zuletzt != null && (f0 == null || !zuletzt.equals(f0.optString("Id"))) ? null : f0;
         // Weiterschauen gibt es nur auf den Startseiten von Filme und Serien (aus Merkliste oder Suche: Filme)
         final Bereich b = bereich == Bereich.SERIEN ? Bereich.SERIEN : Bereich.FILME;
         netz.execute(() -> {
             try {
-                JSONObject frisch = f != null ? jf.film(f.optString("Id")) : null;
+                JSONObject frisch = zuletzt != null ? jf.film(zuletzt) : f != null ? jf.film(f.optString("Id")) : null;
                 JSONArray weiter = b == Bereich.SERIEN ? jf.serienWeiterschauen() : jf.weiterschauen();
                 h.post(() -> {
+                    if (frisch != null && "Movie".equals(typ(frisch)) && quote >= Gesehen.GRENZE) {
+                        // ab 80 %: bei diesem Profil gesehen, und fragen, wie er gefallen hat
+                        boolean schon = Gesehen.hat(frisch);
+                        Gesehen.lokalDazu(frisch);
+                        if (!schon) {
+                            netz.execute(() -> {
+                                try {
+                                    Gesehen.senden(frisch, true);
+                                } catch (Exception ignored) {
+                                    // Automation 44 trägt es sonst ohnehin ein
+                                }
+                            });
+                        }
+                        bewertenOeffnen(frisch);
+                    }
                     if (frisch != null) {
                         ersetzen(frisch);
                         merkliste.ersetzen(frisch);
@@ -667,6 +961,7 @@ public class FilmeActivity extends Activity {
                             }
                         }
                     }
+                    if (frisch != null && "Movie".equals(typ(frisch)) && quote >= Gesehen.GRENZE) gesehenGeaendert();
                     fokusGeaendert();
                 });
             } catch (Exception ignored) {
@@ -723,10 +1018,15 @@ public class FilmeActivity extends Activity {
     private final Set<String> titelbildLaedt = new HashSet<>();
 
     private final Runnable hintergrundLaden = () -> {
-        JSONObject e = heldEintrag();
-        if (e == null) return;
+        // In der Foto-Wand bleibt der Hintergrund ruhig: Titelbild des Ordners (Startseite: dunkel)
+        boolean wand = seite.raster && ansicht == Ansicht.LISTE;
+        JSONObject e = wand ? seite.kopf : heldEintrag();
+        if (e == null) {
+            if (wand) setzeHintergrund(null, 0xFF1B1E25);
+            return;
+        }
         String t = typ(e);
-        if ("BoxSet".equals(t)) {
+        if ("BoxSet".equals(t) || "Gesehen".equals(t)) {
             Integer f = FARBEN.get(e.optString("Name"));
             setzeHintergrund(null, f != null ? f : 0xFF444444);
             return;
@@ -859,6 +1159,22 @@ public class FilmeActivity extends Activity {
         return null;
     }
 
+    /** Bild einer Kachel in der Wand: kleiner als in den Reihen, damit viele in den Speicher passen. */
+    String rasterUrl(JSONObject e) {
+        if (e == null) return null;
+        String id = e.optString("Id"), pr = Jellyfin.tag(e, "Primary");
+        if (e.optBoolean("IsFolder", false)) {
+            if (pr != null) return Jellyfin.quer(id, pr, ORDNER_W * 2);
+            String tb = titelbilder.get(id);
+            if (tb == null) {
+                titelbildSuchen(id);
+                tb = titelbilder.get(id);
+            }
+            return tb == null || tb.isEmpty() ? null : tb.replace("fillWidth=" + QW * 2, "fillWidth=" + ORDNER_W * 2);
+        }
+        return Jellyfin.quer(id, pr, 360);
+    }
+
     private void titelbildSuchen(final String ordner) {
         if (titelbildLaedt.contains(ordner)) return;
         titelbildLaedt.add(ordner);
@@ -917,6 +1233,7 @@ public class FilmeActivity extends Activity {
         }
         if (!(zurueck || ok || pfeil || medien)) return super.dispatchKeyEvent(ev);
 
+        if (bew) return bewertenTaste(k, ok, zurueck, ev.getRepeatCount());
         if (leiste) return leisteTaste(k, ok, zurueck);
         switch (ansicht) {
             case ANMELDEN:
@@ -989,6 +1306,7 @@ public class FilmeActivity extends Activity {
             if (k == KeyEvent.KEYCODE_DPAD_LEFT) leisteAuf();
             return true;
         }
+        if (seite.raster) return rasterTaste(k, ok, r, wiederholung);
         switch (k) {
             case KeyEvent.KEYCODE_DPAD_LEFT:
                 if (r.fokus > 0) {
@@ -1030,6 +1348,55 @@ public class FilmeActivity extends Activity {
         }
     }
 
+    /** Pfeile in der Foto-Wand: frei in alle Richtungen, rechts am Zeilenende geht es in der nächsten Zeile weiter. */
+    private boolean rasterTaste(int k, boolean ok, Reihe r, int wiederholung) {
+        int spalte = r.fokus;
+        switch (k) {
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                if (r.fokus > 0) r.fokus--;
+                else if (wiederholung == 0) leisteAuf();
+                break;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                if (r.fokus < r.eintraege.size() - 1) r.fokus++;
+                else if (seite.akt < seite.reihen.size() - 1) {
+                    seite.akt++;
+                    seite.reihen.get(seite.akt).fokus = 0;
+                    nachladen();
+                }
+                break;
+            case KeyEvent.KEYCODE_DPAD_UP:
+                if (seite.akt > 0) {
+                    seite.akt--;
+                    Reihe n = seite.reihen.get(seite.akt);
+                    n.fokus = Math.min(spalte, n.eintraege.size() - 1);
+                    nachladen();
+                }
+                break;
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                if (seite.akt < seite.reihen.size() - 1) {
+                    seite.akt++;
+                    Reihe n = seite.reihen.get(seite.akt);
+                    n.fokus = Math.min(spalte, n.eintraege.size() - 1);
+                    nachladen();
+                }
+                break;
+            default:
+                if (ok) oeffnen(fokusEintrag(), r, Ansicht.LISTE);
+                else if (k == KeyEvent.KEYCODE_MEDIA_PLAY || k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                    // Play auf einem Foto: gleich als Diashow ab diesem Bild
+                    JSONObject f = fokusEintrag();
+                    if (f != null && "Photo".equals(typ(f))) {
+                        fotoOeffnen(f);
+                        diashow = true;
+                        h.postDelayed(diaWeiter, 5000);
+                    } else if (f != null) oeffnen(f, r, Ansicht.LISTE);
+                }
+                return true;
+        }
+        fokusGeaendert();
+        return true;
+    }
+
     /** OK auf einem Element – je nach Art. */
     private void oeffnen(JSONObject e, Reihe r, Ansicht von) {
         if (e == null) return;
@@ -1037,6 +1404,9 @@ public class FilmeActivity extends Activity {
         switch (t) {
             case "BoxSet":
                 kategorieOeffnen(e);
+                break;
+            case "Gesehen":
+                gesehenOeffnen(e);
                 break;
             case "Series":
                 serieOeffnen(e);
@@ -1112,16 +1482,17 @@ public class FilmeActivity extends Activity {
         neueSeite(neu);
         netz.execute(() -> {
             try {
-                JSONArray a = jf.inhalt(id);
+                JSONArray roh = jf.inhalt(id);
                 h.post(() -> {
                     neu.reihen.clear();
-                    for (int i = 0; i < a.length(); i += 8) {
-                        Reihe r = new Reihe(i == 0 ? name : "", null, POSTER);
-                        for (int k = i; k < Math.min(a.length(), i + 8); k++) r.eintraege.add(a.optJSONObject(k));
-                        r.geladen = true;
-                        neu.reihen.add(r);
+                    List<JSONObject> a = new ArrayList<>();
+                    for (int k = 0; k < roh.length(); k++) {
+                        JSONObject o = roh.optJSONObject(k);
+                        if (o != null && !Gesehen.hat(o)) a.add(o);
                     }
-                    if (neu.reihen.isEmpty()) neu.leer = "Keine Filme";
+                    for (int i = 0; i < a.size(); i += 8)
+                        neu.reihen.add(reiheAus(i == 0 ? name : "", a.subList(i, Math.min(a.size(), i + 8)), POSTER));
+                    if (neu.reihen.isEmpty()) neu.leer = roh.length() > 0 ? "Alles schon gesehen" : "Keine Filme";
                     if (seite == neu) {
                         nachladen();
                         fokusGeaendert();
@@ -1160,15 +1531,15 @@ public class FilmeActivity extends Activity {
 
     private void ordnerOeffnen(JSONObject ordner) {
         final String id = ordner.optString("Id");
-        final Seite neu = new Seite(ordner.optString("Name"));
+        final Seite neu = new Seite(ordnerName(ordner));
         neu.kopf = ordner;
-        neu.reihen.add(new Reihe(ordner.optString("Name"), null, QUER));
+        neu.raster = true; // Kopf sofort, die Wand kommt, sobald der Inhalt da ist
+        neu.kopfInfo = "";
         neueSeite(neu);
         netz.execute(() -> {
             try {
                 JSONArray a = jf.ordner(id);
                 h.post(() -> {
-                    neu.reihen.clear();
                     List<JSONObject> unter = new ArrayList<>(), bilderListe = new ArrayList<>();
                     for (int i = 0; i < a.length(); i++) {
                         JSONObject o = a.optJSONObject(i);
@@ -1176,14 +1547,15 @@ public class FilmeActivity extends Activity {
                         if (o.optBoolean("IsFolder", false)) unter.add(o);
                         else bilderListe.add(o);
                     }
-                    if (!unter.isEmpty()) neu.reihen.add(reiheAus("Ordner", unter, QUER));
-                    int pro = 12;
-                    for (int i = 0; i < bilderListe.size(); i += pro) {
-                        Reihe r = new Reihe(i == 0 ? anzahlText(bilderListe) : "", null, QUER);
-                        r.eintraege.addAll(bilderListe.subList(i, Math.min(bilderListe.size(), i + pro)));
-                        r.geladen = true;
-                        neu.reihen.add(r);
-                    }
+                    List<JSONObject> alle = new ArrayList<>(unter);
+                    alle.addAll(bilderListe);
+                    rasterFuellen(neu, alle);
+                    StringBuilder info = new StringBuilder();
+                    String zr = zeitraum(bilderListe);
+                    if (zr != null) info.append(zr);
+                    if (!unter.isEmpty()) info.append(info.length() > 0 ? "   ·   " : "").append(unter.size()).append(" Ordner");
+                    if (!bilderListe.isEmpty()) info.append(info.length() > 0 ? "   ·   " : "").append(anzahlText(bilderListe));
+                    neu.kopfInfo = info.toString();
                     if (neu.reihen.isEmpty()) neu.leer = "Leer";
                     if (seite == neu) {
                         nachladen();
@@ -1519,7 +1891,7 @@ public class FilmeActivity extends Activity {
         private final Matrix m = new Matrix();
         private long letzt = SystemClock.uptimeMillis();
         private final Map<Reihe, Float> scrolls = new HashMap<>();
-        private float fokusZoom = 1f, detailAnim, leisteAnim, leisteFokusY = -1, sucheScroll;
+        private float fokusZoom = 1f, detailAnim, leisteAnim, leisteFokusY = -1, sucheScroll, bewAnim;
         private JSONObject letzterFokus;
         private final Path[] symbole = new Path[6];
 
@@ -1648,6 +2020,12 @@ public class FilmeActivity extends Activity {
             leisteAnim = naeher(leisteAnim, ziel, dt, 55);
             if (leisteAnim != ziel) weiter = true;
             if (leisteAnim > 0.002f) weiter |= leisteZeichnen(c, dt);
+
+            // Bewerten liegt ganz oben
+            float bz = bew ? 1f : 0f;
+            bewAnim = naeher(bewAnim, bz, dt, 60);
+            if (bewAnim != bz) weiter = true;
+            if (bewAnim > 0.002f && bewNamen != null) weiter |= bewertenZeichnen(c);
 
             if (hinweisText != null && SystemClock.uptimeMillis() < hinweisBis) {
                 knopf.setTextSize(30);
@@ -1833,6 +2211,7 @@ public class FilmeActivity extends Activity {
             bildMalen(c, bildNeu, farbeNeu, blend);
 
             boolean detail = ansicht == Ansicht.DETAIL;
+            if (seite.raster && ansicht == Ansicht.LISTE) return rasterZeichnen(c, dt) | weiter;
             boolean suche = ansicht == Ansicht.SUCHE || (detail && detailZurueck == Ansicht.SUCHE && false);
             float zielDetail = detail ? 1f : 0f;
             detailAnim = naeher(detailAnim, zielDetail, dt, 70);
@@ -1884,7 +2263,7 @@ public class FilmeActivity extends Activity {
                 klein.setAlpha(0xB3);
             } else if (e != null) {
                 String t = typ(e);
-                if ("BoxSet".equals(t)) kategorieInfo(c, e);
+                if ("BoxSet".equals(t) || "Gesehen".equals(t)) kategorieInfo(c, e);
                 else if ("Folder".equals(t) || "PhotoAlbum".equals(t) || "CollectionFolder".equals(t)) ordnerInfo(c, e);
                 else if ("Photo".equals(t) || "Video".equals(t)) fotoInfo(c, e);
                 else filmInfo(c, e, detail);
@@ -1966,6 +2345,318 @@ public class FilmeActivity extends Activity {
             return weiter;
         }
 
+        // -------------------------------------------------- Bewerten
+
+        private boolean bewertenZeichnen(Canvas c) {
+            float a = Ani.AUS.getInterpolation(Math.max(0f, Math.min(1f, bewAnim)));
+            int al = Math.round(255 * a);
+            p.setColor(0xFF000000);
+            p.setAlpha(Math.round(150 * a));
+            c.drawRect(0, 0, 1920, 1080, p);
+            p.setAlpha(255);
+            int n = bewNamen.length;
+            float breite = n == 1 ? 780 : 1040, oben = 236 + (1 - a) * 40;
+            RectF karteR = new RectF(960 - breite / 2, oben, 960 + breite / 2, oben + 600);
+            echtesGlas(c, karteR, 52, a);
+            String film = bewFilm != null ? bewFilm.optString("Name") : "";
+            boolean danke = bewDanke > 0;
+            if (danke) {
+                float t = Math.min(1f, (SystemClock.uptimeMillis() - bewDanke) / 350f);
+                float cy = oben + 230;
+                p.setColor(0xFF22C55E);
+                p.setAlpha(al);
+                c.drawCircle(960, cy, 70 * (0.6f + 0.4f * Ani.AUS.getInterpolation(t)), p);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(12);
+                p.setStrokeCap(Paint.Cap.ROUND);
+                p.setColor(0xFFFFFFFF);
+                p.setAlpha(al);
+                c.drawLine(930, cy + 2, 952, cy + 26, p);
+                c.drawLine(952, cy + 26, 994, cy - 24, p);
+                p.setStyle(Paint.Style.FILL);
+                knopf.setTextSize(46);
+                knopf.setTextAlign(Paint.Align.CENTER);
+                knopf.setAlpha(al);
+                c.drawText(Bewerten.danke(), 960, cy + 160, knopf);
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < n; i++)
+                    sb.append(i > 0 ? "     " : "").append(n > 1 ? Bewerten.schild(bewNamen[i]) + ": " : "").append(bewNoten[i]).append(" von 10");
+                meta.setTextAlign(Paint.Align.CENTER);
+                meta.setAlpha(Math.round(0xE6 * a));
+                c.drawText(kuerzen(film, meta, breite - 120) + "   ·   " + sb, 960, cy + 220, meta);
+                meta.setTextAlign(Paint.Align.LEFT);
+                meta.setAlpha(0xE6);
+                knopf.setTextAlign(Paint.Align.LEFT);
+                knopf.setTextSize(30);
+                knopf.setAlpha(255);
+                return t < 1f;
+            }
+            // Film und Frage
+            meta.setTextAlign(Paint.Align.CENTER);
+            meta.setAlpha(Math.round(0xB3 * a));
+            c.drawText(kuerzen(film, meta, breite - 120), 960, oben + 78, meta);
+            meta.setAlpha(0xE6);
+            meta.setTextAlign(Paint.Align.LEFT);
+            knopf.setTextSize(42);
+            knopf.setTextAlign(Paint.Align.CENTER);
+            knopf.setAlpha(al);
+            c.drawText(kuerzen(Bewerten.frage(), knopf, breite - 80), 960, oben + 138, knopf);
+            // Zähler
+            float cy = oben + 340;
+            for (int i = 0; i < n; i++) {
+                float cx = n == 1 ? 960 : 960 + (i == 0 ? -250 : 250);
+                boolean aktiv = i == bewAktiv;
+                float ia = aktiv ? 1f : 0.5f;
+                if (n > 1) {
+                    r.set(cx - 200, cy - 150, cx + 200, cy + 200);
+                    p.setColor(aktiv ? 0x24FFFFFF : 0x0DFFFFFF);
+                    p.setAlpha(Math.round((aktiv ? 0x24 : 0x0D) * a));
+                    c.drawRoundRect(r, 36, 36, p);
+                    if (aktiv) {
+                        p.setStyle(Paint.Style.STROKE);
+                        p.setStrokeWidth(3);
+                        p.setColor(0xFFFFFFFF);
+                        p.setAlpha(Math.round(200 * a));
+                        c.drawRoundRect(r, 36, 36, p);
+                        p.setStyle(Paint.Style.FILL);
+                    }
+                }
+                int note = bewNoten[i];
+                int nf = Bewerten.farbe(note);
+                // Pfeile hoch und runter
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(7);
+                p.setStrokeCap(Paint.Cap.ROUND);
+                p.setColor(0xFFFFFFFF);
+                p.setAlpha(Math.round((note < 10 ? 230 : 60) * a * ia));
+                c.drawLine(cx - 26, cy - 92, cx, cy - 118, p);
+                c.drawLine(cx, cy - 118, cx + 26, cy - 92, p);
+                p.setAlpha(Math.round((note > 1 ? 230 : 60) * a * ia));
+                c.drawLine(cx - 26, cy + 76, cx, cy + 102, p);
+                c.drawLine(cx, cy + 102, cx + 26, cy + 76, p);
+                p.setStyle(Paint.Style.FILL);
+                // Zahl in der Farbe der Note
+                gross.setTextSize(150);
+                gross.setTextAlign(Paint.Align.CENTER);
+                gross.setColor(nf);
+                gross.setAlpha(Math.round(255 * a * (aktiv ? 1f : 0.7f)));
+                c.drawText(String.valueOf(note), cx, cy + 52, gross);
+                gross.setColor(0xFFFFFFFF);
+                gross.setTextAlign(Paint.Align.LEFT);
+                gross.setTextSize(130);
+                // zehn Punkte als Skala
+                for (int k = 1; k <= 10; k++) {
+                    float px = cx - 135 + (k - 1) * 30;
+                    p.setColor(k <= note ? nf : 0xFFFFFFFF);
+                    p.setAlpha(Math.round((k <= note ? 255 : 45) * a * ia));
+                    c.drawCircle(px, cy + 136, k == note ? 8 : 6, p);
+                }
+                // wer
+                Integer farbe = Familie.FARBEN.get(bewNamen[i]);
+                leisteText.setTextAlign(Paint.Align.CENTER);
+                leisteText.setColor(farbe != null ? farbe : 0xFFFFFFFF);
+                leisteText.setAlpha(Math.round(255 * a * (aktiv ? 1f : 0.65f)));
+                c.drawText(Bewerten.schild(bewNamen[i]), cx, cy + 186, leisteText);
+                leisteText.setColor(0xFFFFFFFF);
+                leisteText.setTextAlign(Paint.Align.LEFT);
+            }
+            knopf.setTextAlign(Paint.Align.LEFT);
+            knopf.setTextSize(30);
+            knopf.setAlpha(255);
+            // Hilfe unten
+            String hilfe = n > 1 ? "↑ ↓  Note      ← →  Papa / Mama      OK  abgeben      Zurück  später"
+                    : "↑ ↓  Note      OK  abgeben      Zurück  später";
+            klein.setTextAlign(Paint.Align.CENTER);
+            klein.setAlpha(Math.round(0xC8 * a));
+            c.drawText(hilfe, 960, oben + 650, klein);
+            klein.setTextAlign(Paint.Align.LEFT);
+            klein.setAlpha(0xB3);
+            p.setAlpha(255);
+            return false;
+        }
+
+        // -------------------------------------------------- Foto-Wand (wie in Plex)
+
+        private boolean rasterZeichnen(Canvas c, float dt) {
+            boolean weiter = false;
+            Seite s = seite;
+            // ruhiger, stark abgedunkelter Hintergrund, damit die Bilder leuchten
+            p.setColor(0xC7050608);
+            c.drawRect(0, 0, 1920, 1080, p);
+            p.setShader(new LinearGradient(0, 0, 0, 360, 0x73000000, 0x00000000, Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, 1920, 360, p);
+            p.setShader(null);
+
+            JSONObject fokus = fokusEintrag();
+            if (fokus != letzterFokus) {
+                letzterFokus = fokus;
+                fokusZoom = 1f;
+            }
+            fokusZoom = naeher(fokusZoom, 1.1f, dt, 60);
+            if (fokusZoom != 1.1f) weiter = true;
+
+            // grosser Kopf nur in der ersten Zeile, sonst rutscht er als kleine Zeile nach oben
+            float kz = s.akt == 0 ? 1f : 0f;
+            s.kopfAnim = naeher(s.kopfAnim, kz, dt, 70);
+            if (s.kopfAnim != kz) weiter = true;
+            s.anim = naeher(s.anim, s.akt, dt, 70);
+            if (s.anim != s.akt) weiter = true;
+            float k = Ani.EASE.getInterpolation(Math.max(0f, Math.min(1f, s.kopfAnim)));
+            float oben = RASTER_OBEN_KLEIN + (RASTER_OBEN_GROSS - RASTER_OBEN_KLEIN) * k;
+
+            // Kopf: Name, darunter Zeitraum und Anzahl (nur gross), rechts das Foto im Fokus
+            String name = s.kopf != null ? ordnerName(s.kopf) : s.titel;
+            float titelY = 80 + (190 - 80) * k;
+            gross.setTextSize(44 + 40 * k);
+            gross.setShadowLayer(Ani.schatten(24), 0, 3, 0x80000000);
+            c.drawText(kuerzen(name, gross, 1180 + 520 * k), LINKS - 3, titelY, gross);
+            gross.clearShadowLayer();
+            gross.setTextSize(130);
+            if (s.kopfInfo != null && !s.kopfInfo.isEmpty() && k > 0.02f) {
+                meta.setAlpha(Math.round(0xE6 * k));
+                c.drawText(s.kopfInfo, LINKS, titelY + 62 * k, meta);
+                meta.setAlpha(0xE6);
+            }
+            if (fokus != null && !fokus.optBoolean("IsFolder", false)) {
+                int nr = 0, gesamt = 0;
+                for (int i = 0; i < s.reihen.size(); i++) {
+                    Reihe rr = s.reihen.get(i);
+                    for (int j = 0; j < rr.eintraege.size(); j++) {
+                        if (rr.eintraege.get(j).optBoolean("IsFolder", false)) continue;
+                        gesamt++;
+                        if (i < s.akt || (i == s.akt && j <= rr.fokus)) nr++;
+                    }
+                }
+                String d = datum(fokus);
+                String txt = (d != null ? d + "      " : "") + nr + " / " + gesamt;
+                meta.setTextAlign(Paint.Align.RIGHT);
+                c.drawText(txt, 1810, 80 + (252 - 80) * k, meta);
+                meta.setTextAlign(Paint.Align.LEFT);
+            }
+
+            if (s.reihen.isEmpty()) {
+                if (s.leer != null) {
+                    c.drawText(s.leer, LINKS, oben + 60, meta);
+                } else {
+                    // lädt noch: Platzhalter-Wand
+                    for (int i = 0; i < 4; i++)
+                        for (int j = 0; j < FOTO_SPALTEN; j++) {
+                            float x = LINKS + j * (FOTO_W + FOTO_LUECKE), y = oben + i * (FOTO_H + FOTO_LUECKE);
+                            r.set(x, y, x + FOTO_W, y + FOTO_H);
+                            p.setColor(0x14FFFFFF);
+                            c.drawRoundRect(r, 12, 12, p);
+                        }
+                }
+                return weiter;
+            }
+
+            float step = s.kh + s.luecke;
+            float gesamtH = s.reihen.size() * step - s.luecke;
+            float maxScroll = Math.max(0f, gesamtH - (1080 - RASTER_OBEN_KLEIN - 40));
+            // die Zeile im Fokus steht als zweite Zeile, so sieht man immer, was darüber war
+            float scroll = Math.min(maxScroll, Math.max(0f, s.anim - 1f) * step);
+            float zoom = 1f + (fokusZoom - 1f) * 0.7f;
+
+            c.save();
+            c.clipRect(0, oben - 28, 1920, 1080);
+            float fx = -1, fy = -1;
+            JSONObject fe = null;
+            for (int i = 0; i < s.reihen.size(); i++) {
+                float y = oben + i * step - scroll;
+                if (y > 1080 || y + s.kh < oben - 28) continue;
+                float a = y < oben ? Math.max(0f, 1f - (oben - y) / (s.kh * 0.8f)) : 1f;
+                if (a <= 0.01f) continue;
+                Reihe rh = s.reihen.get(i);
+                for (int j = 0; j < rh.eintraege.size(); j++) {
+                    float x = LINKS + j * (s.kw + s.luecke);
+                    if (i == s.akt && j == rh.fokus) {
+                        fx = x;
+                        fy = y;
+                        fe = rh.eintraege.get(j);
+                        continue;
+                    }
+                    rasterKachel(c, rh.eintraege.get(j), x, y, s.kw, s.kh, 1f, Math.round(235 * a), false);
+                }
+            }
+            if (fe != null) rasterKachel(c, fe, fx, fy, s.kw, s.kh, zoom, 255, true);
+            c.restore();
+            return weiter;
+        }
+
+        private void rasterKachel(Canvas c, JSONObject e, float x, float y, int w0, int h0, float zoom, int al, boolean fokus) {
+            float cx = x + w0 / 2f, cy = y + h0 / 2f, w = w0 * zoom, hh = h0 * zoom;
+            r.set(cx - w / 2, cy - hh / 2, cx + w / 2, cy + hh / 2);
+            float rad = 12 * zoom;
+            if (fokus) {
+                p.setColor(0xFF000000);
+                p.setShadowLayer(Ani.schatten(40), 0, 18, 0x99000000);
+                c.drawRoundRect(r, rad, rad, p);
+                p.clearShadowLayer();
+            }
+            String url = rasterUrl(e);
+            Bitmap b = url != null ? bilder.sofort(url) : null;
+            if (b == null && url != null && !bilder.fehlgeschlagen(url)) bilder.laden(url, (u, bm) -> invalidate());
+            boolean ordner = e.optBoolean("IsFolder", false);
+            if (b != null) {
+                BitmapShader sh = new BitmapShader(b, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                float sk = Math.max(r.width() / b.getWidth(), r.height() / b.getHeight());
+                m.setScale(sk, sk);
+                m.postTranslate(r.left + (r.width() - b.getWidth() * sk) / 2f, r.top + (r.height() - b.getHeight() * sk) / 2f);
+                sh.setLocalMatrix(m);
+                p.setShader(sh);
+                p.setAlpha(al);
+                c.drawRoundRect(r, rad, rad, p);
+                p.setShader(null);
+            } else {
+                p.setColor(ordner ? 0x2EFFFFFF : 0x1AFFFFFF);
+                p.setAlpha(Math.round((ordner ? 0x2E : 0x1A) * al / 255f));
+                c.drawRoundRect(r, rad, rad, p);
+            }
+            if (ordner) {
+                // Name unten im Bild auf dunklem Verlauf, bis zu zwei Zeilen
+                c.save();
+                Path clip = new Path();
+                clip.addRoundRect(r, rad, rad, Path.Direction.CW);
+                c.clipPath(clip);
+                p.setShader(new LinearGradient(0, r.bottom - hh * 0.72f, 0, r.bottom, 0x00000000, 0xE6000000, Shader.TileMode.CLAMP));
+                p.setAlpha(al);
+                c.drawRect(r.left, r.bottom - hh * 0.72f, r.right, r.bottom, p);
+                p.setShader(null);
+                c.restore();
+                karte.setTextSize(23 * zoom);
+                karte.setAlpha(al);
+                StaticLayout sl = umbruch(ordnerName(e), karte, (int) (w - 28 * zoom), 2);
+                c.save();
+                c.translate(r.left + 14 * zoom, r.bottom - 12 * zoom - sl.getHeight());
+                sl.draw(c);
+                c.restore();
+                karte.setTextSize(26);
+                karte.setAlpha(255);
+            }
+            if ("Video".equals(typ(e))) {
+                float px = r.right - 26 * zoom, py = r.top + 26 * zoom;
+                p.setColor(0xB3000000);
+                p.setAlpha(Math.round(0xB3 * al / 255f));
+                c.drawCircle(px, py, 16 * zoom, p);
+                Path d = new Path();
+                d.moveTo(px - 5 * zoom, py - 7 * zoom);
+                d.lineTo(px + 7 * zoom, py);
+                d.lineTo(px - 5 * zoom, py + 7 * zoom);
+                d.close();
+                p.setColor(0xFFFFFFFF);
+                p.setAlpha(al);
+                c.drawPath(d, p);
+            }
+            if (fokus) {
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(4f);
+                p.setColor(0xF2FFFFFF);
+                c.drawRoundRect(r, rad, rad, p);
+                p.setStyle(Paint.Style.FILL);
+            }
+            p.setAlpha(255);
+        }
+
         private void karteZeichnen(Canvas c, JSONObject e, int form, float x, float y, float zoom, int al, boolean fokus) {
             int w0 = form == QUER ? QW : PW, h0 = form == QUER ? QH : PH;
             if (x > 1920 || x + w0 < -40) return;
@@ -1980,10 +2671,15 @@ public class FilmeActivity extends Activity {
                 c.drawRoundRect(r, rad, rad, p);
                 p.clearShadowLayer();
             }
+            String t = typ(e);
+            if ("Gesehen".equals(t)) {
+                gesehenKarte(c, e, rad, al);
+                p.setAlpha(255);
+                return;
+            }
             String url = kartenUrl(e, form);
             Bitmap b = url != null ? bilder.sofort(url) : null;
             if (b == null && url != null && !bilder.fehlgeschlagen(url)) bilder.laden(url, (u, bm) -> invalidate());
-            String t = typ(e);
             boolean ordner = "Folder".equals(t) || "PhotoAlbum".equals(t) || "CollectionFolder".equals(t);
             if (b != null) {
                 BitmapShader sh = new BitmapShader(b, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
@@ -2058,7 +2754,8 @@ public class FilmeActivity extends Activity {
                 p.setAlpha(al);
                 c.drawRoundRect(bar, 3 * zoom, 3 * zoom, p);
             }
-            if (Jellyfin.gesehen(e) && !ordner) {
+            boolean gesehenHaken = "Movie".equals(t) ? Gesehen.hat(e) : Jellyfin.gesehen(e);
+            if (gesehenHaken && !ordner) {
                 float cx2 = r.right - 26 * zoom, cy2 = r.top + 26 * zoom;
                 p.setColor(0xD9000000);
                 p.setAlpha(Math.round(0xD9 * al / 255f));
@@ -2073,6 +2770,54 @@ public class FilmeActivity extends Activity {
                 p.setStyle(Paint.Style.FILL);
             }
             p.setAlpha(255);
+        }
+
+        /** Kachel „Gesehen“ in den Kategorien: ruhiges Blaugrau, Auge mit Haken, Anzahl. */
+        private void gesehenKarte(Canvas c, JSONObject e, float rad, int al) {
+            p.setShader(new LinearGradient(r.left, r.top, r.right, r.bottom, 0xFF56637A, 0xFF242B38, Shader.TileMode.CLAMP));
+            p.setAlpha(al);
+            c.drawRoundRect(r, rad, rad, p);
+            p.setShader(null);
+            float cx = r.centerX(), cy = r.top + r.height() * 0.40f, s = r.width() / 196f;
+            // Auge
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(5f * s);
+            p.setStrokeCap(Paint.Cap.ROUND);
+            p.setColor(0xFFFFFFFF);
+            p.setAlpha(al);
+            Path auge = new Path();
+            auge.moveTo(cx - 46 * s, cy);
+            auge.quadTo(cx, cy - 44 * s, cx + 46 * s, cy);
+            auge.quadTo(cx, cy + 44 * s, cx - 46 * s, cy);
+            c.drawPath(auge, p);
+            p.setStyle(Paint.Style.FILL);
+            c.drawCircle(cx, cy, 13 * s, p);
+            // gelber Haken
+            p.setColor(GELB);
+            p.setAlpha(al);
+            c.drawCircle(cx + 40 * s, cy + 26 * s, 17 * s, p);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(4.2f * s);
+            p.setColor(0xFF1A1C22);
+            p.setAlpha(al);
+            c.drawLine(cx + 32 * s, cy + 26 * s, cx + 38 * s, cy + 32 * s, p);
+            c.drawLine(cx + 38 * s, cy + 32 * s, cx + 49 * s, cy + 19 * s, p);
+            p.setStyle(Paint.Style.FILL);
+            karte.setTextSize(30 * s);
+            karte.setAlpha(al);
+            karte.setTextAlign(Paint.Align.CENTER);
+            c.drawText("Gesehen", cx, r.top + r.height() * 0.74f, karte);
+            int n = e.optInt("ChildCount", 0);
+            klein.setTextSize(22 * s);
+            klein.setAlpha(Math.round(0xB3 * al / 255f));
+            klein.setTextAlign(Paint.Align.CENTER);
+            c.drawText(n == 1 ? "1 Film" : n + " Filme", cx, r.top + r.height() * 0.85f, klein);
+            karte.setTextAlign(Paint.Align.LEFT);
+            karte.setTextSize(26);
+            karte.setAlpha(255);
+            klein.setTextAlign(Paint.Align.LEFT);
+            klein.setTextSize(26);
+            klein.setAlpha(0xB3);
         }
 
         private String kuerzen(String t, TextPaint tp, float max) {
