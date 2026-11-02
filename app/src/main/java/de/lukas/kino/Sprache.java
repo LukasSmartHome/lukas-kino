@@ -127,8 +127,29 @@ public class Sprache extends Service {
         }
     }
 
+    /** Tasten für Push-to-Talk (per ADB änderbar: --es tasten "84,231,219"). */
+    private static volatile int[] tasten = {KeyEvent.KEYCODE_SEARCH, KeyEvent.KEYCODE_VOICE_ASSIST, KeyEvent.KEYCODE_ASSIST};
+
     static boolean istSprachTaste(int k) {
-        return k == KeyEvent.KEYCODE_SEARCH || k == KeyEvent.KEYCODE_VOICE_ASSIST || k == KeyEvent.KEYCODE_ASSIST;
+        for (int t : tasten) if (t == k) return true;
+        return false;
+    }
+
+    private void tastenLaden() {
+        String s = einst.getString("sprach_tasten", "");
+        if (s == null || s.trim().isEmpty()) return;
+        try {
+            String[] teile = s.split(",");
+            int[] neu = new int[teile.length];
+            for (int i = 0; i < teile.length; i++) {
+                String t = teile[i].trim();
+                neu[i] = t.matches("\\d+") ? Integer.parseInt(t) : KeyEvent.keyCodeFromString(t);
+            }
+            tasten = neu;
+            Log.i(TAG, "Sprach-Tasten: " + s);
+        } catch (Exception e) {
+            Log.w(TAG, "Sprach-Tasten ungültig: " + s);
+        }
     }
 
     @Override
@@ -154,8 +175,10 @@ public class Sprache extends Service {
                     aufnahmeStoppen();
                     wsZu("Bildschirm aus");
                 } else if (Intent.ACTION_SCREEN_ON.equals(i.getAction())) {
-                    Log.i(TAG, "Bildschirm an – Mikrofon an");
-                    aufnahmeStarten();
+                    if (wachwortAn()) {
+                        Log.i(TAG, "Bildschirm an – Mikrofon an (Wachwort)");
+                        aufnahmeStarten();
+                    }
                 }
             }
         };
@@ -163,8 +186,10 @@ public class Sprache extends Service {
         f.addAction(Intent.ACTION_SCREEN_ON);
         f.addAction(Intent.ACTION_SCREEN_OFF);
         registerReceiver(bildschirm, f);
+        tastenLaden();
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        if (pm == null || pm.isInteractive()) aufnahmeStarten();
+        // Mikrofon nur dauerhaft offen, wenn das Wachwort an ist (sonst nur, solange die Taste gedrückt ist).
+        if ((pm == null || pm.isInteractive()) && wachwortAn()) aufnahmeStarten();
         wsSchleifeStarten();
         Log.i(TAG, "Sprachdienst läuft, Server " + server() + ", Wachwort " + wachwortAn());
     }
@@ -180,7 +205,7 @@ public class Sprache extends Service {
         } else {
             b = new Notification.Builder(this);
         }
-        Notification n = b.setContentTitle("Claude hört auf „Hey Jarvis“")
+        Notification n = b.setContentTitle("Claude am Fernseher")
                 .setSmallIcon(R.drawable.icon)
                 .setOngoing(true)
                 .build();
@@ -198,11 +223,18 @@ public class Sprache extends Service {
                 geaendert = true;
             }
             if (i.hasExtra("wachwort")) {
-                e.putBoolean("sprach_wachwort", i.getBooleanExtra("wachwort", true));
+                e.putBoolean("sprach_wachwort", i.getBooleanExtra("wachwort", false));
+                geaendert = true;
+            }
+            if (i.hasExtra("tasten")) {
+                e.putString("sprach_tasten", i.getStringExtra("tasten"));
                 geaendert = true;
             }
             if (geaendert) {
-                e.apply();
+                e.commit();
+                tastenLaden();
+                if (wachwortAn()) aufnahmeStarten();
+                else if (!istModus(PTT) && !istModus(TIPP)) aufnahmeStoppen();
                 Log.i(TAG, "Einstellungen: Server " + server() + ", Wachwort " + wachwortAn());
                 wsZu("Einstellungen geändert");
             }
@@ -235,7 +267,7 @@ public class Sprache extends Service {
     }
 
     private boolean wachwortAn() {
-        return einst.getBoolean("sprach_wachwort", true);
+        return einst.getBoolean("sprach_wachwort", false);
     }
 
     // ------------------------------------------------------------------ Mikrofon
@@ -282,6 +314,9 @@ public class Sprache extends Service {
 
     private synchronized void aufnahmeStoppen() {
         aufnahmeLaeuft = false;
+        synchronized (sperre) {
+            vorlauf.clear();
+        }
         if (rec != null) {
             try {
                 rec.stop();
@@ -566,6 +601,8 @@ public class Sprache extends Service {
         }
         StartseitenWaechter.rahmenWeg();
         fokusAbgeben();
+        // Ohne Wachwort das Mikrofon wieder schließen (dann ist auch der grüne Punkt weg).
+        if (!wachwortAn()) aufnahmeStoppen();
     }
 
     // ------------------------------------------------------------------ Audiofokus
