@@ -3,7 +3,7 @@ name: App bauen
 on:
   push:
     branches: ['**']
-    paths-ignore: ['lg/**']
+    paths-ignore: ['lg/**', 'kino_web/**', 'repository.yaml']
   workflow_dispatch:
 
 permissions:
