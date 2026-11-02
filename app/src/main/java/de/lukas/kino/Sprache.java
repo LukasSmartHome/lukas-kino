@@ -110,10 +110,13 @@ public class Sprache extends Service {
     private volatile int liveRunde;
     private int sendeRunde;
     private long sendeZeit;
-    private String hoerStatus = "Ich höre zu …";
+    private String hoerStatus = "";
+    /** Claudes Antworttext, der erst erscheint, wenn die Stimme einsetzt. */
+    private String wartendeAntwort;
+    private final Runnable antwortZeigen = this::wartendeAntwortZeigen;
     private static final long LIVE_TAKT_MS = 900;
     private static final int LIVE_MAX_BYTES = RATE * 2 * 30;
-    private static final long GESPRAECH_OFFEN_MS = 120_000;
+    private static final long GESPRAECH_OFFEN_MS = 10 * 60_000;
     private static final String HINWEIS = "Info-Taste halten für Rückfrage · Zurück beendet";
 
     private MiniWebSocket ws;
@@ -425,6 +428,7 @@ public class Sprache extends Service {
             }
         }
         spielerStoppen();
+        wartendeAntwortZeigen();
         sendeRunde++;   // eine noch ausstehende Antwort gilt nicht mehr
         duLive = null;
         if (!aufnahmeLaeuft) aufnahmeStarten();
@@ -438,7 +442,7 @@ public class Sprache extends Service {
         }
         fokusHolen();
         neueSitzungFallsNoetig();
-        hoeren("Ich höre zu … (loslassen zum Senden)");
+        hoeren("");
         liveStarten();
         Log.i(TAG, "Push-to-Talk Start, Gespräch " + sitzung);
     }
@@ -456,7 +460,7 @@ public class Sprache extends Service {
                 rauschStuecke = 0;
                 spracheGehoert = false;
                 Log.i(TAG, "Kurzer Druck – Tipp-Modus (Ende über Sprechpause)");
-                haupt.post(() -> hoeren("Ich höre zu … (zum Senden nochmal drücken)"));
+                haupt.post(() -> hoeren("Zum Senden nochmal drücken"));
                 return;
             }
         }
@@ -480,7 +484,7 @@ public class Sprache extends Service {
         liveRunde++;    // Live-Text stoppen
         if (!wachwortAn()) aufnahmeStoppen();
         duAnlegen();
-        zeige(SprachRahmen.DENKT, "Ich denke …");
+        zeige(SprachRahmen.DENKT, "");
         final String url = server() + "/tv?sitzung=" + sitzung;
         final int runde = ++sendeRunde;
         sendeZeit = SystemClock.uptimeMillis();
@@ -640,12 +644,16 @@ public class Sprache extends Service {
             modus = BESCHAEFTIGT;
         }
         duErsetzen(erk);
-        if (!ant.isEmpty()) verlauf.add(new String[]{"claude", ant});
+        wartendeAntwort = ant.isEmpty() ? null : ant;
         if (mp3.isEmpty()) {
+            wartendeAntwortZeigen();
             gespraechWartet();
             return;
         }
-        zeige(SprachRahmen.ANTWORT, "Claude spricht …");
+        // Text und Stimme zeitgleich: bis der erste Ton kommt, tippt Claude (drei Punkte).
+        zeige(SprachRahmen.DENKT, "");
+        haupt.removeCallbacks(antwortZeigen);
+        haupt.postDelayed(antwortZeigen, 8000);
         spielerStoppen();
         try {
             MediaPlayer p = new MediaPlayer();
@@ -656,6 +664,7 @@ public class Sprache extends Service {
             p.setOnPreparedListener(x -> {
                 Log.i(TAG, "Ton ab " + (SystemClock.uptimeMillis() - gesendet) + " ms nach Loslassen");
                 x.start();
+                wartendeAntwortZeigen();
             });
             p.setOnCompletionListener(x -> {
                 spielerStoppen();
@@ -663,6 +672,7 @@ public class Sprache extends Service {
             });
             p.setOnErrorListener((x, a, b) -> {
                 Log.w(TAG, "Wiedergabe-Fehler " + a + "/" + b);
+                wartendeAntwortZeigen();
                 spielerStoppen();
                 gespraechWartet();
                 return true;
@@ -671,6 +681,7 @@ public class Sprache extends Service {
             p.prepareAsync();
         } catch (Exception e) {
             Log.w(TAG, "Antwort lässt sich nicht abspielen", e);
+            wartendeAntwortZeigen();
             gespraechWartet();
         }
     }
@@ -684,9 +695,17 @@ public class Sprache extends Service {
         else e[1] = erkannt;
     }
 
-    /** Antwort fertig: Rahmen bleibt offen für Rückfragen, Film darf weiterlaufen. */
+    private void wartendeAntwortZeigen() {
+        haupt.removeCallbacks(antwortZeigen);
+        String a = wartendeAntwort;
+        wartendeAntwort = null;
+        if (a == null) return;
+        verlauf.add(new String[]{"claude", a});
+        zeige(SprachRahmen.ANTWORT, "");
+    }
+
+    /** Antwort fertig: Rahmen bleibt offen für Rückfragen. Video/Musik bleibt pausiert, bis Zurück gedrückt wird. */
     private void gespraechWartet() {
-        fokusAbgeben();
         zeige(SprachRahmen.ANTWORT, HINWEIS);
         haupt.removeCallbacks(schliessen);
         haupt.postDelayed(schliessen, GESPRAECH_OFFEN_MS);
@@ -737,6 +756,8 @@ public class Sprache extends Service {
         liveRunde++;
         sendeRunde++;
         duLive = null;
+        wartendeAntwort = null;
+        haupt.removeCallbacks(antwortZeigen);
         verlauf.clear();
         sitzung = null;
         StartseitenWaechter.rahmenWeg();
@@ -840,7 +861,7 @@ public class Sprache extends Service {
                 }
                 fokusHolen();
                 neueSitzungFallsNoetig();
-                zeige(SprachRahmen.HOERT, "Ich höre zu …");
+                zeige(SprachRahmen.HOERT, "");
                 // Sicherheitsnetz, falls vom Laptop nichts mehr kommt.
                 haupt.postDelayed(schliessen, 20_000);
                 Log.i(TAG, "Wachwort erkannt");
@@ -853,7 +874,7 @@ public class Sprache extends Service {
                 haupt.removeCallbacks(schliessen);
                 haupt.postDelayed(schliessen, 90_000);
                 duAnlegen();
-                zeige(SprachRahmen.DENKT, "Ich denke …");
+                zeige(SprachRahmen.DENKT, "");
                 break;
             case "antwort":
                 if (!vomWachwort) return;
