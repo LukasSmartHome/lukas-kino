@@ -215,7 +215,13 @@ public class Sprache extends Service {
 
     @Override
     public int onStartCommand(Intent i, int flags, int startId) {
-        if (i != null) {
+        // Jeder startForegroundService()-Aufruf verlangt erneut startForeground(), sonst beendet Android die App.
+        try {
+            vordergrund();
+        } catch (Exception e) {
+            Log.w(TAG, "Vordergrund erneut nicht möglich", e);
+        }
+        if (i != null && einst != null) {
             SharedPreferences.Editor e = einst.edit();
             boolean geaendert = false;
             if (i.hasExtra("server")) {
