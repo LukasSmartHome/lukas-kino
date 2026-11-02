@@ -141,7 +141,10 @@ final class SprachRahmen extends View {
         for (int i = verlauf.size() - 1; i >= 0; i--) {
             String[] e = verlauf.get(i);
             boolean du = "du".equals(e[0]);
-            StaticLayout l = layout(e[1], du ? duStift : claudeStift, du ? blasenBreite - (int) (32 * d) : textBreite, du ? 3 : 8);
+            String text = e[1];
+            // Beim Mitschreiben zählen die neuesten Wörter: lange Sätze vorne kürzen.
+            if (du && text.length() > 160) text = "…" + text.substring(text.length() - 160);
+            StaticLayout l = layout(text, du ? duStift : claudeStift, du ? blasenBreite - (int) (32 * d) : textBreite, du ? 3 : 8);
             float hoehe = l.getHeight() + (du ? 24 * d : 0) + 18 * d;
             if (inhalt + hoehe > maxHoehe - 120 * d && !layouts.isEmpty()) break;
             inhalt += hoehe;

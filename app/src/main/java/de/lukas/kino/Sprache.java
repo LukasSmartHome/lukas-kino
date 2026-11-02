@@ -47,7 +47,9 @@ import java.util.UUID;
  *  - Mikro-Taste der Fernbedienung = Push-to-Talk: halten = zuhören, loslassen = abschicken
  *    (POST /tv auf dem Laptop). Sendet die Fernbedienung nur einen kurzen Druck, hört er bis
  *    zur Sprechpause zu (oder bis zum zweiten Druck).
- *  - Freisprechen: Solange der Fernseher an ist, geht das Mikrofon-Signal per WebSocket an den
+ *  - Live-Text: Während des Sprechens geht etwa jede Sekunde das bisher Gesprochene an POST /tv/zwischen,
+ *    der erkannte Text erscheint sofort in der „du“-Blase.
+ *  - Freisprechen (aus, Standard): Mikrofon-Signal per WebSocket an den
  *    Laptop (ws://…:10600/wake). Der erkennt „Hey Jarvis“, das Sprechende und schickt die Antwort.
  *  - Anzeige: oranger Rahmen + Glas-Karte als Overlay des StartseitenWaechters.
  *
@@ -102,6 +104,15 @@ public class Sprache extends Service {
     /** Gesprächsverlauf, solange der Rahmen offen ist: {"du"|"claude", text}. Zurück beendet das Gespräch. */
     private final List<String[]> verlauf = new ArrayList<>();
     private String sitzung;
+    /** Die „du“-Blase der laufenden Frage (wird live mitgeschrieben), sonst null. */
+    private String[] duLive;
+    /** Zählt hoch bei jedem neuen Druck/Senden/Abbruch – alte Live- oder Antwort-Ergebnisse werden verworfen. */
+    private volatile int liveRunde;
+    private int sendeRunde;
+    private long sendeZeit;
+    private String hoerStatus = "Ich höre zu …";
+    private static final long LIVE_TAKT_MS = 900;
+    private static final int LIVE_MAX_BYTES = RATE * 2 * 30;
     private static final long GESPRAECH_OFFEN_MS = 120_000;
     private static final String HINWEIS = "Info-Taste halten für Rückfrage · Zurück beendet";
 
@@ -414,6 +425,8 @@ public class Sprache extends Service {
             }
         }
         spielerStoppen();
+        sendeRunde++;   // eine noch ausstehende Antwort gilt nicht mehr
+        duLive = null;
         if (!aufnahmeLaeuft) aufnahmeStarten();
         synchronized (sperre) {
             modus = PTT;
@@ -425,7 +438,8 @@ public class Sprache extends Service {
         }
         fokusHolen();
         neueSitzungFallsNoetig();
-        zeige(SprachRahmen.HOERT, "Ich höre zu … (loslassen zum Senden)");
+        hoeren("Ich höre zu … (loslassen zum Senden)");
+        liveStarten();
         Log.i(TAG, "Push-to-Talk Start, Gespräch " + sitzung);
     }
 
@@ -442,7 +456,7 @@ public class Sprache extends Service {
                 rauschStuecke = 0;
                 spracheGehoert = false;
                 Log.i(TAG, "Kurzer Druck – Tipp-Modus (Ende über Sprechpause)");
-                haupt.post(() -> zeige(SprachRahmen.HOERT, "Ich höre zu … (zum Senden nochmal drücken)"));
+                haupt.post(() -> hoeren("Ich höre zu … (zum Senden nochmal drücken)"));
                 return;
             }
         }
@@ -463,25 +477,32 @@ public class Sprache extends Service {
             fehler("Zu kurz – halte die Taste, solange du sprichst");
             return;
         }
+        liveRunde++;    // Live-Text stoppen
         if (!wachwortAn()) aufnahmeStoppen();
-        verlauf.add(new String[]{"du", "…"});
+        duAnlegen();
         zeige(SprachRahmen.DENKT, "Ich denke …");
         final String url = server() + "/tv?sitzung=" + sitzung;
+        final int runde = ++sendeRunde;
+        sendeZeit = SystemClock.uptimeMillis();
         new Thread(() -> {
             try {
-                JSONObject j = postWav(url, pcm);
-                haupt.post(() -> antwortVerarbeiten(j));
+                JSONObject j = postWav(url, pcm, 90_000);
+                haupt.post(() -> {
+                    if (runde == sendeRunde) antwortVerarbeiten(j);
+                });
             } catch (Exception e) {
                 Log.w(TAG, "Senden an den Laptop fehlgeschlagen", e);
-                haupt.post(() -> fehler("Laptop nicht erreichbar"));
+                haupt.post(() -> {
+                    if (runde == sendeRunde) fehler("Laptop nicht erreichbar");
+                });
             }
         }, "LukasKinoSenden").start();
     }
 
-    private static JSONObject postWav(String url, byte[] pcm) throws Exception {
+    private static JSONObject postWav(String url, byte[] pcm, int leseZeit) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(4000);
-        c.setReadTimeout(90_000);
+        c.setReadTimeout(leseZeit);
         c.setDoOutput(true);
         c.setRequestMethod("POST");
         c.setRequestProperty("Content-Type", "audio/wav");
@@ -506,6 +527,69 @@ public class Sprache extends Service {
             return new JSONObject(text);
         } catch (Exception e) {
             return new JSONObject().put("fehler", "Antwort " + code);
+        }
+    }
+
+    // ------------------------------------------------------------------ Live-Text beim Sprechen
+
+    /** Schickt etwa jede Sekunde das bisher Gesprochene an /tv/zwischen (immer nur eine Anfrage gleichzeitig). */
+    private void liveStarten() {
+        final int runde = ++liveRunde;
+        final String url = server() + "/tv/zwischen?sitzung=" + sitzung;
+        Thread t = new Thread(() -> {
+            int letzteLaenge = 0;
+            SystemClock.sleep(600);
+            while (liveRunde == runde && dienstLaeuft) {
+                byte[] pcm;
+                synchronized (sperre) {
+                    if (modus != PTT && modus != TIPP) break;
+                    pcm = aufnahme.toByteArray();
+                }
+                long start = SystemClock.uptimeMillis();
+                if (pcm.length >= STUECK * 8 && pcm.length > letzteLaenge) {
+                    letzteLaenge = pcm.length;
+                    if (pcm.length > LIVE_MAX_BYTES) {
+                        byte[] ende = new byte[LIVE_MAX_BYTES];
+                        System.arraycopy(pcm, pcm.length - LIVE_MAX_BYTES, ende, 0, LIVE_MAX_BYTES);
+                        pcm = ende;
+                    }
+                    try {
+                        JSONObject j = postWav(url, pcm, 6000);
+                        final String text = j.optString("text", "").trim();
+                        Log.i(TAG, "Live-Text nach " + (SystemClock.uptimeMillis() - start) + " ms (" + text.length() + " Zeichen)");
+                        if (!text.isEmpty()) haupt.post(() -> liveZeigen(runde, text));
+                    } catch (Exception e) {
+                        Log.i(TAG, "Live-Text fehlgeschlagen: " + e.getMessage());
+                    }
+                }
+                long rest = LIVE_TAKT_MS - (SystemClock.uptimeMillis() - start);
+                if (rest > 0) SystemClock.sleep(rest);
+            }
+        }, "LukasKinoLive");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void liveZeigen(int runde, String text) {
+        if (runde != liveRunde || !(istModus(PTT) || istModus(TIPP))) return;
+        if (duLive == null) {
+            duLive = new String[]{"du", text};
+            verlauf.add(duLive);
+        } else {
+            duLive[1] = text;
+        }
+        zeige(SprachRahmen.HOERT, hoerStatus);
+    }
+
+    private void hoeren(String status) {
+        hoerStatus = status;
+        zeige(SprachRahmen.HOERT, status);
+    }
+
+    private void duAnlegen() {
+        if (duLive == null) {
+            duLive = new String[]{"du", "…"};
+            verlauf.add(duLive);
         }
     }
 
@@ -550,6 +634,8 @@ public class Sprache extends Service {
         String erk = j.optString("erkannt", "");
         String ant = j.optString("antwort", "");
         String mp3 = j.optString("audio", "");
+        final long gesendet = sendeZeit;
+        Log.i(TAG, "Antwort nach " + (SystemClock.uptimeMillis() - gesendet) + " ms");
         synchronized (sperre) {
             modus = BESCHAEFTIGT;
         }
@@ -567,12 +653,16 @@ public class Sprache extends Service {
                     .setUsage(AudioAttributes.USAGE_ASSISTANT)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
             p.setDataSource(mp3);
-            p.setOnPreparedListener(MediaPlayer::start);
+            p.setOnPreparedListener(x -> {
+                Log.i(TAG, "Ton ab " + (SystemClock.uptimeMillis() - gesendet) + " ms nach Loslassen");
+                x.start();
+            });
             p.setOnCompletionListener(x -> {
                 spielerStoppen();
                 gespraechWartet();
             });
             p.setOnErrorListener((x, a, b) -> {
+                Log.w(TAG, "Wiedergabe-Fehler " + a + "/" + b);
                 spielerStoppen();
                 gespraechWartet();
                 return true;
@@ -585,16 +675,13 @@ public class Sprache extends Service {
         }
     }
 
-    /** Ersetzt die „…“-Blase durch das Erkannte (oder entfernt sie, wenn nichts erkannt wurde). */
+    /** Setzt das endgültig Erkannte in die „du“-Blase (oder entfernt sie, wenn nichts erkannt wurde). */
     private void duErsetzen(String erkannt) {
-        for (int i = verlauf.size() - 1; i >= 0; i--) {
-            String[] e = verlauf.get(i);
-            if ("du".equals(e[0]) && "…".equals(e[1])) {
-                if (erkannt == null || erkannt.isEmpty()) verlauf.remove(i);
-                else e[1] = erkannt;
-                return;
-            }
-        }
+        String[] e = duLive;
+        duLive = null;
+        if (e == null) return;
+        if (erkannt == null || erkannt.isEmpty()) verlauf.remove(e);
+        else e[1] = erkannt;
     }
 
     /** Antwort fertig: Rahmen bleibt offen für Rückfragen, Film darf weiterlaufen. */
@@ -618,6 +705,7 @@ public class Sprache extends Service {
     }
 
     private void fehler(String text) {
+        liveRunde++;
         synchronized (sperre) {
             modus = BESCHAEFTIGT;
         }
@@ -646,6 +734,9 @@ public class Sprache extends Service {
             ausWachwort = false;
             aufnahme.reset();
         }
+        liveRunde++;
+        sendeRunde++;
+        duLive = null;
         verlauf.clear();
         sitzung = null;
         StartseitenWaechter.rahmenWeg();
@@ -662,6 +753,7 @@ public class Sprache extends Service {
         if (sitzung == null) {
             sitzung = UUID.randomUUID().toString().substring(0, 8);
             verlauf.clear();
+            duLive = null;
         }
     }
 
@@ -760,7 +852,7 @@ public class Sprache extends Service {
                 }
                 haupt.removeCallbacks(schliessen);
                 haupt.postDelayed(schliessen, 90_000);
-                verlauf.add(new String[]{"du", "…"});
+                duAnlegen();
                 zeige(SprachRahmen.DENKT, "Ich denke …");
                 break;
             case "antwort":
