@@ -1376,7 +1376,7 @@
   function leisteAuf(maus) {
     leiste = true;
     leisteMaus = !!maus;
-    leistePos = ansicht === A.SUCHE ? 0 : BEREICHE.indexOf(bereich) + 1;
+    leistePos = 0; // wie am TCL: Suche ist vorausgewählt
     zeichnen();
   }
 
@@ -1763,6 +1763,7 @@
         P.quelle = ms.Id || f.Id;
         P.streams = ms.MediaStreams || voll.MediaStreams || [];
       }
+      spurenListen();
     } catch (e) { /* dann eben ohne Spurliste */ }
     if (!P.offen || P.id !== f.Id) return;
     const v = el.video;
@@ -1929,13 +1930,19 @@
     return !!(at && at.length > 1);
   }
 
-  function spurenStart() {
+  function spurenListen() {
     const audio = P.streams.filter(function (s) { return s.Type === 'Audio'; });
     P.ton = audio.map(function (s) { return { name: spurName(s, true), stream: s }; });
     // aktive Spur: die Standardspur der Datei
     P.tonAktiv = -1;
     audio.forEach(function (s, j) { if (s.IsDefault && P.tonAktiv < 0) P.tonAktiv = j; });
     if (P.tonAktiv < 0 && audio.length) P.tonAktiv = 0;
+    const unter = P.streams.filter(function (s) { return s.Type === 'Subtitle' && textUntertitel(s); });
+    P.unter = [{ name: 'Aus', stream: null }].concat(unter.map(function (s) { return { name: spurName(s, false), stream: s }; }));
+  }
+
+  function spurenStart() {
+    const audio = P.streams.filter(function (s) { return s.Type === 'Audio'; });
     // Deutsch bevorzugen
     const at = el.video.audioTracks;
     if (at && at.length === audio.length && audio.length > 1) {
@@ -1946,7 +1953,6 @@
     }
     // Untertitel: nur erzwungene deutsche (bzw. erzwungene in der Sprache der Tonspur) automatisch
     const unter = P.streams.filter(function (s) { return s.Type === 'Subtitle' && textUntertitel(s); });
-    P.unter = [{ name: 'Aus', stream: null }].concat(unter.map(function (s) { return { name: spurName(s, false), stream: s }; }));
     const tonSprache = String(((P.ton[P.tonAktiv] || {}).stream || {}).Language || 'ger').toLowerCase();
     let auto = null;
     unter.forEach(function (s) {

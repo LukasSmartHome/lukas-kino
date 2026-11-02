@@ -45,6 +45,7 @@ body {
   top: 0;
   width: 1920px;
   height: 1080px;
+  z-index: 0; /* eigene Stapelebene: z-index der Bilder darin bleibt drinnen */
 }
 
 .aus { display: none !important; }
