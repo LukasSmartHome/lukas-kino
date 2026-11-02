@@ -577,18 +577,22 @@
     // { filme: { HA-ID: {t, j, jf} } } – HA-ID ist die alte Plex-ID, sonst jf:<Jellyfin-ID>
     plexLaden: async function () {
       if (this.plex && Date.now() - (this.plexZeit || 0) < 1800000) return;
-      const p = {}, zuHa = {};
+      const p = {}, zuHa = {}, zuJf = {};
       try {
         const r = await fetch('../plexfilme.json?t=' + Date.now());
         if (r.ok) {
           const f = ((await r.json()) || {}).filme || {};
           Object.keys(f).forEach(function (id) {
             if (f[id] && f[id].t) p[familienSchluessel(f[id].t, f[id].j || '')] = id;
-            if (f[id] && f[id].jf) zuHa[f[id].jf] = id;
+            if (f[id] && f[id].jf) {
+              zuHa[f[id].jf] = id;
+              zuJf[id] = f[id].jf;
+            }
           });
         }
       } catch (e) { /* ohne Katalog: dann jf:<ID> */ }
       this.jfZuHa = zuHa;
+      this.haZuJf = zuJf;
       this.plexZeit = Date.now();
       const roh = this.roh || {};
       [roh.bewertungen || {}, roh.merktitel || {}].forEach(function (q, art) {
@@ -662,6 +666,7 @@
 
   function merklisteSeite() {
     const s = neueSeite('Merkliste');
+    s.ohneFilter = true;
     const l = merk.liste();
     const filme = l.filter(function (e) { return typ(e) !== 'Series'; });
     const serien = l.filter(function (e) { return typ(e) === 'Series'; });
@@ -787,6 +792,7 @@
       infoSchluessel = '';
       if (ansicht === A.LISTE || ansicht === A.DETAIL) zeichnen();
       try { await merk.ausHa(j); } catch (x) { /* Merkliste bleibt, wie sie war */ }
+      try { await gesehenAusHa(j); } catch (x) { /* Gesehen bleibt, wie es war */ }
       try { await empfohlenAusHa(j); } catch (x) { /* Empfohlen bleibt, wie es war */ }
     } catch (e) { /* ohne Bewertungen weiter */ }
   }
@@ -855,8 +861,9 @@
   function empfohlenSeite() {
     const s = neueSeite('Empfohlen');
     empfohlen.gruppen.forEach(function (g) {
-      for (let i = 0; i < g.eintraege.length; i += 8) {
-        s.reihen.push(reiheAus(i === 0 ? 'Mit ' + g.note + ' bewertet' : '', g.eintraege.slice(i, i + 8), POSTER));
+      const l = g.eintraege.filter(function (e) { return !istGesehen(e); });
+      for (let i = 0; i < l.length; i += 8) {
+        s.reihen.push(reiheAus(i === 0 ? 'Mit ' + g.note + ' bewertet' : '', l.slice(i, i + 8), POSTER));
       }
     });
     if (!s.reihen.length) s.leer = empfohlen.sig === null ? 'Bewertungen werden geladen …' : 'Noch nichts mit 7 oder besser bewertet';
@@ -875,6 +882,245 @@
       infoSchluessel = '';
       zeichnen();
     }
+  }
+
+  // ------------------------------------------------------------------ Gesehen je Profil (ab 80 %)
+  // Quelle: Home Assistant (sensor.kino_gesehen, Paket kino_gesehen.yaml) über bewertungen.json → gesehen → Profil.
+  // Gesehene Filme verschwinden bei diesem Profil aus Neu, den Kategorien, Alle Filme und Empfohlen und stehen in der
+  // Kategorie „Gesehen“ ganz rechts. Weiterschauen, Merkliste und Suche zeigen weiter alles.
+
+  const GESEHEN_GRENZE = 0.8;
+  const ges = { ids: [], menge: {}, lokal: {}, sig: '' };
+
+  function istGesehen(e) { return !!(e && typ(e) === 'Movie' && ges.menge[e.Id]); }
+
+  async function gesehenAusHa(j) {
+    await merk.plexLaden();
+    await filmIndexLaden();
+    const mein = ((j && j.gesehen) || {})[PERSON.ha] || {};
+    const l = [];
+    Object.keys(mein).forEach(function (id) {
+      const x = mein[id] || {};
+      let jfId = id.indexOf('jf:') === 0 ? id.substring(3) : (merk.haZuJf || {})[id];
+      if (!jfId) jfId = jfIdFuerTitel(x.t);
+      if (jfId) l.push({ id: jfId, z: String(x.z || '') });
+    });
+    l.sort(function (a, b) { return b.z.localeCompare(a.z); });
+    const ids = [];
+    l.forEach(function (x) { if (ids.indexOf(x.id) < 0) ids.push(x.id); });
+    Object.keys(ges.lokal).forEach(function (id) {
+      if (ids.indexOf(id) >= 0 || ges.lokal[id] < Date.now()) delete ges.lokal[id];
+      else ids.unshift(id);
+    });
+    gesehenSetzen(ids);
+  }
+
+  function gesehenSetzen(ids) {
+    const sig = ids.join(',');
+    if (sig === ges.sig) return;
+    ges.ids = ids;
+    ges.menge = {};
+    ids.forEach(function (id) { ges.menge[id] = true; });
+    ges.sig = sig;
+    gesehenGeaendert();
+  }
+
+  /** Gerade eben ab 80 % geschaut: sofort als gesehen führen und HA Bescheid geben. */
+  function gesehenDazu(f) {
+    if (!f || typ(f) !== 'Movie' || istGesehen(f)) return;
+    ges.lokal[f.Id] = Date.now() + 15 * 60000;
+    gesehenSetzen([f.Id].concat(ges.ids));
+    (async function () {
+      try {
+        await merk.plexLaden();
+        await merk.senden({ art: 'gesehen', wer: PERSON.ha, id: merk.plexIdFuer(f) || 'jf:' + f.Id,
+          titel: (f.Name || '') + (f.ProductionYear ? ' (' + f.ProductionYear + ')' : ''), an: 'true' });
+      } catch (x) { /* Automation 44 trägt es sonst ohnehin ein */ }
+    })();
+  }
+
+  function gesehenKachel() {
+    return { Type: 'Gesehen', Id: '@gesehen', Name: 'Gesehen', ChildCount: ges.ids.length };
+  }
+
+  /** Neue Gesehen-Liste: Gesehenes aus allen offenen Reihen nehmen, Kachel nachziehen. */
+  function gesehenGeaendert() {
+    const alle = Object.keys(startseiten).map(function (k) { return startseiten[k]; }).concat(stapel);
+    if (alle.indexOf(seite) < 0) alle.push(seite);
+    alle.forEach(function (s) {
+      if (s.ohneFilter || s.raster) return;
+      for (let i = s.reihen.length - 1; i >= 0; i--) {
+        const r = s.reihen[i];
+        if (r.titel === 'Weiterschauen' || r.titel === 'Merkliste') continue;
+        const vorher = r.eintraege.length;
+        r.eintraege = r.eintraege.filter(function (e) { return !istGesehen(e); });
+        if (r.eintraege.length === vorher) continue;
+        r.version++;
+        r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.length - 1));
+        if (!r.eintraege.length && r.geladen && s.reihen.length > 1) {
+          s.reihen.splice(i, 1);
+          if (s.akt > i || s.akt >= s.reihen.length) s.akt = Math.max(0, s.akt - 1);
+        }
+      }
+    });
+    const start = startseiten.filme;
+    if (start) {
+      start.reihen.forEach(function (r) {
+        if (r.titel !== 'Kategorien') return;
+        r.eintraege = r.eintraege.filter(function (e) { return typ(e) !== 'Gesehen'; });
+        if (ges.ids.length) r.eintraege.push(gesehenKachel());
+        r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.length - 1));
+        r.version++;
+      });
+    }
+    if (startseiten.empfohlen) empfohlenGeaendert();
+    infoSchluessel = '';
+    if (ansicht === A.LISTE || ansicht === A.DETAIL) zeichnen();
+  }
+
+  function gesehenOeffnen(k) {
+    const neu = neueSeite('Gesehen');
+    neu.kopf = k;
+    neu.ohneFilter = true;
+    neu.reihen.push(neueReihe('Gesehen', null, POSTER));
+    seiteZeigen(neu);
+    const ids = ges.ids.slice();
+    (async function () {
+      const gefunden = {};
+      for (let i = 0; i < ids.length; i += 60) {
+        try {
+          const a = await jf.liste('/Items?userId=' + jf.benutzer + '&ids=' + ids.slice(i, i + 60).join(',') + '&fields=' + FELDER);
+          a.forEach(function (e) { gefunden[e.Id] = e; });
+        } catch (x) { /* dann fehlen sie */ }
+      }
+      const l = ids.map(function (id) { return gefunden[id]; }).filter(Boolean);
+      neu.reihen = [];
+      for (let i = 0; i < l.length; i += 8) neu.reihen.push(reiheAus(i === 0 ? (l.length === 1 ? '1 Film' : l.length + ' Filme') : '', l.slice(i, i + 8), POSTER));
+      if (!neu.reihen.length) neu.leer = 'Noch nichts gesehen';
+      if (seite === neu) fokusGeaendert();
+    })();
+  }
+
+  // ------------------------------------------------------------------ Bewerten (nach dem Film ab 80 % und in den Details)
+  // Lukas und Jonas haben einen Zähler, die Eltern zwei (links Papa = Uli, rechts Mama = Moni). Start 5 bzw. die alte Note.
+  // Geht über den Webhook von Automation 84 an Skript 00v (Plex bewerten) – dieselben Bewertungen wie im Dashboard.
+
+  const B = { offen: false, film: null, namen: [], noten: [], aktiv: 0, danke: 0, timer: 0 };
+  const PERSONEN_FARBE = { Lukas: '#F2B705', Moni: '#E8559A', Uli: '#1FA463', Jonas: '#2F6FEB' };
+
+  function bewNamen() { return PERSON.schluessel === 'eltern' ? ['Uli', 'Moni'] : [PERSON.ha]; }
+  function bewFrage() {
+    return PERSON.schluessel === 'eltern' ? 'Mama und Papa, wie hat euch der Film gefallen?' : PERSON.ha + ', wie hat dir der Film gefallen?';
+  }
+  function bewSchild(n) { return n === 'Uli' ? 'Papa · Uli' : n === 'Moni' ? 'Mama · Moni' : n; }
+  function notenFarbe(n) {
+    const st = ['#E5484D', '#F97316', '#F2B705', '#22C55E'];
+    const t = begrenzen((n - 1) / 9, 0, 1) * (st.length - 1), i = Math.min(st.length - 2, Math.floor(t));
+    return mischen(st[i], st[i + 1], t - i);
+  }
+
+  function eigeneNoten(e) {
+    const f = familieFuer(e), l = [];
+    bewNamen().forEach(function (n) { if (f && f.noten[n]) l.push(f.noten[n]); });
+    return l.length ? 'Bewertet  ·  ' + l.join(' / ') : 'Bewerten';
+  }
+
+  function bewertenOeffnen(f) {
+    if (!f || typ(f) !== 'Movie') return;
+    const fam = familieFuer(f);
+    B.film = f;
+    B.namen = bewNamen();
+    B.noten = B.namen.map(function (n) {
+      const w = fam && fam.noten[n] ? Number(fam.noten[n]) : 0;
+      return w >= 1 && w <= 10 ? w : 5;
+    });
+    B.aktiv = 0;
+    B.danke = 0;
+    B.offen = true;
+    if (leiste) leisteZu();
+    bewertenZeichnen();
+  }
+
+  function bewertenSchliessen() {
+    B.offen = false;
+    B.danke = 0;
+    clearTimeout(B.timer);
+    bewertenZeichnen();
+  }
+
+  function bewertenTaste(k) {
+    if (B.danke) {
+      if (k === TASTE.ZURUECK || k === TASTE.OK) bewertenSchliessen();
+      return;
+    }
+    if (k === TASTE.ZURUECK) return bewertenSchliessen();
+    if (k === TASTE.HOCH) B.noten[B.aktiv] = Math.min(10, B.noten[B.aktiv] + 1);
+    else if (k === TASTE.RUNTER) B.noten[B.aktiv] = Math.max(1, B.noten[B.aktiv] - 1);
+    else if (k === TASTE.LINKS && wiederholung === 0) B.aktiv = Math.max(0, B.aktiv - 1);
+    else if (k === TASTE.RECHTS && wiederholung === 0) B.aktiv = Math.min(B.namen.length - 1, B.aktiv + 1);
+    else if (k === TASTE.OK && wiederholung === 0) return bewertenSenden();
+    bewertenZeichnen();
+  }
+
+  function bewertenSenden() {
+    const f = B.film, namen = B.namen.slice(), noten = B.noten.slice();
+    B.danke = Date.now();
+    bewertenZeichnen();
+    B.timer = setTimeout(bewertenSchliessen, 2200);
+    (async function () {
+      try {
+        await merk.plexLaden();
+        const id = merk.plexIdFuer(f) || 'jf:' + f.Id;
+        const titel = (f.Name || '') + (f.ProductionYear ? ' (' + f.ProductionYear + ')' : '');
+        for (let i = 0; i < namen.length; i++) {
+          await merk.senden({ art: 'bewerten', wer: namen[i], id: id, titel: titel, wertung: String(noten[i]) });
+        }
+        setTimeout(familieLaden, 3000);
+      } catch (x) {
+        hinweis('Bewertung ließ sich nicht speichern');
+      }
+    })();
+  }
+
+  function bewertenZeichnen() {
+    const b = el.bewerten;
+    b.classList.toggle('aus', !B.offen);
+    if (!B.offen) return;
+    const zwei = B.namen.length > 1;
+    let h = '<div class="glas b-karte' + (zwei ? ' zwei' : '') + '">';
+    const film = B.film ? String(B.film.Name || '') : '';
+    if (B.danke) {
+      const zus = B.namen.map(function (n, i) { return (zwei ? bewSchild(n) + ': ' : '') + B.noten[i] + ' von 10'; }).join('     ');
+      h += '<div class="b-haken"><svg viewBox="0 0 40 40" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round" '
+        + 'stroke-linejoin="round"><path d="M11 21l6 6 13-14"/></svg></div>'
+        + '<div class="b-danke"></div><div class="b-film b-zus"></div>';
+      h += '</div>';
+      b.innerHTML = h;
+      b.querySelector('.b-danke').textContent = PERSON.schluessel === 'eltern' ? 'Danke für eure Bewertung!' : 'Danke für deine Bewertung!';
+      b.querySelector('.b-zus').textContent = film + '   ·   ' + zus;
+      return;
+    }
+    h += '<div class="b-film"></div><div class="b-frage"></div><div class="b-zaehler">';
+    B.namen.forEach(function (n, i) {
+      const note = B.noten[i], farbe = notenFarbe(note);
+      let punkte = '';
+      for (let k = 1; k <= 10; k++) punkte += '<i style="' + (k <= note ? 'background:' + farbe + ';opacity:1' : '') + (k === note ? ';transform:scale(1.35)' : '') + '"></i>';
+      h += '<div class="b-spalte' + (i === B.aktiv ? ' aktiv' : '') + '">'
+        + '<div class="b-pfeil hoch' + (note >= 10 ? ' grau' : '') + '"></div>'
+        + '<div class="b-zahl" style="color:' + farbe + '">' + note + '</div>'
+        + '<div class="b-pfeil runter' + (note <= 1 ? ' grau' : '') + '"></div>'
+        + '<div class="b-punkte">' + punkte + '</div>'
+        + '<div class="b-wer" style="color:' + (PERSONEN_FARBE[n] || '#fff') + '"></div></div>';
+    });
+    h += '</div></div><div class="b-hilfe"></div>';
+    b.innerHTML = h;
+    b.querySelector('.b-film').textContent = film;
+    b.querySelector('.b-frage').textContent = bewFrage();
+    const wer = b.querySelectorAll('.b-wer');
+    B.namen.forEach(function (n, i) { wer[i].textContent = bewSchild(n); });
+    b.querySelector('.b-hilfe').textContent = zwei
+      ? '↑ ↓  Note      ← →  Papa / Mama      OK  abgeben      Zurück  später'
+      : '↑ ↓  Note      OK  abgeben      Zurück  später';
   }
 
   function familieFuer(e) {
@@ -929,7 +1175,7 @@
     return r;
   }
 
-  function neueSeite(titel) { return { titel: titel, reihen: [], akt: 0, leer: null, kopf: null }; }
+  function neueSeite(titel) { return { titel: titel, reihen: [], akt: 0, leer: null, kopf: null, ohneFilter: false, raster: false }; }
 
   let ansicht = A.LADEN;
   let bereich = 'filme';
@@ -973,6 +1219,8 @@
       + '<div class="ebene" id="bgs"><div class="bg"></div><div class="bg"></div></div>'
       + '<div class="ebene" id="verlauf"></div>'
       + '<div class="ebene" id="liste"><div id="reihen"></div><div id="info"></div></div>'
+      + '<div class="ebene aus" id="wand"><div class="w-kopf"><div class="w-name"></div><div class="w-info"></div>'
+      + '  <div class="w-rechts"></div></div><div class="w-fenster"><div class="w-gitter"></div><div class="w-leer"></div></div></div>'
       + '<div class="ebene aus" id="suche">'
       + '  <div class="glas feld">' + svg(SYMBOLE[0]) + '<div class="text"></div></div>'
       + '  <div class="tastatur"></div><div class="kopf"></div><div class="held"></div>'
@@ -990,6 +1238,7 @@
       + '    <div class="p-zeit t-zeit"></div><div class="p-rest t-rest"></div>'
       + '    <div class="p-pause t-pause aus"></div><div class="p-meldung t-meldung aus"></div></div></div>'
       + '<div class="hinweis aus"></div>'
+      + '<div class="ebene aus" id="bewerten"></div>'
       + '<div class="ebene aus" id="player">'
       + '  <video preload="auto"></video>'
       + '  <div class="p-untertitel"></div>'
@@ -1053,6 +1302,13 @@
     el.tPause = q('#trailer .t-pause');
     el.tMeldung = q('#trailer .t-meldung');
     el.hinweis = q('.hinweis');
+    el.bewerten = q('#bewerten');
+    el.wand = q('#wand');
+    el.wName = q('#wand .w-name');
+    el.wInfo = q('#wand .w-info');
+    el.wRechts = q('#wand .w-rechts');
+    el.wGitter = q('#wand .w-gitter');
+    el.wLeer = q('#wand .w-leer');
 
     // Seitenleiste
     el.lEintraege = LEISTE.map(function (name, i) {
@@ -1236,9 +1492,11 @@
       r._merk = true;
       s.reihen.push(r);
     }
-    s.reihen.push(reiheAus('Neu', neu, POSTER));
-    if (samml.length) {
-      s.reihen.push(reiheAus('Kategorien', samml, POSTER));
+    s.reihen.push(reiheAus('Neu', neu.filter(function (e) { return !istGesehen(e); }), POSTER));
+    if (samml.length || ges.ids.length) {
+      const kat = reiheAus('Kategorien', samml, POSTER);
+      if (ges.ids.length) kat.eintraege.push(gesehenKachel());
+      s.reihen.push(kat);
       samml.forEach(function (k) { s.reihen.push(neueReihe(k.Name, 'samml:' + k.Id, POSTER)); });
     }
     s.reihen.push(neueReihe('Alle Filme', '@alle', POSTER));
@@ -1272,21 +1530,15 @@
     } else {
       jf.fotoWurzel(fotosId).then(function (a) { speicherSetzen(schluessel, JSON.stringify(a)); }, function () {});
     }
-    const jahre = [], tage = [], lose = [];
-    let urlaube = null;
-    inhalt.forEach(function (o) {
-      const name = String(o.Name || '').trim();
-      if (!o.IsFolder) lose.push(o);
-      else if (name.toLowerCase().indexOf('urlaube') === 0) urlaube = o;
-      else if (/^\d{4}$/.test(name)) jahre.push(o);
-      else tage.push(o);
-    });
-    jahre.reverse();
-    if (urlaube) s.reihen.push(neueReihe('Urlaube', 'ordner:' + urlaube.Id, QUER));
-    if (jahre.length) s.reihen.push(reiheAus('Jahre', jahre, QUER));
-    if (tage.length) s.reihen.push(reiheAus('Erinnerungen', tage, QUER));
-    if (lose.length) s.reihen.push(reiheAus('Einzelne Bilder', lose, QUER));
-    if (!s.reihen.length) s.leer = 'Die Fotos werden gerade eingelesen';
+    // Wie in Plex: alle Ordner nach Namen als Kachel-Wand, lose Bilder dahinter
+    const ordner = inhalt.filter(function (o) { return o && o.IsFolder; });
+    const lose = inhalt.filter(function (o) { return o && !o.IsFolder; });
+    if (!ordner.length && !lose.length) {
+      s.leer = 'Die Fotos werden gerade eingelesen';
+      return s;
+    }
+    rasterFuellen(s, ordner.concat(lose));
+    s.kopfInfo = ordner.length + ' Ordner' + (lose.length ? ' · ' + anzahlText(lose) : '');
     return s;
   }
 
@@ -1298,7 +1550,7 @@
       if (r.geladen || r.laedt || !r.quelle) continue;
       r.laedt = true;
       holen(r.quelle).then(function (a) {
-        r.eintraege = a.filter(Boolean);
+        r.eintraege = a.filter(function (e) { return e && (s.ohneFilter || !istGesehen(e)); });
         r.geladen = true;
         r.laedt = false;
         r.version++;
@@ -1322,8 +1574,13 @@
   }
 
   /** Nach dem Film: Weiterschauen und den Film selbst frisch holen. */
-  async function nachDemFilm(f) {
+  async function nachDemFilm(f, quote) {
     const b = bereich;
+    // ab 80 %: bei diesem Profil gesehen, und fragen, wie er gefallen hat
+    if (f && typ(f) === 'Movie' && quote >= GESEHEN_GRENZE) {
+      gesehenDazu(f);
+      bewertenOeffnen(f);
+    }
     try {
       const l = await Promise.all([f ? jf.film(f.Id) : Promise.resolve(null),
         b === 'serien' ? jf.serienWeiterschauen() : jf.weiterschauen()]);
@@ -1394,10 +1651,15 @@
   }
 
   function hintergrundLaden() {
-    const e = heldEintrag();
-    if (!e) return;
-    if (typ(e) === 'BoxSet') {
-      hintergrundSetzen(null, FARBEN[e.Name] || '#444444');
+    // In der Foto-Wand bleibt der Hintergrund ruhig: Titelbild des Ordners (Startseite: dunkel)
+    const wand = seite.raster && ansicht === A.LISTE;
+    const e = wand ? seite.kopf : heldEintrag();
+    if (!e) {
+      if (wand) hintergrundSetzen(null, '#1B1E25');
+      return;
+    }
+    if (typ(e) === 'BoxSet' || typ(e) === 'Gesehen') {
+      hintergrundSetzen(null, typ(e) === 'Gesehen' ? '#3E4A5E' : FARBEN[e.Name] || '#444444');
       return;
     }
     const url = hintergrundUrl(e);
@@ -1513,6 +1775,13 @@
         });
       });
     }
+    if (url && seite.raster && seite.wKarten) {
+      Object.keys(seite.wKarten).forEach(function (k) {
+        const c = seite.wKarten[k];
+        if (c._id !== ordner || c.querySelector('img')) return;
+        wandBild(c, url.replace('fillWidth=' + QW * 2, 'fillWidth=' + ORDNER_RASTER.kw * 2));
+      });
+    }
     const e = heldEintrag();
     if (e && e.Id === ordner) fokusGeaendert();
   }
@@ -1608,12 +1877,15 @@
     el.trailer.classList.toggle('aus', !T.offen);
     el.bgs.classList.toggle('aus', !(liste || suche));
     el.verlauf.classList.toggle('aus', !(liste || suche));
-    el.liste.classList.toggle('aus', !liste);
+    const wand = liste && seite.raster && ansicht === A.LISTE;
+    el.liste.classList.toggle('aus', !liste || wand);
+    el.wand.classList.toggle('aus', !wand);
     el.suche.classList.toggle('aus', !suche);
     el.mitte.classList.toggle('aus', !mitte);
     el.foto.classList.toggle('aus', ansicht !== A.FOTO);
 
-    if (liste) {
+    if (wand) wandZeichnen();
+    else if (liste) {
       reihenZeichnen();
       infoPlanen();
     }
@@ -1740,6 +2012,16 @@
     const t = typ(e), ordner = istOrdner(e);
     const c = div('karte' + (form === QUER ? ' quer' : '') + (ordner ? ' ordner' : ''));
     if (!e) return c;
+    if (t === 'Gesehen') {
+      c.classList.add('k-gesehen');
+      c.innerHTML = '<svg viewBox="0 0 120 80" fill="none"><path d="M14 40Q60 -4 106 40Q60 84 14 40Z" stroke="#fff" stroke-width="5" '
+        + 'stroke-linejoin="round"/><circle cx="60" cy="40" r="13" fill="#fff"/><circle cx="98" cy="64" r="16" fill="' + GELB + '"/>'
+        + '<path d="M90 64l6 6 10-12" stroke="#1A1C22" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        + '<div class="kg-name">Gesehen</div><div class="kg-zahl"></div>';
+      const n = e.ChildCount || 0;
+      c.querySelector('.kg-zahl').textContent = n === 1 ? '1 Film' : n + ' Filme';
+      return c;
+    }
     if (!ordner && t !== 'Photo' && t !== 'Video') c.appendChild(div('k-name', e.Name || ''));
     const url = kartenUrl(e, form);
     if (url) {
@@ -1768,7 +2050,7 @@
       b.firstChild.style.width = (f * 100) + '%';
       c.appendChild(b);
     }
-    if (gesehen(e) && !ordner) {
+    if ((t === 'Movie' ? istGesehen(e) : gesehen(e)) && !ordner) {
       const h = div('k-haken');
       h.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="' + GELB + '" stroke-width="3.2" stroke-linecap="round" '
         + 'stroke-linejoin="round"><path d="M4 10l4.5 5L16 5"/></svg>';
@@ -1814,7 +2096,7 @@
       if (seite.leer) leerInfo(box);
       else if (e) {
         const t = typ(e);
-        if (t === 'BoxSet') kategorieInfo(box, e);
+        if (t === 'BoxSet' || t === 'Gesehen') kategorieInfo(box, e);
         else if (istOrdner(e)) ordnerInfo(box, e);
         else if (t === 'Photo' || t === 'Video') fotoInfo(box, e);
         else filmInfo(box, e);
@@ -1932,7 +2214,9 @@
     merken: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round">'
       + '<path d="M15 5v20M5 15h20"/></svg>',
     gemerkt: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" '
-      + 'stroke-linejoin="round"><path d="M5 15.5l6.5 6.5L25 8.5"/></svg>'
+      + 'stroke-linejoin="round"><path d="M5 15.5l6.5 6.5L25 8.5"/></svg>',
+    bewerten: '<svg viewBox="0 0 30 30"><path d="M15 3.5l3.4 7 7.6 1-5.5 5.3 1.4 7.6L15 20.8l-6.9 3.6 1.4-7.6L4 11.5l7.6-1z" '
+      + 'fill="currentColor"/></svg>'
   };
 
   function knoepfeFuer(e) {
@@ -1951,6 +2235,7 @@
     if (typ(e) === 'Movie') {
       const drin = merk.hat(e.Id);
       l.push({ art: 'merken', text: drin ? 'Gemerkt' : 'Merken', symbol: drin ? 'gemerkt' : 'merken' });
+      l.push({ art: 'bewerten', text: eigeneNoten(e), symbol: 'bewerten' });
     }
     return l;
   }
@@ -1983,6 +2268,7 @@
     if (x.art === 'weiter' || x.art === 'abspielen') abspielen(f, true);
     else if (x.art === 'vorne') abspielen(f, false);
     else if (x.art === 'trailer' && detailTrailer) trailerAbspielen(detailTrailer, f.Name || '');
+    else if (x.art === 'bewerten') bewertenOeffnen(f);
     else if (x.art === 'merken') {
       merk.umschalten(f);
       hinweis(merk.hat(f.Id) ? 'Auf der Merkliste' : 'Von der Merkliste entfernt');
@@ -2208,6 +2494,7 @@
     if (!e) return;
     const t = typ(e);
     if (t === 'BoxSet') kategorieOeffnen(e);
+    else if (t === 'Gesehen') gesehenOeffnen(e);
     else if (t === 'Series') serieOeffnen(e);
     else if (istOrdner(e)) ordnerOeffnen(e);
     else if (t === 'Photo') fotoOeffnen(e);
@@ -2242,10 +2529,11 @@
     neu.kopf = k;
     neu.reihen.push(neueReihe(k.Name, null, POSTER));
     seiteZeigen(neu);
-    jf.inhalt(k.Id).then(function (a) {
+    jf.inhalt(k.Id).then(function (roh) {
       neu.reihen = [];
+      const a = roh.filter(function (e) { return !istGesehen(e); });
       for (let i = 0; i < a.length; i += 8) neu.reihen.push(reiheAus(i === 0 ? k.Name : '', a.slice(i, i + 8), POSTER));
-      if (!neu.reihen.length) neu.leer = 'Keine Filme';
+      if (!neu.reihen.length) neu.leer = roh.length ? 'Alles schon gesehen' : 'Keine Filme';
       if (seite === neu) fokusGeaendert();
     }, function () { /* bleibt leer */ });
   }
@@ -2275,23 +2563,227 @@
   }
 
   function ordnerOeffnen(ordner) {
-    const neu = neueSeite(ordner.Name);
+    const neu = neueSeite(ordnerName(ordner));
     neu.kopf = ordner;
-    neu.reihen.push(neueReihe(ordner.Name, null, QUER));
+    neu.raster = true; // Kopf sofort, die Wand kommt, sobald der Inhalt da ist
+    neu.kopfInfo = '';
     seiteZeigen(neu);
     jf.ordner(ordner.Id).then(function (a) {
-      neu.reihen = [];
       const unter = [], bilder = [];
       a.forEach(function (o) {
         if (!o) return;
         if (o.IsFolder) unter.push(o);
         else bilder.push(o);
       });
-      if (unter.length) neu.reihen.push(reiheAus('Ordner', unter, QUER));
-      for (let i = 0; i < bilder.length; i += 12) neu.reihen.push(reiheAus(i === 0 ? anzahlText(bilder) : '', bilder.slice(i, i + 12), QUER));
+      rasterFuellen(neu, unter.concat(bilder));
+      const info = [];
+      const zr = zeitraum(bilder);
+      if (zr) info.push(zr);
+      if (unter.length) info.push(unter.length + ' Ordner');
+      if (bilder.length) info.push(anzahlText(bilder));
+      neu.kopfInfo = info.join('   ·   ');
       if (!neu.reihen.length) neu.leer = 'Leer';
       if (seite === neu) fokusGeaendert();
     }, function () {});
+  }
+
+  // -------------------------------------------------- Foto-Wand (wie in Plex)
+  // Fotos-Startseite = alle Ordner als Kachel-Wand (6 nebeneinander), im Ordner eine dichte Bilder-Wand
+  // (7 nebeneinander). In der ersten Zeile steht oben groß, was es ist; ab der zweiten rutscht das als
+  // kleine Zeile nach oben und die ganze Fläche gehört den Bildern. Jede Reihe ist eine Zeile, fokus = Spalte.
+
+  const ORDNER_RASTER = { spalten: 6, kw: 268, kh: 151, luecke: 17 };
+  const FOTO_RASTER = { spalten: 7, kw: 230, kh: 172, luecke: 14 };
+  const WAND_OBEN_KLEIN = 112, WAND_OBEN_GROSS = 300;
+
+  function ordnerName(e) { return String((e && e.Name) || '').trim().replace(/\s+/g, ' '); }
+
+  function rasterFuellen(s, eintraege) {
+    const nurOrdner = eintraege.every(function (o) { return o && o.IsFolder; });
+    const m = nurOrdner ? ORDNER_RASTER : FOTO_RASTER;
+    s.raster = true;
+    s.spalten = m.spalten;
+    s.kw = m.kw;
+    s.kh = m.kh;
+    s.luecke = m.luecke;
+    s.reihen = [];
+    for (let i = 0; i < eintraege.length; i += m.spalten) s.reihen.push(reiheAus('', eintraege.slice(i, i + m.spalten), QUER));
+    s.akt = 0;
+    s.wandVersion = (s.wandVersion || 0) + 1;
+  }
+
+  /** Zeitraum der Aufnahmen („3.–12. April 2025“), aus dem Aufnahmedatum der Fotos. */
+  function zeitraum(l) {
+    let von = null, bis = null;
+    l.forEach(function (o) {
+      const d = String((o && o.PremiereDate) || '');
+      if (d.length < 10 || o.IsFolder) return;
+      const t = d.substring(0, 10);
+      if (!von || t < von) von = t;
+      if (!bis || t > bis) bis = t;
+    });
+    if (!von) return null;
+    const M = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+    const a = von.split('-'), b = bis.split('-');
+    const ta = parseInt(a[2], 10), tb = parseInt(b[2], 10), ma = M[parseInt(a[1], 10) - 1], mb = M[parseInt(b[1], 10) - 1];
+    if (von === bis) return ta + '. ' + ma + ' ' + a[0];
+    if (a[0] === b[0] && a[1] === b[1]) return ta + '.–' + tb + '. ' + ma + ' ' + a[0];
+    if (a[0] === b[0]) return ta + '. ' + ma + ' – ' + tb + '. ' + mb + ' ' + a[0];
+    return ma + ' ' + a[0] + ' – ' + mb + ' ' + b[0];
+  }
+
+  /** Bild einer Kachel in der Wand – kleiner als in den Reihen. */
+  function rasterUrl(e) {
+    if (e.IsFolder) {
+      const pr = tag(e, 'Primary');
+      if (pr) return querUrl(e.Id, pr, ORDNER_RASTER.kw * 2);
+      let tb = titelbilder[e.Id];
+      if (tb === undefined) {
+        titelbildSuchen(e.Id);
+        tb = titelbilder[e.Id];
+      }
+      return tb ? tb.replace('fillWidth=' + QW * 2, 'fillWidth=' + ORDNER_RASTER.kw * 2) : null;
+    }
+    return querUrl(e.Id, tag(e, 'Primary'), 360);
+  }
+
+  function wandBild(c, url) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.decoding = 'async';
+    img.onerror = function () { if (img.parentNode) img.parentNode.removeChild(img); };
+    img.src = url;
+    c.insertBefore(img, c.firstChild);
+  }
+
+  function wandKarte(e, s, r, i, j) {
+    const c = div('wk' + (e.IsFolder ? ' ordner' : ''));
+    c.style.left = (LINKS + j * (s.kw + s.luecke)) + 'px';
+    c.style.top = (i * (s.kh + s.luecke)) + 'px';
+    c.style.width = s.kw + 'px';
+    c.style.height = s.kh + 'px';
+    c._id = e.Id;
+    c._reihe = r;
+    c._index = j;
+    const url = rasterUrl(e);
+    if (url) wandBild(c, url);
+    if (e.IsFolder) {
+      const u = div('wk-name');
+      const sp = document.createElement('span');
+      sp.textContent = ordnerName(e);
+      u.appendChild(sp);
+      c.appendChild(u);
+    }
+    if (typ(e) === 'Video') c.appendChild(div('k-video'));
+    return c;
+  }
+
+  function wandZeichnen() {
+    const s = seite, g = el.wGitter;
+    const gross = s.akt === 0;
+    el.wand.classList.toggle('klein', !gross);
+    el.wName.textContent = s.kopf ? ordnerName(s.kopf) : s.titel;
+    el.wInfo.textContent = s.kopfInfo || '';
+    // rechts: Aufnahmedatum und Nummer des Fotos im Fokus
+    const f = fokusEintrag();
+    let rechts = '';
+    if (f && !f.IsFolder) {
+      let nr = 0, gesamt = 0;
+      s.reihen.forEach(function (r, i) {
+        r.eintraege.forEach(function (o, j) {
+          if (!o || o.IsFolder) return;
+          gesamt++;
+          if (i < s.akt || (i === s.akt && j <= r.fokus)) nr++;
+        });
+      });
+      const d = datum(f);
+      rechts = (d ? d + '      ' : '') + nr + ' / ' + gesamt;
+    }
+    el.wRechts.textContent = rechts;
+    const neu = g._seite !== s || g._version !== s.wandVersion;
+    if (neu) {
+      g.innerHTML = '';
+      g._seite = s;
+      g._version = s.wandVersion;
+      s.wKarten = {};
+    }
+    el.wLeer.textContent = s.reihen.length ? '' : (s.leer || '');
+    if (!s.reihen.length) {
+      if (!s.leer && !g.children.length) {
+        for (let i = 0; i < 4; i++) {
+          for (let j = 0; j < FOTO_RASTER.spalten; j++) {
+            const c = div('wk platz');
+            c.style.left = (LINKS + j * (FOTO_RASTER.kw + FOTO_RASTER.luecke)) + 'px';
+            c.style.top = (i * (FOTO_RASTER.kh + FOTO_RASTER.luecke)) + 'px';
+            c.style.width = FOTO_RASTER.kw + 'px';
+            c.style.height = FOTO_RASTER.kh + 'px';
+            g.appendChild(c);
+          }
+        }
+      }
+      g.style.transform = 'translate3d(0,14px,0)';
+      return;
+    }
+    const schritt = s.kh + s.luecke;
+    const gesamtH = s.reihen.length * schritt - s.luecke;
+    const max = Math.max(0, gesamtH - (1080 - WAND_OBEN_KLEIN - 40));
+    // die Zeile im Fokus steht als zweite Zeile, so sieht man immer, was darüber war
+    const scroll = Math.min(max, Math.max(0, s.akt - 1) * schritt);
+    if (neu) sofort(g);
+    g.style.transform = 'translate3d(0,' + (14 - scroll) + 'px,0)';
+    const von = Math.max(0, s.akt - 3), bis = Math.min(s.reihen.length - 1, s.akt + 7);
+    Object.keys(s.wKarten).forEach(function (k) {
+      const i = parseInt(k, 10);
+      if (i < von || i > bis) {
+        const c = s.wKarten[k];
+        if (c.parentNode) c.parentNode.removeChild(c);
+        delete s.wKarten[k];
+      }
+    });
+    for (let i = von; i <= bis; i++) {
+      const r = s.reihen[i];
+      r.eintraege.forEach(function (e, j) {
+        if (!e) return;
+        const k = i + ':' + j;
+        let c = s.wKarten[k];
+        if (!c) {
+          c = wandKarte(e, s, r, i, j);
+          g.appendChild(c);
+          s.wKarten[k] = c;
+        }
+        c.classList.toggle('fokus', i === s.akt && j === r.fokus);
+      });
+    }
+    if (neu) sofortEnde(g);
+  }
+
+  /** Pfeile in der Wand: frei in alle Richtungen, rechts am Zeilenende geht es in der nächsten Zeile weiter. */
+  function wandTaste(k, r) {
+    const s = seite, spalte = r.fokus;
+    if (k === TASTE.LINKS) {
+      if (r.fokus > 0) r.fokus--;
+      else if (wiederholung === 0) return leisteAuf();
+      else return;
+    } else if (k === TASTE.RECHTS) {
+      if (r.fokus < r.eintraege.length - 1) r.fokus++;
+      else if (s.akt < s.reihen.length - 1) {
+        s.akt++;
+        s.reihen[s.akt].fokus = 0;
+      }
+    } else if (k === TASTE.HOCH) {
+      if (s.akt > 0) {
+        s.akt--;
+        s.reihen[s.akt].fokus = Math.min(spalte, s.reihen[s.akt].eintraege.length - 1);
+      }
+    } else if (k === TASTE.RUNTER) {
+      if (s.akt < s.reihen.length - 1) {
+        s.akt++;
+        s.reihen[s.akt].fokus = Math.min(spalte, s.reihen[s.akt].eintraege.length - 1);
+      }
+    } else if (k === TASTE.OK || k === MEDIEN.PLAY || k === MEDIEN.PLAYPAUSE) {
+      return oeffnen(fokusEintrag(), A.LISTE);
+    } else return;
+    fokusGeaendert();
   }
 
   // -------------------------------------------------- Fotos im Vollbild
@@ -2688,10 +3180,12 @@
     clearInterval(P.meldeTick);
     clearTimeout(P.spulTimer);
     const f = P.eintrag;
+    const v = el.video;
+    const lauf = (f && f.RunTimeTicks ? f.RunTimeTicks / 10000000 : 0) || v.duration || 0;
+    const quote = lauf > 0 ? Math.min(1, (v.currentTime || 0) / lauf) : 0;
     P.offen = false;
     P.menue = false;
     P.cues = null;
-    const v = el.video;
     try {
       v.pause();
       v.removeAttribute('src');
@@ -2699,7 +3193,7 @@
     } catch (e) { /* egal */ }
     el.untertitel.textContent = '';
     zeichnen();
-    nachDemFilm(f);
+    nachDemFilm(f, quote);
   }
 
   function leisteZeigen(ms) {
@@ -3218,6 +3712,7 @@
 
     if (T.offen) return trailerTaste(k);
     if (P.offen) return playerTaste(k);
+    if (B.offen) return bewertenTaste(k);
     if (leiste) return leisteTaste(k);
     switch (ansicht) {
       case A.ANMELDEN:
@@ -3269,6 +3764,7 @@
       if (k === TASTE.LINKS) leisteAuf();
       return;
     }
+    if (seite.raster) return wandTaste(k, r);
     switch (k) {
       case TASTE.LINKS:
         if (r.fokus > 0) {
@@ -3507,6 +4003,10 @@
       const v = el.video;
       if (v.paused) v.play().catch(function () {});
       else v.pause();
+      return;
+    }
+    if (B.offen) {
+      if (B.danke) bewertenSchliessen();
       return;
     }
     if (!t || t === document.body) {
