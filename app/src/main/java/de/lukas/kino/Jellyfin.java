@@ -188,6 +188,12 @@ final class Jellyfin {
         anfrage("POST", "/DisplayPreferences/" + id + "?userId=" + benutzer + "&client=" + enc(client), dto.toString());
     }
 
+    /** Alle Filme, nur Name/Jahr/Originaltitel – zum Zuordnen der Plex-Titel aus Home Assistant. */
+    JSONArray filmIndex() throws Exception {
+        return liste("/Items?userId=" + benutzer + "&includeItemTypes=Movie&recursive=true&fields=OriginalTitle"
+                + "&enableImages=false&enableUserData=false");
+    }
+
     JSONArray nachIds(java.util.List<String> ids) throws Exception {
         return liste("/Items?userId=" + benutzer + "&ids=" + String.join(",", ids) + "&fields=" + FELDER);
     }

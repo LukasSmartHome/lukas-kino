@@ -20,7 +20,8 @@ import java.util.regex.Pattern;
  */
 final class Familie {
 
-    static final String QUELLE = "http://192.168.178.44:8098/bewertungen.json";
+    static final String BASIS = "http://192.168.178.44:8098/";
+    static final String QUELLE = BASIS + "bewertungen.json";
     private static final Pattern TITEL = Pattern.compile("^(.*)\\s\\((\\d{4})\\)\\s*$");
 
     static final Map<String, Integer> FARBEN = new HashMap<>();
@@ -42,15 +43,21 @@ final class Familie {
     private static volatile Map<String, Map<String, Integer>> noten = new HashMap<>();
     private static volatile Map<String, List<String>> gesehen = new HashMap<>();
     private static volatile Map<String, String> nurName = new HashMap<>();
+    private static volatile JSONObject roh;   // ganze Datei (Merkliste, Empfohlen)
 
     private Familie() {
     }
 
-    private static String schluessel(String name, String jahr) {
+    /** Zuletzt geladene HA-Daten (bewertungen, verlauf, merkliste, merktitel) oder null. */
+    static JSONObject roh() {
+        return roh;
+    }
+
+    static String schluessel(String name, String jahr) {
         return Suche.normal(name) + "|" + (jahr == null ? "" : jahr);
     }
 
-    private static String[] plexTitel(String t) {
+    static String[] plexTitel(String t) {
         Matcher m = TITEL.matcher(t == null ? "" : t);
         return m.matches() ? new String[]{m.group(1), m.group(2)} : new String[]{t == null ? "" : t, ""};
     }
@@ -106,6 +113,7 @@ final class Familie {
         noten = n;
         gesehen = g;
         nurName = nn;
+        roh = j;
     }
 
     /** Bewertungen und „gesehen von“ zu einem Film, sonst null. */

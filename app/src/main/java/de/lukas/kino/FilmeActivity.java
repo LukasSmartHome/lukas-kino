@@ -113,7 +113,7 @@ public class FilmeActivity extends Activity {
         }
     }
 
-    enum Bereich { FILME, SERIEN, MERKLISTE, FOTOS }
+    enum Bereich { FILME, SERIEN, MERKLISTE, EMPFOHLEN, FOTOS }
 
     enum Ansicht { LADEN, ANMELDEN, FEHLER, LISTE, DETAIL, SUCHE, FOTO }
 
@@ -147,7 +147,7 @@ public class FilmeActivity extends Activity {
     // Seitenleiste
     private boolean leiste;
     private int leistePos;
-    private static final String[] LEISTE = {"Suche", "Filme", "Serien", "Merkliste", "Fotos"};
+    private static final String[] LEISTE = {"Suche", "Filme", "Serien", "Merkliste", "Empfohlen", "Fotos"};
 
     // Suche
     private final StringBuilder suchText = new StringBuilder();
@@ -191,7 +191,7 @@ public class FilmeActivity extends Activity {
             ausPlayer = false;
             nachDemFilm();
         }
-        if (jf.angemeldet() && SystemClock.uptimeMillis() - familieZeit > 600_000) netz.execute(this::familieLaden);
+        if (jf.angemeldet() && SystemClock.uptimeMillis() - familieZeit > 180_000) netz.execute(this::familieLaden);
     }
 
     @Override
@@ -273,12 +273,7 @@ public class FilmeActivity extends Activity {
                     else if ("tvshows".equals(typ)) serienId = v.optString("Id");
                     else if ("homevideos".equals(typ) || "photos".equals(typ)) fotosId = v.optString("Id");
                 }
-                try {
-                    merkliste.laden(jf);
-                } catch (Exception ignored) {
-                    // ohne Merkliste weiter
-                }
-                familieLaden();
+                familieLaden(); // Bewertungen, Merkliste und Empfohlen aus Home Assistant
                 Seite s = filmeSeite();
                 h.post(() -> zeigeStart(Bereich.FILME, s));
             } catch (Exception e) {
@@ -292,6 +287,8 @@ public class FilmeActivity extends Activity {
     private void bereichOeffnen(Bereich b) {
         stapel.clear();
         if (b == Bereich.MERKLISTE) startseiten.put(Bereich.MERKLISTE, merklisteSeite());
+        if (b == Bereich.EMPFOHLEN) startseiten.put(Bereich.EMPFOHLEN, empfohlenSeite());
+        if (b == Bereich.MERKLISTE || b == Bereich.EMPFOHLEN) netz.execute(this::familieLaden); // frisch aus HA
         Seite fertig = startseiten.get(b);
         if (fertig != null) {
             bereich = b;
@@ -393,15 +390,58 @@ public class FilmeActivity extends Activity {
         buehne.invalidate();
     }
 
-    /** Bewertungen der Familie vom Pi holen (blockiert – im Hintergrund). */
+    /** Bewertungen, Merkliste und Empfohlen aus Home Assistant holen (blockiert – im Hintergrund). */
     private void familieLaden() {
         try {
             Familie.laden();
             familieZeit = SystemClock.uptimeMillis();
-            h.post(buehne::invalidate);
         } catch (Exception ignored) {
-            // ohne Bewertungen weiter
+            return; // ohne Bewertungen weiter
         }
+        boolean m = false, e = false;
+        try {
+            m = merkliste.ausHa(jf);
+        } catch (Exception ignored) {
+            // Merkliste bleibt, wie sie war
+        }
+        try {
+            e = Empfohlen.berechnen(jf);
+        } catch (Exception ignored) {
+            // Empfohlen bleibt, wie es war
+        }
+        final boolean mm = m, ee = e;
+        h.post(() -> {
+            if (mm) merklisteGeaendert();
+            if (ee) empfohlenGeaendert();
+            buehne.invalidate();
+        });
+    }
+
+    private Seite empfohlenSeite() {
+        Seite s = new Seite("Empfohlen");
+        for (Empfohlen.Gruppe g : Empfohlen.gruppen()) {
+            for (int i = 0; i < g.eintraege.size(); i += 8)
+                s.reihen.add(reiheAus(i == 0 ? "Mit " + g.note + " bewertet" : "",
+                        g.eintraege.subList(i, Math.min(g.eintraege.size(), i + 8)), POSTER));
+        }
+        if (s.reihen.isEmpty())
+            s.leer = Empfohlen.geladen() ? "Noch nichts mit 7 oder besser bewertet" : "Bewertungen werden geladen …";
+        return s;
+    }
+
+    private void empfohlenGeaendert() {
+        Seite alt = startseiten.get(Bereich.EMPFOHLEN);
+        Seite neu = empfohlenSeite();
+        startseiten.put(Bereich.EMPFOHLEN, neu);
+        if (alt != null && seite == alt) {
+            neu.akt = Math.min(alt.akt, Math.max(0, neu.reihen.size() - 1));
+            neu.anim = neu.akt;
+            if (neu.akt < neu.reihen.size() && alt.akt < alt.reihen.size())
+                neu.reihen.get(neu.akt).fokus = Math.min(alt.reihen.get(alt.akt).fokus, neu.reihen.get(neu.akt).eintraege.size() - 1);
+            seite = neu;
+            fokusGeaendert();
+        }
+        buehne.invalidate();
     }
 
     private void hinweis(String text) {
@@ -448,9 +488,13 @@ public class FilmeActivity extends Activity {
                 hinweis(drin ? "Auf der Merkliste" : "Von der Merkliste entfernt");
                 netz.execute(() -> {
                     try {
-                        merkliste.speichern(jf);
+                        merkliste.senden(f, drin);
+                        // HA schreibt die Datei sofort neu – kurz danach abholen
+                        h.postDelayed(() -> netz.execute(this::familieLaden), 2500);
                     } catch (Exception ex) {
+                        merkliste.vergessen(f.optString("Id"));
                         h.post(() -> hinweis("Merkliste ließ sich nicht speichern"));
+                        familieLaden();
                     }
                 });
                 break;
@@ -589,6 +633,7 @@ public class FilmeActivity extends Activity {
                     if (frisch != null) {
                         ersetzen(frisch);
                         merkliste.ersetzen(frisch);
+                        Empfohlen.ersetzen(frisch);
                         if (detailEintrag != null && frisch.optString("Id").equals(detailEintrag.optString("Id")))
                             detailEintrag = frisch;
                     }
@@ -1466,7 +1511,7 @@ public class FilmeActivity extends Activity {
         private final Map<Reihe, Float> scrolls = new HashMap<>();
         private float fokusZoom = 1f, detailAnim, leisteAnim, leisteFokusY = -1, sucheScroll;
         private JSONObject letzterFokus;
-        private final Path[] symbole = new Path[5];
+        private final Path[] symbole = new Path[6];
 
         Buehne(Context c) {
             super(c);
@@ -1486,7 +1531,8 @@ public class FilmeActivity extends Activity {
             symbole[1] = symbolFilm();
             symbole[2] = symbolSerie();
             symbole[3] = symbolMerk();
-            symbole[4] = symbolFoto();
+            symbole[4] = symbolStern();
+            symbole[5] = symbolFoto();
         }
 
         private TextPaint stift(Context c, float g, int w, int farbe) {
@@ -1525,6 +1571,16 @@ public class FilmeActivity extends Activity {
             s.lineTo(17.5f, 20.5f);
             s.lineTo(12f, 16.5f);
             s.lineTo(6.5f, 20.5f);
+            s.close();
+            return s;
+        }
+
+        private Path symbolStern() {
+            Path s = new Path();
+            float[] xy = {12f, 3.2f, 14.7f, 8.7f, 20.7f, 9.6f, 16.35f, 13.8f, 17.35f, 19.8f, 12f, 17f, 6.65f, 19.8f, 7.65f, 13.8f,
+                    3.3f, 9.6f, 9.3f, 8.7f};
+            s.moveTo(xy[0], xy[1]);
+            for (int i = 2; i < xy.length; i += 2) s.lineTo(xy[i], xy[i + 1]);
             s.close();
             return s;
         }
@@ -2106,13 +2162,16 @@ public class FilmeActivity extends Activity {
             }
             y += 56;
 
-            if (detailAnim > 0.01f) {
+            // Bei „Empfohlen“ steht schon in der Liste, wer wie bewertet hat (dafür ohne Restzeit und mit kürzerem Text)
+            boolean empf = bereich == Bereich.EMPFOHLEN && !detail;
+            float famA = Math.max(detailAnim, empf ? 1f : 0f);
+            if (famA > 0.01f) {
                 Familie.Info fam = Familie.fuer(e);
-                if (fam != null) y = familieZeichnen(c, fam, y, detailAnim);
+                if (fam != null) y = familieZeichnen(c, fam, y, famA);
             }
 
             long pos = Jellyfin.position(e), ges = e.optLong("RunTimeTicks", 0);
-            if (pos > 0 && ges > pos && !Jellyfin.gesehen(e)) {
+            if (!empf && pos > 0 && ges > pos && !Jellyfin.gesehen(e)) {
                 float bw = 220;
                 RectF bar = new RectF(LINKS, y - 14, LINKS + bw, y - 7);
                 p.setColor(0x4DFFFFFF);
@@ -2126,7 +2185,7 @@ public class FilmeActivity extends Activity {
 
             String inhalt = e.optString("Overview", "");
             if (!inhalt.isEmpty()) {
-                StaticLayout sl = umbruch(inhalt, text, 880, detail ? 8 : 3);
+                StaticLayout sl = umbruch(inhalt, text, 880, detail ? 8 : empf ? 2 : 3);
                 c.save();
                 c.translate(LINKS, y - 22);
                 text.setAlpha(Math.round(200 + 40 * detailAnim));
