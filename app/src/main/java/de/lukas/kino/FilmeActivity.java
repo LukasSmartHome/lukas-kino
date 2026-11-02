@@ -724,7 +724,9 @@ public class FilmeActivity extends Activity {
 
     private void leisteAuf() {
         leiste = true;
-        leistePos = ansicht == Ansicht.SUCHE ? 0 : 0;
+        // ausgewählt ist, wo man gerade ist (Suche, Filme, Serien oder Fotos)
+        leistePos = ansicht == Ansicht.SUCHE ? 0 : bereich.ordinal() + 1;
+        buehne.leisteFokusY = -1; // Auswahl-Pille springt direkt dorthin statt von der alten Stelle zu gleiten
         buehne.invalidate();
     }
 

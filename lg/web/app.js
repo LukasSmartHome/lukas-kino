@@ -1181,7 +1181,8 @@
       // "display: contents" mögen ältere Fernseher nicht immer – darum die Kinder direkt einhängen
       while (box.firstChild) {
         const k = box.firstChild;
-        if (k.classList) k.classList.add('neu');
+        // Einblenden nur für Text und Bild – die Knöpfe sind außerhalb der Detailansicht unsichtbar und sollen es bleiben
+        if (k.classList && !k.classList.contains('i-knoepfe') && !k.classList.contains('i-platz')) k.classList.add('neu');
         el.info.appendChild(k);
       }
     }
@@ -1376,7 +1377,7 @@
   function leisteAuf(maus) {
     leiste = true;
     leisteMaus = !!maus;
-    leistePos = 0; // wie am TCL: Suche ist vorausgewählt
+    leistePos = ansicht === A.SUCHE ? 0 : BEREICHE.indexOf(bereich) + 1; // ausgewählt ist, wo man gerade ist
     zeichnen();
   }
 

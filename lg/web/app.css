@@ -235,11 +235,17 @@ body {
   margin-top: 40px;
   display: flex;
   opacity: 0;
+  visibility: hidden;
   transform: translateY(14px);
-  transition: opacity .25s, transform .3s cubic-bezier(.2, .8, .2, 1);
+  transition: opacity .25s, transform .3s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .3s;
 }
 
-#info.detail .i-knoepfe { opacity: 1; transform: none; }
+#info.detail .i-knoepfe {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity .25s, transform .3s cubic-bezier(.2, .8, .2, 1), visibility 0s;
+}
 
 .knopf {
   height: 84px;
