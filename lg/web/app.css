@@ -65,6 +65,7 @@ body {
   background-repeat: no-repeat;
   opacity: 0;
   transition: opacity .45s cubic-bezier(.25, .1, .25, 1);
+  will-change: opacity; /* eigene Grafikebene: Überblenden ohne Neuzeichnen */
 }
 
 .bg.an { opacity: 1; }
@@ -240,6 +241,8 @@ body {
   transition: opacity .25s, transform .3s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .3s;
 }
 
+#info { contain: layout style; }
+
 #info.detail .i-knoepfe {
   opacity: 1;
   visibility: visible;
@@ -334,6 +337,7 @@ body {
   width: 1920px;
   height: 1080px;
   transition: transform .4s cubic-bezier(.2, .8, .2, 1), opacity .3s;
+  will-change: transform;
 }
 
 .reihe {
@@ -362,6 +366,7 @@ body {
   left: 0;
   top: 0;
   transition: transform .34s cubic-bezier(.2, .8, .2, 1);
+  will-change: transform;
 }
 
 .karte {
@@ -372,8 +377,9 @@ body {
   border-radius: 18px;
   overflow: hidden;
   background: rgba(255, 255, 255, .15);
-  transition: transform .24s cubic-bezier(.2, .8, .2, 1), opacity .3s, box-shadow .24s;
+  transition: transform .24s cubic-bezier(.2, .8, .2, 1), opacity .3s; /* Schatten ohne Animation – spart Rechenzeit */
   transform: translateZ(0);
+  contain: layout paint;
 }
 
 .karte.quer { width: 352px; height: 198px; }
@@ -603,7 +609,7 @@ body {
   overflow: hidden;
   background: rgba(255, 255, 255, .15);
   opacity: .8;
-  transition: transform .22s cubic-bezier(.2, .8, .2, 1), box-shadow .22s, opacity .2s;
+  transition: transform .22s cubic-bezier(.2, .8, .2, 1), opacity .2s;
 }
 
 #suche.in-treffern .treffer { opacity: 1; }

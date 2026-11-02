@@ -1551,7 +1551,9 @@
 
   // ------------------------------------------------------------------ Logos (dunkle werden weiß)
 
-  const logoDunkel = {};
+  let logoDunkel = {};
+  try { logoDunkel = JSON.parse(speicherLesen('lk_logos') || '{}') || {}; } catch (e) { logoDunkel = {}; }
+  let logoSpeichern = 0;
 
   function logoPruefen(img, url) {
     if (logoDunkel[url] !== undefined) {
@@ -1572,6 +1574,12 @@
         n++;
       }
       logoDunkel[url] = n > 0 && summe / n < 95;
+      clearTimeout(logoSpeichern);
+      logoSpeichern = setTimeout(function () {
+        const k = Object.keys(logoDunkel);
+        if (k.length > 800) k.slice(0, k.length - 800).forEach(function (x) { delete logoDunkel[x]; });
+        speicherSetzen('lk_logos', JSON.stringify(logoDunkel));
+      }, 3000);
     } catch (e) {
       logoDunkel[url] = false;
     }
@@ -1597,7 +1605,7 @@
 
     if (liste) {
       reihenZeichnen();
-      infoZeichnen();
+      infoPlanen();
     }
     if (suche) sucheZeichnen();
     if (mitte) mitteZeichnen();
@@ -1763,7 +1771,19 @@
 
   let infoSchluessel = '';
 
+  // Beim schnellen Durchscrollen (Taste gehalten oder schnell hintereinander) erst die Reihe bewegen –
+  // Titel, Logo und Text oben links erst, wenn man kurz anhält. Spart dem Fernseher viel Arbeit.
+  let infoTimer = 0;
+
+  function infoPlanen() {
+    clearTimeout(infoTimer);
+    const schnell = ansicht === A.LISTE && wiederholung > 0 && Date.now() - letzteZeit < 200;
+    if (schnell) infoTimer = setTimeout(infoZeichnen, 140);
+    else infoZeichnen();
+  }
+
   function infoZeichnen() {
+    clearTimeout(infoTimer);
     const e = heldEintrag();
     const detail = ansicht === A.DETAIL;
     el.info.classList.toggle('detail', detail);
