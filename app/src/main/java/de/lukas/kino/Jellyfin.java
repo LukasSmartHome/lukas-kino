@@ -28,7 +28,8 @@ final class Jellyfin {
     static String VERSION = "1";
 
     static final String FELDER = "Overview,Genres,OfficialRating,CommunityRating,ProductionYear,RunTimeTicks,"
-            + "ImageTags,BackdropImageTags,UserData,ChildCount,MediaStreams,Taglines";
+            + "ImageTags,BackdropImageTags,UserData,ChildCount,OriginalTitle,ParentBackdropImageTags,DateCreated,PremiereDate,EndDate";
+    static final String FELDER_FOTO = "ImageTags,ChildCount,DateCreated,PremiereDate,RunTimeTicks,UserData,Width,Height";
 
     private static Jellyfin instanz;
 
@@ -113,6 +114,57 @@ final class Jellyfin {
 
     JSONArray alle() throws Exception {
         return liste("/Items?userId=" + benutzer + "&includeItemTypes=Movie&recursive=true&sortBy=SortName&fields=" + FELDER);
+    }
+
+    // ---------------------------------------------------------------- Bibliotheken, Serien, Fotos, Suche
+
+    /** Bibliotheken des Benutzers (Filme, Serien, Fotos, Sammlungen). */
+    JSONArray bibliotheken() throws Exception {
+        return liste("/UserViews?userId=" + benutzer);
+    }
+
+    JSONArray serienWeiterschauen() throws Exception {
+        return liste("/UserItems/Resume?userId=" + benutzer + "&mediaTypes=Video&includeItemTypes=Episode&limit=24&fields=" + FELDER);
+    }
+
+    JSONArray naechsteFolgen() throws Exception {
+        return liste("/Shows/NextUp?userId=" + benutzer + "&limit=24&fields=" + FELDER);
+    }
+
+    JSONArray serien() throws Exception {
+        return liste("/Items?userId=" + benutzer + "&includeItemTypes=Series&recursive=true&sortBy=SortName&fields=" + FELDER);
+    }
+
+    JSONArray neueSerien() throws Exception {
+        return liste("/Items?userId=" + benutzer + "&includeItemTypes=Series&recursive=true&sortBy=DateLastContentAdded,DateCreated"
+                + "&sortOrder=Descending&limit=30&fields=" + FELDER);
+    }
+
+    JSONArray staffeln(String serie) throws Exception {
+        return liste("/Shows/" + serie + "/Seasons?userId=" + benutzer + "&fields=" + FELDER);
+    }
+
+    JSONArray folgen(String serie, String staffel) throws Exception {
+        return liste("/Shows/" + serie + "/Episodes?userId=" + benutzer + "&seasonId=" + staffel + "&fields=" + FELDER);
+    }
+
+    /** Inhalt eines Foto-Ordners: erst Unterordner, dann Bilder und Videos nach Aufnahmedatum. */
+    JSONArray ordner(String id) throws Exception {
+        return liste("/Items?userId=" + benutzer + "&parentId=" + id + "&sortBy=IsFolder,PremiereDate,DateCreated,SortName"
+                + "&sortOrder=Ascending&fields=" + FELDER_FOTO);
+    }
+
+    /** Alles Durchsuchbare (Filme und Serien) für die Suche, einmal laden und im Speicher halten. */
+    JSONArray suchIndex() throws Exception {
+        return liste("/Items?userId=" + benutzer + "&includeItemTypes=Movie,Series&recursive=true&sortBy=SortName&fields=" + FELDER);
+    }
+
+    static String foto(String id, String tag) {
+        return SERVER + "/Items/" + id + "/Images/Primary?maxWidth=1920&maxHeight=1080&quality=90" + (tag != null ? "&tag=" + tag : "");
+    }
+
+    static String quer(String id, String tag, int breite) {
+        return SERVER + "/Items/" + id + "/Images/Primary?fillWidth=" + breite + "&quality=85" + (tag != null ? "&tag=" + tag : "");
     }
 
     JSONObject film(String id) throws Exception {
