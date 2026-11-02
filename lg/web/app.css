@@ -365,7 +365,7 @@ body {
   position: absolute;
   left: 0;
   top: 0;
-  transition: transform .34s cubic-bezier(.2, .8, .2, 1);
+  transition: transform .34s cubic-bezier(.2, .8, .2, 1), opacity .25s ease;
   will-change: transform;
 }
 

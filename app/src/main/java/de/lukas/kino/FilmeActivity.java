@@ -2410,9 +2410,16 @@ public class FilmeActivity extends Activity {
                     if (y < -PH - 100 || y > 1180) continue;
                     float a = reihenAlpha;
                     if (i < seite.akt) a *= Math.max(0f, Math.min(1f, (y - REIHE_Y + 250) / 250f));
-                    if (i > seite.akt) a *= 0.6f;
+                    float kachelA = 1f;
+                    if (i > seite.akt) {
+                        a *= 0.6f;
+                        // Reihen darunter: nur die Überschrift, keine angeschnittenen Kacheln am unteren Rand
+                        // (Wunsch Lukas 02.11.2026). Erst wenn fast die ganze Kachel Platz hat, blendet sie ein.
+                        float hoch = rh.form == QUER ? QH : PH;
+                        kachelA = Math.max(0f, Math.min(1f, ((1080f - y) / hoch - 0.55f) / 0.35f));
+                    }
                     if (a <= 0.01f) continue;
-                    weiter |= reiheZeichnen(c, rh, y, i == seite.akt, a, dt);
+                    weiter |= reiheZeichnen(c, rh, y, i == seite.akt, a, kachelA, dt);
                 }
             }
 
@@ -2469,9 +2476,9 @@ public class FilmeActivity extends Activity {
             return 0xFF000000 | (Math.round(ar + (br - ar) * t) << 16) | (Math.round(ag + (bg - ag) * t) << 8) | Math.round(ab + (bb - ab) * t);
         }
 
-        private boolean reiheZeichnen(Canvas c, Reihe rh, float y, boolean aktiv, float alpha, float dt) {
+        private boolean reiheZeichnen(Canvas c, Reihe rh, float y, boolean aktiv, float alpha, float kachelA, float dt) {
             boolean weiter = false;
-            int al = Math.round(255 * alpha);
+            int al = Math.round(255 * alpha * kachelA);
             int w = rh.form == QUER ? QW : PW, hh = rh.form == QUER ? QH : PH;
             float schritt = w + ABSTAND;
             float soll = rh.fokus;
@@ -2479,16 +2486,17 @@ public class FilmeActivity extends Activity {
             float sc = ist == null ? soll : naeher(ist, soll, dt, 80);
             scrolls.put(rh, sc);
             if (sc != soll) weiter = true;
-            if (rh.live > 0 && rh.form == POSTER) return liveReiheZeichnen(c, rh, y, aktiv, alpha, sc) | weiter;
+            if (rh.live > 0 && rh.form == POSTER) return liveReiheZeichnen(c, rh, y, aktiv, alpha * kachelA, sc) | weiter;
             if (!rh.titel.isEmpty()) {
                 reiheText.setAlpha(Math.round((aktiv ? 230 : 170) * alpha));
                 c.drawText(rh.titel, LINKS, y - 24, reiheText);
             }
+            if (al <= 2) return weiter;
             if (!rh.geladen && rh.eintraege.isEmpty()) {
                 for (int k = 0; k < 8; k++) {
                     r.set(LINKS + k * schritt, y, LINKS + k * schritt + w, y + hh);
                     p.setColor(0x14FFFFFF);
-                    p.setAlpha(Math.round(0x14 * alpha));
+                    p.setAlpha(Math.round(0x14 * alpha * kachelA));
                     c.drawRoundRect(r, 18, 18, p);
                 }
                 return weiter;
@@ -3076,8 +3084,8 @@ public class FilmeActivity extends Activity {
                 p.setAlpha(al);
                 c.drawPath(d, p);
             }
-            // Fortschritt angefangener Filme/Folgen
-            float f = Jellyfin.fortschritt(e);
+            // Fortschritt angefangener Filme/Folgen – nicht bei Kategorien, Serien oder Ordnern (Wunsch Lukas 02.11.2026)
+            float f = e.optBoolean("IsFolder", false) ? 0f : Jellyfin.fortschritt(e);
             if (f > 0.01f && f < 0.97f && !Jellyfin.gesehen(e)) {
                 float l = r.left + 14 * zoom, rr = r.right - 14 * zoom, by = r.bottom - 16 * zoom;
                 RectF bar = new RectF(l, by - 6 * zoom, rr, by);

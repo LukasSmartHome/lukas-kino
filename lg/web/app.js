@@ -2100,6 +2100,10 @@
       r.el.style.top = (REIHE_Y + versatz(s, i)) + 'px';
       r.el.style.opacity = i < s.akt ? '0' : i > s.akt ? '0.6' : '1';
       r.titelEl.style.opacity = i === s.akt ? '0.9' : '0.67';
+      // Reihen darunter: nur die Überschrift, keine angeschnittenen Kacheln am unteren Rand (Wunsch Lukas 02.11.2026)
+      const obenAmSchirm = REIHE_Y + versatz(s, i) - versatz(s, s.akt);
+      const sicht = (1080 - obenAmSchirm) / (r.form === QUER ? QH : PH);
+      r.streifen.style.opacity = i > s.akt ? String(Math.max(0, Math.min(1, (sicht - 0.55) / 0.35))) : '1';
       r.titelEl.textContent = r.live ? '' : r.titel;
       kartenZeichnen(r, i === s.akt);
     }
@@ -2225,7 +2229,8 @@
       c.appendChild(u);
     }
     if (t === 'Video') c.appendChild(div('k-video'));
-    const f = fortschritt(e);
+    // Fortschritt nur bei Filmen/Folgen, nicht bei Kategorien, Serien oder Ordnern (Wunsch Lukas 02.11.2026)
+    const f = e.IsFolder ? 0 : fortschritt(e);
     if (f > 0.01 && f < 0.97 && !gesehen(e)) {
       const b = div('k-balken');
       b.innerHTML = '<i></i>';
