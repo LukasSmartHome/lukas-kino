@@ -12,8 +12,11 @@ Befehle (alles ohne --los ist nur Anschauen, es wird nichts verändert):
   bilder ID [ID ...]            Kontaktbogen mit 12 Standbildern -> /share/kino/pruefung/ID.jpg
                                 (im Heimnetz: http://192.168.178.44:8098/pruefung/ID.jpg)
   doppelte                      gleiche TMDB-ID, gleicher Titel+Jahr oder gleiche Größe+Laufzeit
-  umbenennen ID TMDBID [--los]  Datei nach Schema „Titel (Jahr) [tmdbid-N]/Titel (Jahr) [tmdbid-N].ext“
+  umbenennen ID TMDB|ttIMDB [--titel=Eigener_Titel] [--jahr=JJJJ] [--los]
+                                Datei nach Schema „Titel (Jahr) [tmdbid-N]/Titel (Jahr) [tmdbid-N].ext“
                                 in /media/Filme verschieben (Titel und Jahr von TMDB), Jellyfin neu einlesen.
+                                Ohne TMDB-Eintrag mit IMDb-ID: [imdbid-tt...].
+  titel ID Neuer_Titel          Anzeigename in Jellyfin setzen und sperren
                                 Jede Verschiebung steht in /media/Filme/.filmsortierer_log.jsonl (Rückweg).
   zurueck [--los]               letzte Verschiebung rückgängig machen
 """
@@ -188,17 +191,14 @@ def cmd_bilder(ids):
                 if s >= dauer:
                     continue
                 out = "%s/b%02d.jpg" % (t, n)
-                subprocess.run([ff, "-v", "error", "-ss", str(int(s)), "-i", pfad, "-frames:v", "1",
-                                "-vf", "scale=480:-2,drawtext=text='%d min':x=8:y=8:fontcolor=yellow:fontsize=22:box=1:boxcolor=black@0.5" % (s // 60),
+                subprocess.run([ff, "-v", "quiet", "-ss", str(int(s)), "-i", pfad, "-frames:v", "1", "-vf", "scale=480:-2",
                                 "-y", out], timeout=120)
-                if not os.path.exists(out):  # ohne drawtext (Schriften fehlen)
-                    subprocess.run([ff, "-v", "error", "-ss", str(int(s)), "-i", pfad, "-frames:v", "1", "-vf", "scale=480:-2", "-y", out], timeout=120)
                 if os.path.exists(out):
                     n += 1
             if not n:
                 print(i, "keine Bilder"); continue
             ziel = "%s/%s.jpg" % (PRUEF, i)
-            subprocess.run([ff, "-v", "error", "-i", t + "/b%02d.jpg", "-vf", "pad=480:ih+8:0:4:black,tile=3x%d" % ((n + 2) // 3),
+            subprocess.run([ff, "-v", "quiet", "-i", t + "/b%02d.jpg", "-vf", "pad=480:ih+8:0:4:black,tile=3x%d" % ((n + 2) // 3),
                             "-frames:v", "1", "-q:v", "4", "-y", ziel], timeout=120)
             print(i, "->", ziel, n, "Bilder")
 
@@ -228,40 +228,67 @@ def sauber(s):
     return s
 
 
-def tmdb_daten(item_id, tmdb):
-    res = jf("/Items/RemoteSearch/Movie", {"SearchInfo": {"ProviderIds": {"Tmdb": str(tmdb)}}, "ItemId": item_id}) or []
+def remote_daten(item_id, ziel):
+    """ziel = TMDB-Nummer oder IMDb-ID (tt...). Holt Titel und Jahr in Jellyfins Metadatensprache (Deutsch)."""
+    art = "Imdb" if ziel.startswith("tt") else "Tmdb"
+    res = jf("/Items/RemoteSearch/Movie", {"SearchInfo": {"ProviderIds": {art: ziel}}, "ItemId": item_id}) or []
     for r in res:
-        if str((r.get("ProviderIds") or {}).get("Tmdb")) == str(tmdb):
-            return r
-    sys.exit("TMDB %s nicht gefunden" % tmdb)
+        if str((r.get("ProviderIds") or {}).get(art)) == ziel:
+            return art, r
+    sys.exit("%s %s nicht gefunden" % (art, ziel))
+
+
+def optionen(a):
+    o = {"los": "--los" in a}
+    for x in a:
+        if x.startswith("--titel="):
+            o["titel"] = x[8:].replace("_", " ")
+        if x.startswith("--jahr="):
+            o["jahr"] = int(x[7:])
+    return [x for x in a if not x.startswith("--")], o
 
 
 def cmd_umbenennen(a):
-    los = "--los" in a
-    a = [x for x in a if x != "--los"]
-    item_id, tmdb = a[0], a[1]
+    """umbenennen ITEM-ID TMDB-NR|IMDB-ID [--titel=Eigener_Titel] [--jahr=JJJJ] [--los]"""
+    a, o = optionen(a)
+    item_id, ziel = a[0], a[1].replace("tmdb:", "").replace("imdb:", "")
     f = jf("/Items/%s?userId=%s&Fields=Path" % (item_id, uid()))
     alt = f["Path"]
-    r = tmdb_daten(item_id, tmdb)
-    titel, jahr = sauber(r.get("Name") or ""), r.get("ProductionYear")
-    basis = "%s (%s) [tmdbid-%s]" % (titel, jahr, tmdb) if jahr else "%s [tmdbid-%s]" % (titel, tmdb)
+    art, r = remote_daten(item_id, ziel)
+    titel = sauber(o.get("titel") or r.get("Name") or "")
+    jahr = o.get("jahr") or r.get("ProductionYear")
+    marke = "[%sid-%s]" % (art.lower(), ziel)
+    basis = "%s (%s) %s" % (titel, jahr, marke) if jahr else "%s %s" % (titel, marke)
     neu = os.path.join(ZIEL, basis, basis + os.path.splitext(alt)[1].lower())
     print("ALT:", alt)
     print("NEU:", neu)
+    if alt == neu:
+        print("schon richtig benannt")
+        return
     if os.path.exists(neu):
         sys.exit("Ziel gibt es schon – nichts gemacht")
-    if not los:
+    if not o["los"]:
         print("(nur Vorschau – mit --los ausführen)")
         return
     os.makedirs(os.path.dirname(neu), exist_ok=True)
     os.rename(alt, neu)  # gleiche Platte: sofort, nichts wird kopiert
     with open(LOG, "a", encoding="utf-8") as lg:
-        lg.write(json.dumps({"zeit": time.strftime("%Y-%m-%d %H:%M"), "alt": alt, "neu": neu, "tmdb": tmdb, "titel": titel}, ensure_ascii=False) + "\n")
+        lg.write(json.dumps({"zeit": time.strftime("%Y-%m-%d %H:%M"), "alt": alt, "neu": neu, "ziel": ziel, "titel": titel}, ensure_ascii=False) + "\n")
     try:
         jf("/Library/Media/Updated", {"Updates": [{"Path": alt, "UpdateType": "Deleted"}, {"Path": neu, "UpdateType": "Created"}]})
     except Exception as e:
         print("Jellyfin-Meldung ging nicht (wird beim nächsten Scan gefunden):", e)
     print("verschoben")
+
+
+def cmd_titel(a):
+    """titel ITEM-ID Neuer_Titel – Anzeigename in Jellyfin setzen und sperren (z. B. deutscher Titel statt Original)"""
+    item_id, name = a[0], a[1].replace("_", " ")
+    f = jf("/Items/%s?userId=%s" % (item_id, uid()))
+    f["Name"] = name
+    f["LockedFields"] = sorted(set((f.get("LockedFields") or []) + ["Name"]))
+    jf("/Items/%s" % item_id, f)
+    print("Titel gesetzt:", name)
 
 
 def cmd_zurueck(a):
@@ -286,7 +313,7 @@ def cmd_zurueck(a):
 
 
 BEFEHLE = {"inventar": cmd_inventar, "offen": cmd_offen, "suche": cmd_suche, "bilder": cmd_bilder,
-           "doppelte": cmd_doppelte, "umbenennen": cmd_umbenennen, "zurueck": cmd_zurueck}
+           "doppelte": cmd_doppelte, "umbenennen": cmd_umbenennen, "titel": cmd_titel, "zurueck": cmd_zurueck}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in BEFEHLE:
