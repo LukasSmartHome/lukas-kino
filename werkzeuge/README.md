@@ -30,8 +30,8 @@ Längere Läufe (mehr als 15 Sekunden) im File editor mit `nohup … > /tmp/x.lo
 
 ## Plan für große Mengen (Terabytes)
 
-1. **Platz:** Es kommt eine 14-TB-Platte (real 12,7 TB). Alle Filme kommen dorthin, auch die jetzigen von der 1-TB-SSD am Pi (auf die kommen keine weiteren). Pfad `ZIEL` im Skript dann anpassen.
 0. **Vorgaben Lukas (02.11.2026):** Nichts darf verloren gehen. Vorher die vorhandene Ordnung festhalten (Pfade, Ordnerbaum als Liste sichern). Die Musik ist schon geordnet – ob die Ordnung bleibt, entscheidet Lukas. Viele Doppelte, auch in verschiedenen Ordnern. Neben Filmen liegen teils unwichtige Zusatzdateien (vermutlich keine Untertitel) – erst beiseitelegen, löschen nur nach OK. Möglichst tokensparend: das Skript macht die Masse, Claude prüft nur die unsicheren Fälle (evtl. mit lokalem Agent). Ziel: Filme in die Jellyfin-Filmbibliothek, Serien getrennt, Musik als eigener Reiter in Jellyfin.
+1. **Platz:** Es kommt eine 14-TB-Platte (real 12,7 TB). Alle Filme kommen dorthin, auch die jetzigen von der 1-TB-SSD am Pi (auf die kommen keine weiteren). Pfad `ZIEL` im Skript dann anpassen.
 2. **Eingang statt direkt in die Bibliothek:** Neue Filme kommen erst in einen Eingangsordner, den Jellyfin nicht sieht.
 3. **Prüfen (automatisch):** Laufzeit, Auflösung, Tonsprachen und eingebetteten Titel auslesen (ffprobe), dann den Namen aus dem Dateinamen raten und bei TMDB über Jellyfin suchen. Passen Name und Jahr genau zu genau einem Treffer, gilt der Film als sicher.
 4. **Unsichere (Claude):** Kontaktbogen anschauen, Dateiinfos vergleichen, im Netz recherchieren, so wie am 02.11. bei 10 Filmen geübt.
