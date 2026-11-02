@@ -148,6 +148,22 @@ final class Jellyfin {
         return liste("/Shows/" + serie + "/Episodes?userId=" + benutzer + "&seasonId=" + staffel + "&fields=" + FELDER);
     }
 
+    /** Oberste Ebene der Fotos: nur Ordner, nach Name. Schnell – die Datums-Sortierung kostet am Pi mehrere Sekunden. */
+    JSONArray fotoWurzel(String id) throws Exception {
+        return liste("/Items?userId=" + benutzer + "&parentId=" + id + "&sortBy=SortName&fields=ChildCount,ImageTags,DateCreated,PremiereDate");
+    }
+
+    /**
+     * Erstes Foto eines Ordners fürs Titelbild: erst direkt im Ordner (ca. 40 ms), sonst in den Unterordnern.
+     * Bewusst ohne Sortierung – sortiert dauert es bei 48.000 Fotos rund 5 Sekunden pro Ordner.
+     */
+    JSONObject erstesFoto(String ordner) throws Exception {
+        JSONArray a = liste("/Items?userId=" + benutzer + "&parentId=" + ordner + "&includeItemTypes=Photo&limit=1&fields=ImageTags");
+        if (a.length() == 0)
+            a = liste("/Items?userId=" + benutzer + "&parentId=" + ordner + "&recursive=true&includeItemTypes=Photo&limit=1&fields=ImageTags");
+        return a.length() > 0 ? a.getJSONObject(0) : null;
+    }
+
     /** Inhalt eines Foto-Ordners: erst Unterordner, dann Bilder und Videos nach Aufnahmedatum. */
     JSONArray ordner(String id) throws Exception {
         return liste("/Items?userId=" + benutzer + "&parentId=" + id + "&sortBy=IsFolder,PremiereDate,DateCreated,SortName"

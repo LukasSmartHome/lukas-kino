@@ -240,6 +240,19 @@
     folgen: function (serie, staffel) {
       return this.liste('/Shows/' + serie + '/Episodes?userId=' + this.benutzer + '&seasonId=' + staffel + '&fields=' + FELDER);
     },
+    // Oberste Ebene der Fotos nur nach Name: die Datums-Sortierung kostet am Pi mehrere Sekunden
+    fotoWurzel: function (id) {
+      return this.liste('/Items?userId=' + this.benutzer + '&parentId=' + id + '&sortBy=SortName&fields=ChildCount,ImageTags,DateCreated,PremiereDate');
+    },
+    // Erstes Foto eines Ordners: erst direkt (ca. 40 ms), sonst in Unterordnern – ohne Sortierung (sortiert ca. 5 s)
+    erstesFoto: async function (ordner) {
+      let a = await this.liste('/Items?userId=' + this.benutzer + '&parentId=' + ordner + '&includeItemTypes=Photo&limit=1&fields=ImageTags');
+      if (!a.length) {
+        a = await this.liste('/Items?userId=' + this.benutzer + '&parentId=' + ordner
+          + '&recursive=true&includeItemTypes=Photo&limit=1&fields=ImageTags');
+      }
+      return a[0] || null;
+    },
     ordner: function (id) {
       return this.liste('/Items?userId=' + this.benutzer + '&parentId=' + id
         + '&sortBy=IsFolder,PremiereDate,DateCreated,SortName&sortOrder=Ascending&fields=' + FELDER_FOTO);
@@ -428,6 +441,11 @@
 
   const titelbilder = {};      // Ordner-Id -> Bild-URL ('' = keins)
   const titelbildLaedt = {};
+  // gefundene Titelbilder bleiben am Fernseher gespeichert (Fotos in alten Ordnern ändern sich praktisch nie)
+  let titelSpeicher = {};
+  try { titelSpeicher = JSON.parse(speicherLesen('lk_titelbilder') || '{}') || {}; } catch (e) { titelSpeicher = {}; }
+  const titelWarteschlange = [];
+  let titelLaufend = 0;
 
   // ------------------------------------------------------------------ DOM aufbauen
 
@@ -689,7 +707,16 @@
       s.leer = 'Noch keine Fotos';
       return s;
     }
-    const inhalt = await jf.ordner(fotosId);
+    // Die oberste Ebene ändert sich selten: aus dem Speicher sofort zeigen, im Hintergrund auffrischen
+    const schluessel = 'lk_fotos_' + fotosId;
+    let inhalt = null;
+    try { inhalt = JSON.parse(speicherLesen(schluessel) || 'null'); } catch (e) { inhalt = null; }
+    if (!inhalt) {
+      inhalt = await jf.fotoWurzel(fotosId);
+      speicherSetzen(schluessel, JSON.stringify(inhalt));
+    } else {
+      jf.fotoWurzel(fotosId).then(function (a) { speicherSetzen(schluessel, JSON.stringify(a)); }, function () {});
+    }
     const jahre = [], tage = [], lose = [];
     let urlaube = null;
     inhalt.forEach(function (o) {
@@ -859,8 +886,11 @@
       if (t === 'Folder' || t === 'PhotoAlbum') {
         const pr = tag(e, 'Primary');
         if (pr) return querUrl(id, pr, QW * 2);
-        const tb = titelbilder[id];
-        if (tb === undefined) titelbildSuchen(id);
+        let tb = titelbilder[id];
+        if (tb === undefined) {
+          titelbildSuchen(id);
+          tb = titelbilder[id]; // kann jetzt schon aus dem Speicher da sein
+        }
         return tb || null;
       }
       const pr = tag(e, 'Primary');
@@ -874,28 +904,62 @@
     return null;
   }
 
-  async function titelbildSuchen(ordner) {
+  /** Titelbild eines Foto-Ordners: aus dem Speicher, sonst höchstens 2 Suchen gleichzeitig, die zuletzt gewünschte zuerst. */
+  function titelbildSuchen(ordner) {
     if (titelbildLaedt[ordner]) return;
     titelbildLaedt[ordner] = true;
+    if (titelSpeicher[ordner]) {
+      titelbilder[ordner] = titelSpeicher[ordner];
+      return;
+    }
+    titelWarteschlange.push(ordner);
+    titelWeiter();
+  }
+
+  function titelWeiter() {
+    while (titelLaufend < 2 && titelWarteschlange.length) {
+      const ordner = titelWarteschlange.pop();
+      titelLaufend++;
+      titelbildHolen(ordner).then(function () {
+        titelLaufend--;
+        titelWeiter();
+      });
+    }
+  }
+
+  async function titelbildHolen(ordner) {
     let url = '';
     try {
-      const a = await jf.liste('/Items?userId=' + jf.benutzer + '&parentId=' + ordner
-        + '&recursive=true&includeItemTypes=Photo&limit=1&sortBy=DateCreated&fields=ImageTags');
-      if (a.length) url = querUrl(a[0].Id, tag(a[0], 'Primary'), QW * 2);
+      const f = await jf.erstesFoto(ordner);
+      if (f) url = querUrl(f.Id, tag(f, 'Primary'), QW * 2);
     } catch (e) { /* später nochmal */ }
     titelbilder[ordner] = url;
-    if (!url) {
+    if (url) {
+      titelSpeicher[ordner] = url;
+      speicherSetzen('lk_titelbilder', JSON.stringify(titelSpeicher));
+    } else {
       setTimeout(function () {
         delete titelbilder[ordner];
         delete titelbildLaedt[ordner];
       }, 90000);
     }
-    seite.reihen.forEach(function (r) {
-      if (r.eintraege.some(function (e) { return e && e.Id === ordner; })) r.version++;
-    });
+    // nur die betroffenen Karten ergänzen, nicht die ganze Reihe neu bauen (sonst flackert es)
+    if (url) {
+      seite.reihen.forEach(function (r) {
+        Object.keys(r.karten).forEach(function (k) {
+          const c = r.karten[k], e = r.eintraege[c._index];
+          if (!e || e.Id !== ordner || c.querySelector('img')) return;
+          const img = document.createElement('img');
+          img.alt = '';
+          img.decoding = 'async';
+          img.onerror = function () { if (img.parentNode) img.parentNode.removeChild(img); };
+          img.src = url;
+          c.insertBefore(img, c.firstChild);
+        });
+      });
+    }
     const e = heldEintrag();
     if (e && e.Id === ordner) fokusGeaendert();
-    else zeichnen();
   }
 
   // ------------------------------------------------------------------ Hintergrund mit Überblendung

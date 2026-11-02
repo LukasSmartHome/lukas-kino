@@ -2,6 +2,7 @@ package de.lukas.kino;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
@@ -121,6 +122,9 @@ public class FilmeActivity extends Activity {
     private Buehne buehne;
     private final Handler h = new Handler(Looper.getMainLooper());
     private final ExecutorService netz = Executors.newFixedThreadPool(2);
+    // Titelbilder der Foto-Ordner eigen, damit sie das Öffnen von Ordnern und Reihen nicht ausbremsen
+    private final ExecutorService bildSuche = Executors.newFixedThreadPool(2);
+    private SharedPreferences titelSpeicher;
 
     private Ansicht ansicht = Ansicht.LADEN;
     private Bereich bereich = Bereich.FILME;
@@ -166,6 +170,7 @@ public class FilmeActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         jf = Jellyfin.get(this);
         bilder = Bilder.get(jf);
+        titelSpeicher = getSharedPreferences("lukaskino_titelbilder", MODE_PRIVATE);
         buehne = new Buehne(this);
         setContentView(buehne);
         verstecken();
@@ -187,6 +192,7 @@ public class FilmeActivity extends Activity {
     protected void onDestroy() {
         h.removeCallbacksAndMessages(null);
         netz.shutdownNow();
+        bildSuche.shutdownNow();
         super.onDestroy();
     }
 
@@ -341,7 +347,27 @@ public class FilmeActivity extends Activity {
             s.leer = "Noch keine Fotos";
             return s;
         }
-        JSONArray inhalt = jf.ordner(fotosId);
+        // Die oberste Ebene ändert sich selten: aus dem Speicher sofort zeigen, im Hintergrund auffrischen
+        JSONArray inhalt = null;
+        String gemerkt = titelSpeicher.getString("@wurzel:" + fotosId, null);
+        if (gemerkt != null) {
+            try {
+                inhalt = new JSONArray(gemerkt);
+            } catch (Exception ignored) {
+            }
+        }
+        final String fid = fotosId;
+        if (inhalt == null) {
+            inhalt = jf.fotoWurzel(fid);
+            titelSpeicher.edit().putString("@wurzel:" + fid, inhalt.toString()).apply();
+        } else {
+            bildSuche.execute(() -> {
+                try {
+                    titelSpeicher.edit().putString("@wurzel:" + fid, jf.fotoWurzel(fid).toString()).apply();
+                } catch (Exception ignored) {
+                }
+            });
+        }
         List<JSONObject> jahre = new ArrayList<>(), tage = new ArrayList<>(), lose = new ArrayList<>();
         JSONObject urlaube = null;
         for (int i = 0; i < inhalt.length(); i++) {
@@ -624,7 +650,10 @@ public class FilmeActivity extends Activity {
                 String pr = Jellyfin.tag(e, "Primary");
                 if (pr != null) return Jellyfin.quer(id, pr, QW * 2);
                 String tb = titelbilder.get(id);
-                if (tb == null) titelbildSuchen(id);
+                if (tb == null) {
+                    titelbildSuchen(id);
+                    tb = titelbilder.get(id); // kann jetzt schon aus dem Speicher da sein
+                }
                 return tb == null || tb.isEmpty() ? null : tb;
             }
             String pr = Jellyfin.tag(e, "Primary");
@@ -644,19 +673,21 @@ public class FilmeActivity extends Activity {
     private void titelbildSuchen(final String ordner) {
         if (titelbildLaedt.contains(ordner)) return;
         titelbildLaedt.add(ordner);
-        netz.execute(() -> {
+        // schon einmal gefunden: sofort aus dem Speicher (Fotos ändern sich in alten Ordnern praktisch nie)
+        String gemerkt = titelSpeicher.getString(ordner, null);
+        if (gemerkt != null && !gemerkt.isEmpty()) {
+            titelbilder.put(ordner, gemerkt);
+            return;
+        }
+        bildSuche.execute(() -> {
             String url = "";
             try {
-                JSONObject o = new JSONObject(jf.anfrage("GET", "/Items?userId=" + jf.benutzer + "&parentId=" + ordner
-                        + "&recursive=true&includeItemTypes=Photo&limit=1&sortBy=DateCreated&fields=ImageTags", null));
-                JSONArray a = o.optJSONArray("Items");
-                if (a != null && a.length() > 0) {
-                    JSONObject f = a.getJSONObject(0);
-                    url = Jellyfin.quer(f.optString("Id"), Jellyfin.tag(f, "Primary"), QW * 2);
-                }
+                JSONObject f = jf.erstesFoto(ordner);
+                if (f != null) url = Jellyfin.quer(f.optString("Id"), Jellyfin.tag(f, "Primary"), QW * 2);
             } catch (Exception ignored) {
             }
             final String fertig = url;
+            if (!fertig.isEmpty()) titelSpeicher.edit().putString(ordner, fertig).apply();
             h.post(() -> {
                 titelbilder.put(ordner, fertig);
                 if (fertig.isEmpty()) h.postDelayed(() -> {
