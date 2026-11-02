@@ -84,6 +84,8 @@ public class MainActivity extends Activity {
     }
 
     private static final App PLAYSTATION = new App("@hdmi2", "PlayStation", false, true, "HDMI 2");
+    /** Filmbereich (eigene Oberfläche für die Filme auf dem Jellyfin-Server). */
+    private static final App FILME = new App("@filme", "Filme", false, true, "Lukas Kino");
 
     // ---------- Zustand (wie in der Web-Version) ----------
     private final List<App> apps = new ArrayList<>();
@@ -318,6 +320,7 @@ public class MainActivity extends Activity {
         Map<String, App> nachPkg = new HashMap<>();
         for (App a : liste) nachPkg.put(a.pkg, a);
         nachPkg.put(PLAYSTATION.pkg, PLAYSTATION);
+        nachPkg.put(FILME.pkg, FILME);
 
         List<String> basis = gespeicherteReihenfolge();
         if (basis.isEmpty()) basis = FAVORITEN;
@@ -331,6 +334,12 @@ public class MainActivity extends Activity {
         List<App> rest = new ArrayList<>(liste);
         rest.sort((a, b) -> col.compare(a.name, b.name));
         for (App a : rest) if (drin.add(a.pkg)) reihenfolge.add(a);
+        // Neue Filme-Kachel einmalig vor Plex einsortieren (danach gilt Lukas' eigene Reihenfolge)
+        if (!drin.contains(FILME.pkg)) {
+            int platz = 0;
+            for (int k = 0; k < reihenfolge.size(); k++) if (reihenfolge.get(k).pkg.equals("com.plexapp.android")) platz = k;
+            reihenfolge.add(Math.min(platz, reihenfolge.size()), FILME);
+        }
 
         String neu = schluessel(reihenfolge), alt = schluessel(apps);
         apps.clear();
@@ -686,6 +695,14 @@ public class MainActivity extends Activity {
             if (!hdmi(2)) zeigen("HDMI 2 nicht gefunden");
             return;
         }
+        if (a.pkg.equals(FILME.pkg)) {
+            try {
+                startActivity(new Intent(this, FilmeActivity.class));
+            } catch (Exception e) {
+                Log.w(TAG, "Filme ging nicht", e);
+            }
+            return;
+        }
         starten(a.pkg);
     }
 
@@ -755,7 +772,7 @@ public class MainActivity extends Activity {
     private void halten() {
         if (!phase.equals("apps") || apps.isEmpty()) return;
         if (modus.isEmpty()) modus = "gehoben";
-        else if (modus.equals("gehoben") && !apps.get(fokus).pkg.equals("@hdmi2")) {
+        else if (modus.equals("gehoben") && !apps.get(fokus).pkg.startsWith("@")) {
             modus = "menue";
             menueWahl = false;
         }

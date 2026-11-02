@@ -21,6 +21,7 @@
         android:banner="@drawable/banner"
         android:allowBackup="false"
         android:hardwareAccelerated="true"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
 
         <!-- Startseite: sanft über den StartseitenWaechter (Google-Startseite bleibt installiert).
@@ -43,6 +44,20 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Filmbereich: eigene Oberfläche für die Filme auf dem Jellyfin-Server (Pi, nur Heimnetz). -->
+        <activity
+            android:name=".FilmeActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
+
+        <!-- Eigener Player (Direct Play der Originaldatei). -->
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
 
         <!-- Einmaliger Umzug der alten Kachel-Reihenfolge aus der WebView (eigener Prozess, beendet sich selbst). -->
         <service

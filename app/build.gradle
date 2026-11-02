@@ -7,7 +7,7 @@ def lauf = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int
 
 android {
     namespace 'de.lukas.kino'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId 'de.lukas.kino'
@@ -44,4 +44,12 @@ android {
         checkReleaseBuilds false
         abortOnError false
     }
+}
+
+dependencies {
+    // Player für den Filmbereich (Direct Play, Ton- und Untertitelspuren)
+    implementation 'androidx.media3:media3-exoplayer:1.5.0'
+    implementation 'androidx.media3:media3-ui:1.5.0'
+    // Software-Decoder (DTS, TrueHD …), falls der Fernseher eine Tonspur nicht selbst kann – wie in der Jellyfin-App
+    implementation 'org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1'
 }

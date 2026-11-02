@@ -183,7 +183,24 @@ final class Kachel extends View {
     private void glasMalen(Canvas c, float f) {
         Glas.malen(c, this, kachel, RADIUS, Ani.farbe(0xFFFFFF, Ani.mix(0.13f, 0.3f, f)), Ani.farbe(0xFFFFFF, 0.3f), p);
         float x = kachel.left + 22, y = kachel.top + 20;
-        if (app.spiel) {
+        if (app.pkg.equals("@filme")) {
+            // gelbes Feld mit Play-Dreieck (Lukas' Lieblingsfarbe)
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(Ani.farbe(0xF2B705, 0.95f));
+            c.drawRoundRect(new RectF(x, y, x + 58, y + 58), 17, 17, p);
+            p.setColor(Ani.farbe(0xFFFFFF, 0.45f));
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(1f);
+            c.drawLine(x + 17, y + 0.5f, x + 41, y + 0.5f, p);
+            p.setStyle(Paint.Style.FILL);
+            android.graphics.Path d = new android.graphics.Path();
+            d.moveTo(x + 22, y + 16);
+            d.lineTo(x + 42, y + 29);
+            d.lineTo(x + 22, y + 42);
+            d.close();
+            p.setColor(0xFF1A1426);
+            c.drawPath(d, p);
+        } else if (app.spiel) {
             p.setStyle(Paint.Style.FILL);
             p.setColor(Ani.farbe(0x426EFF, 0.85f));
             c.drawRoundRect(new RectF(x, y, x + 58, y + 58), 17, 17, p);
