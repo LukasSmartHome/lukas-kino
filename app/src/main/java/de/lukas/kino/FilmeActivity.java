@@ -2,6 +2,7 @@ package de.lukas.kino;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
@@ -13,6 +14,7 @@ import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -215,7 +217,20 @@ public class FilmeActivity extends Activity {
     // Seitenleiste
     private boolean leiste;
     private int leistePos;
-    private static final String[] LEISTE = {"Suche", "Filme", "Serien", "Merkliste", "Empfohlen", "Fotos"};
+    // Ganz oben in der Leiste Streaming-Apps (Wunsch Lukas 03.11.2026): Prime Video ganz oben, dann Netflix,
+    // YouTube direkt über der Suche. Prime und Netflix öffnen die echte App, YouTube vorerst die Webseite
+    // youtube.com/tv (YouTubeWebActivity, YT_ALS_WEB). Zurück aus der App landet wieder hier, Leiste offen.
+    static final int APPS = 3;
+    static final String[][] APP_PAKETE = {
+            {"com.amazon.amazonvideo.livingroom", "com.amazon.firebat"},
+            {"com.netflix.ninja"},
+            {"com.google.android.youtube.tv", "com.amazon.firetv.youtube"}};
+    static final int APP_YOUTUBE = 2;
+    static final boolean YT_ALS_WEB = true;
+    private static final String[] LEISTE = {"Prime Video", "Netflix", "YouTube",
+            "Suche", "Filme", "Serien", "Merkliste", "Empfohlen", "Fotos"};
+    private static final float LEISTE_SCHRITT = 90;
+    private int appZurueck = -1; // nach der Rückkehr aus einer App die Leiste dort wieder öffnen
 
     // Suche
     private final StringBuilder suchText = new StringBuilder();
@@ -267,6 +282,14 @@ public class FilmeActivity extends Activity {
         if (ausPlayer) {
             ausPlayer = false;
             nachDemFilm();
+        }
+        if (appZurueck >= 0) {
+            // zurück aus Prime, Netflix oder YouTube: Leiste offen, die App von eben ausgewählt
+            leiste = true;
+            leistePos = appZurueck;
+            appZurueck = -1;
+            buehne.leisteFokusY = -1;
+            buehne.invalidate();
         }
         if (jf.angemeldet() && SystemClock.uptimeMillis() - familieZeit > 180_000) netz.execute(this::familieLaden);
         auftrag.an();
@@ -1507,7 +1530,7 @@ public class FilmeActivity extends Activity {
     private void leisteAuf() {
         leiste = true;
         // ausgewählt ist, wo man gerade ist (Suche, Filme, Serien oder Fotos)
-        leistePos = ansicht == Ansicht.SUCHE ? 0 : bereich.ordinal() + 1;
+        leistePos = ansicht == Ansicht.SUCHE ? APPS : APPS + bereich.ordinal() + 1;
         buehne.leisteFokusY = -1; // Auswahl-Pille springt direkt dorthin statt von der alten Stelle zu gleiten
         buehne.invalidate();
     }
@@ -1520,12 +1543,63 @@ public class FilmeActivity extends Activity {
         } else if (k == KeyEvent.KEYCODE_DPAD_DOWN) {
             leistePos = Math.min(LEISTE.length - 1, leistePos + 1);
         } else if (ok) {
+            if (leistePos < APPS) {
+                appOeffnen(leistePos); // Leiste bleibt offen und steht nach der Rückkehr noch dort
+                return true;
+            }
             leiste = false;
-            if (leistePos == 0) sucheOeffnen();
-            else bereichOeffnen(Bereich.values()[leistePos - 1]);
+            if (leistePos == APPS) sucheOeffnen();
+            else bereichOeffnen(Bereich.values()[leistePos - APPS - 1]);
         }
         buehne.invalidate();
         return true;
+    }
+
+    /** Paket einer Streaming-App aus der Leiste, das auf diesem Fernseher installiert ist (sonst null). */
+    String appPaket(int i) {
+        for (String pkg : APP_PAKETE[i]) {
+            try {
+                getPackageManager().getPackageInfo(pkg, 0);
+                return pkg;
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private void appOeffnen(int i) {
+        if (i == APP_YOUTUBE && YT_ALS_WEB) {
+            appZurueck = i;
+            YouTubeWebActivity.starten(this);
+            return;
+        }
+        String pkg = appPaket(i);
+        Intent in = pkg == null ? null : getPackageManager().getLeanbackLaunchIntentForPackage(pkg);
+        if (in == null && pkg != null) in = getPackageManager().getLaunchIntentForPackage(pkg);
+        if (in == null) {
+            hinweis(LEISTE[i] + " ist hier nicht installiert");
+            return;
+        }
+        in.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            appZurueck = i;
+            startActivity(in);
+        } catch (Exception e) {
+            appZurueck = -1;
+            hinweis(LEISTE[i] + " startet nicht");
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle b) {
+        super.onSaveInstanceState(b);
+        b.putInt("appZurueck", appZurueck);
+    }
+
+    @Override
+    protected void onRestoreInstanceState(Bundle b) {
+        super.onRestoreInstanceState(b);
+        appZurueck = b.getInt("appZurueck", -1);
     }
 
     private boolean listeTaste(int k, boolean ok, boolean zurueck, int wiederholung) {
@@ -2140,7 +2214,8 @@ public class FilmeActivity extends Activity {
         private final Map<Reihe, Float> scrolls = new HashMap<>();
         private float fokusZoom = 1f, detailAnim, leisteAnim, leisteFokusY = -1, sucheScroll, bewAnim;
         private JSONObject letzterFokus;
-        private final Path[] symbole = new Path[6];
+        private final Path[] symbole = new Path[LEISTE.length];
+        private final Bitmap[] appSymbole = new Bitmap[APPS]; // echte App-Symbole (Prime, Netflix, YouTube)
 
         Buehne(Context c) {
             super(c);
@@ -2156,12 +2231,31 @@ public class FilmeActivity extends Activity {
             karte = stift(c, 26, 650, 0xFFFFFFFF);
             leisteText = stift(c, 38, 650, 0xFFFFFFFF);
             taste = stift(c, 36, 600, 0xFFFFFFFF);
-            symbole[0] = Symbole.SUCHE;
-            symbole[1] = symbolFilm();
-            symbole[2] = symbolSerie();
-            symbole[3] = symbolMerk();
-            symbole[4] = symbolStern();
-            symbole[5] = symbolFoto();
+            symbole[APPS] = Symbole.SUCHE;
+            symbole[APPS + 1] = symbolFilm();
+            symbole[APPS + 2] = symbolSerie();
+            symbole[APPS + 3] = symbolMerk();
+            symbole[APPS + 4] = symbolStern();
+            symbole[APPS + 5] = symbolFoto();
+            for (int i = 0; i < APPS; i++) {
+                symbole[i] = symbolFilm(); // falls die App fehlt
+                appSymbole[i] = appSymbol(appPaket(i));
+            }
+        }
+
+        /** Symbol der installierten App als kleines Bild (einmal beim Start gezeichnet). */
+        private Bitmap appSymbol(String pkg) {
+            if (pkg == null) return null;
+            try {
+                Drawable d = getPackageManager().getApplicationIcon(pkg);
+                Bitmap b = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888);
+                Canvas c = new Canvas(b);
+                d.setBounds(0, 0, 96, 96);
+                d.draw(c);
+                return b;
+            } catch (Exception e) {
+                return null;
+            }
         }
 
         private TextPaint stift(Context c, float g, int w, int farbe) {
@@ -2394,6 +2488,11 @@ public class FilmeActivity extends Activity {
 
         // -------------------------------------------------- Seitenleiste
 
+        /** Mitte des Leisten-Eintrags i (9 Einträge, zwischen Apps und Suche etwas Luft für die Linie). */
+        private float leisteY(int i) {
+            return 212 + i * LEISTE_SCHRITT + (i >= APPS ? 24 : 0);
+        }
+
         private boolean leisteZeichnen(Canvas c, float dt) {
             boolean weiter = false;
             float a = Ani.AUS.getInterpolation(leisteAnim);
@@ -2409,33 +2508,56 @@ public class FilmeActivity extends Activity {
 
             // Ueberschrift
             klein.setAlpha(Math.round(200 * a));
-            c.drawText("Lukas Kino", f.left + 48, 140, klein);
+            c.drawText("Lukas Kino", f.left + 48, 122, klein);
             klein.setAlpha(0xB3);
 
-            float y0 = 260, schritt = 112;
-            float zielY = y0 + leistePos * schritt;
+            // Oben die Apps (Prime Video, Netflix, YouTube), dann eine feine Linie, dann Suche und die Bereiche
+            float zielY = leisteY(leistePos);
             leisteFokusY = leisteFokusY < 0 ? zielY : naeher(leisteFokusY, zielY, dt, 45);
             if (leisteFokusY != zielY) weiter = true;
             // Auswahl-Pille gleitet
-            r.set(f.left + 22, leisteFokusY - 46, f.right - 22, leisteFokusY + 46);
+            r.set(f.left + 22, leisteFokusY - 40, f.right - 22, leisteFokusY + 40);
             p.setColor(0xFFFFFFFF);
             p.setAlpha(Math.round(242 * a));
             p.setShadowLayer(Ani.schatten(24), 0, 8, Ani.farbe(0x000000, 0.25f * a));
-            c.drawRoundRect(r, 46, 46, p);
+            c.drawRoundRect(r, 40, 40, p);
             p.clearShadowLayer();
 
+            // Trennlinie zwischen den Apps und dem Kino
+            float linieY = (leisteY(APPS - 1) + leisteY(APPS)) / 2f;
+            p.setColor(0xFFFFFFFF);
+            p.setAlpha(Math.round(46 * a));
+            c.drawRect(f.left + 52, linieY - 1, f.right - 52, linieY + 1, p);
+            p.setAlpha(255);
+
             for (int i = 0; i < LEISTE.length; i++) {
-                float y = y0 + i * schritt;
-                float naehe = Math.max(0f, 1f - Math.abs(leisteFokusY - y) / schritt);
+                float y = leisteY(i);
+                float naehe = Math.max(0f, 1f - Math.abs(leisteFokusY - y) / LEISTE_SCHRITT);
                 int farbe = mischen(0xFFFFFFFF, 0xFF15171C, naehe);
-                Symbole.malen(c, symbole[i], f.left + 52, y - 20, 40, 2f, Ani.farbe(farbe & 0xFFFFFF, a), symbolStift);
-                symbolStift.setStyle(Paint.Style.FILL);
+                Bitmap app = i < APPS ? appSymbole[i] : null;
+                if (app != null) {
+                    // echtes App-Symbol, abgerundet
+                    r.set(f.left + 50, y - 22, f.left + 94, y + 22);
+                    p.setAlpha(Math.round(255 * a));
+                    BitmapShader bs = new BitmapShader(app, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                    m.reset();
+                    m.setScale(r.width() / app.getWidth(), r.height() / app.getHeight());
+                    m.postTranslate(r.left, r.top);
+                    bs.setLocalMatrix(m);
+                    p.setShader(bs);
+                    c.drawRoundRect(r, 11, 11, p);
+                    p.setShader(null);
+                    p.setAlpha(255);
+                } else {
+                    Symbole.malen(c, symbole[i], f.left + 52, y - 20, 40, 2f, Ani.farbe(farbe & 0xFFFFFF, a), symbolStift);
+                    symbolStift.setStyle(Paint.Style.FILL);
+                }
                 leisteText.setColor(farbe);
                 leisteText.setAlpha(Math.round(255 * a));
                 c.drawText(LEISTE[i], f.left + 114, y + 13, leisteText);
                 // aktiver Bereich: kleiner gelber Punkt
-                boolean aktiv = (i == 0 && ansicht == Ansicht.SUCHE)
-                        || (i > 0 && ansicht != Ansicht.SUCHE && bereich == Bereich.values()[i - 1]);
+                boolean aktiv = (i == APPS && ansicht == Ansicht.SUCHE)
+                        || (i > APPS && ansicht != Ansicht.SUCHE && bereich == Bereich.values()[i - APPS - 1]);
                 if (aktiv) {
                     p.setColor(GELB);
                     p.setAlpha(Math.round(255 * a));

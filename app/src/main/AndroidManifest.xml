@@ -70,6 +70,15 @@
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
 
+        <!-- YouTube als Webseite (youtube.com/tv) aus der Seitenleiste im Kino. Exportiert nur für ADB-Tests
+             (Shell hat DUMP, normale Apps nicht). -->
+        <activity
+            android:name=".YouTubeWebActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
+
         <!-- Einmaliger Umzug der alten Kachel-Reihenfolge aus der WebView (eigener Prozess, beendet sich selbst). -->
         <service
             android:name=".UmzugDienst"
