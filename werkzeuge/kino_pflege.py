@@ -7,7 +7,7 @@
 #
 # Befehle:
 #   daten [ziel.json]        alle Filme mit Genres, Sammlungen, Trailer-Links (zum Prüfen)
-#   trailer [--alle]         /share/kino/trailer.json neu: je Film der beste YouTube-Trailer
+#   trailer [--alle|--ohne]  /share/kino/trailer.json neu: je Film der beste YouTube-Trailer
 #                            (eigene Liste > KinoCheck deutsch > Jellyfin deutsch > KinoCheck englisch > Jellyfin),
 #                            jeder Kandidat wird per YouTube-oEmbed geprüft (gibt es ihn, darf man ihn einbetten?).
 #                            Ohne --alle nur Filme, die noch nicht in der Liste stehen oder ohne Trailer älter als 7 Tage.
@@ -152,6 +152,64 @@ def kinocheck(tmdb, sprache):
     return out
 
 
+def normal(t):
+    t = (t or "").lower().replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss").replace("&", " und ")
+    t = "".join(c for c in unicodedata.normalize("NFD", t) if unicodedata.category(c) != "Mn")
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", t)).strip()
+
+
+NICHT_TRAILER = re.compile(r"reaction|review|kritik|explained|breakdown|fan ?made|concept|ending|ende erkl|recap|interview|behind|making of|clip|featurette|scene|szene", re.I)
+
+
+def yt_suche(suche):
+    """YouTube-Suche ohne Schlüssel (Ergebnisseite lesen). Liste {yt, t, sek}."""
+    url = "https://www.youtube.com/results?" + q(search_query=suche, hl="de", gl="DE")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+                                               "Accept-Language": "de-DE,de;q=0.9", "Cookie": "SOCS=CAI; CONSENT=YES+1"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            html = r.read().decode("utf-8", "replace")
+    except Exception:
+        return []
+    out = []
+    for m in re.finditer(r'"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"(.{0,4000}?)"lengthText":\{.{0,300}?"simpleText":"([0-9:]+)"', html):
+        if '"videoRenderer"' in m.group(2):
+            continue
+        tm = re.search(r'"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"', m.group(2))
+        titel = json.loads('"' + tm.group(1) + '"') if tm else ""
+        teile = [int(x) for x in m.group(3).split(":")]
+        sek = 0
+        for x in teile:
+            sek = sek * 60 + x
+        out.append({"yt": m.group(1), "t": titel, "sek": sek})
+    return out
+
+
+def youtube_kandidaten(e):
+    namen = [x for x in [e.get("Name"), e.get("OriginalTitle")] if x]
+    jahr = e.get("ProductionYear") or ""
+    l, gesehen = [], set()
+    for suche, spr in [("{} {} Trailer Deutsch".format(namen[0], jahr), "de"), ("{} {} official trailer".format(namen[-1], jahr), "en")]:
+        for v in yt_suche(suche)[:10]:
+            t = v["t"]
+            nt = normal(t)
+            if v["yt"] in gesehen or v["sek"] > 300 or v["sek"] < 30 or NICHT_TRAILER.search(t):
+                continue
+            if "trailer" not in nt and "teaser" not in nt:
+                continue
+            # der Filmname muss vorkommen (erstes Wort mit mindestens 3 Zeichen aus Titel oder Originaltitel)
+            treffer = False
+            for n in namen:
+                woerter = [w for w in normal(n).split() if len(w) >= 3] or normal(n).split()
+                if woerter and all(w in nt for w in woerter[:2]):
+                    treffer = True
+            if not treffer:
+                continue
+            gesehen.add(v["yt"])
+            l.append({"yt": v["yt"], "t": t, "q": "YouTube-Suche", "spr": "de" if DEUTSCH.search(t) else spr})
+    return l
+
+
 def kandidaten(e, eigen):
     ids = e.get("ProviderIds") or {}
     tmdb = ids.get("Tmdb") or ids.get("tmdb") or ""
@@ -173,6 +231,8 @@ def kandidaten(e, eigen):
     if tmdb:
         l.extend(kinocheck(tmdb, "en"))
     l.extend(x for x in jf if x["spr"] != "de")
+    if not [x for x in l if x.get("yt")]:
+        l.extend(youtube_kandidaten(e))
     return l
 
 
@@ -184,7 +244,7 @@ def rang(k, i):
     return (1 + unter * 2 + (0 if k.get("spr") == "de" else 1), i)
 
 
-def befehl_trailer(alle=False, still=False):
+def befehl_trailer(alle=False, still=False, ohne_neu=False):
     key = schluessel()
     user = anfrage("/Users", key)[0]["Id"]
     filme = filme_holen(key, user)
@@ -195,7 +255,7 @@ def befehl_trailer(alle=False, still=False):
     for e in filme:
         a = alt.get(e["Id"])
         fest = eigen.get(e["Id"]) or eigen.get("tmdb:" + str((e.get("ProviderIds") or {}).get("Tmdb", "")))
-        if a and not alle and not fest and (a.get("yt") or jetzt - a.get("z", 0) < 7 * 86400):
+        if a and not alle and not fest and (a.get("yt") or (not ohne_neu and jetzt - a.get("z", 0) < 7 * 86400)):
             neu[e["Id"]] = a
             continue
         gezaehlt["geprueft"] += 1
@@ -212,6 +272,8 @@ def befehl_trailer(alle=False, still=False):
             neu[e["Id"]] = {"yt": bester["yt"], "t": bester.get("t", ""), "q": bester["q"], "spr": bester.get("spr", ""),
                             "name": e.get("Name"), "z": jetzt}
             gezaehlt["neu"] += 1
+            if not still and (a is None or a.get("yt") != bester["yt"]):
+                print("  neu: {} -> {} ({}, {})".format(e.get("Name"), bester["yt"], bester["q"], bester.get("t", "")[:70]))
         else:
             neu[e["Id"]] = {"yt": "", "keiner": True, "name": e.get("Name"), "j": e.get("ProductionYear"),
                             "tmdb": (e.get("ProviderIds") or {}).get("Tmdb"), "z": jetzt}
@@ -226,6 +288,63 @@ def befehl_trailer(alle=False, still=False):
     return len(ohne)
 
 
+
+# ------------------------------------------------------------------ kategorien
+
+def befehl_kategorien(los=False, still=False):
+    regeln = lesen(KATEGORIEN)
+    if not regeln:
+        raise SystemExit("keine Regeln in " + KATEGORIEN)
+    zuo = regeln.get("zuordnung") or {}
+    aus = regeln.get("filme") or {}
+    key = schluessel()
+    user = anfrage("/Users", key)[0]["Id"]
+    filme = filme_holen(key, user)
+    samm = {s["name"]: s for s in sammlungen_holen(key, user)}
+    fehlt = sorted(set(zuo.values()) - set(samm))
+    if fehlt:
+        print("Sammlungen fehlen in Jellyfin (werden nicht angelegt):", ", ".join(fehlt))
+    soll = {n: set() for n in samm}
+    namen = {}
+    for e in filme:
+        namen[e["Id"]] = e.get("Name")
+        k = {zuo[g] for g in (e.get("Genres") or []) if g in zuo}
+        a = aus.get("tmdb:" + str((e.get("ProviderIds") or {}).get("Tmdb", ""))) or aus.get(e["Id"]) or {}
+        k |= set(a.get("dazu") or [])
+        k -= set(a.get("weg") or [])
+        for n in k:
+            if n in soll:
+                soll[n].add(e["Id"])
+    film_ids = set(namen)
+    dazu_n = weg_n = 0
+    zeilen = []
+    for n, s in samm.items():
+        ist = set(s["filme"]) & film_ids          # nur Filme anfassen (falls jemand Serien hineinlegt)
+        dazu = sorted(soll[n] - ist, key=lambda i: namen[i] or "")
+        weg = sorted(ist - soll[n], key=lambda i: namen[i] or "")
+        if not dazu and not weg:
+            continue
+        zeilen.append("{}: +{} -{}".format(n, len(dazu), len(weg)))
+        for i in dazu:
+            zeilen.append("   + " + str(namen[i]))
+        for i in weg:
+            zeilen.append("   - " + str(namen[i]))
+        dazu_n += len(dazu)
+        weg_n += len(weg)
+        if los:
+            for i in range(0, len(dazu), 40):
+                anfrage("/Collections/{}/Items?{}".format(s["id"], q(ids=",".join(dazu[i:i + 40]))), key, "POST")
+            for i in range(0, len(weg), 40):
+                anfrage("/Collections/{}/Items?{}".format(s["id"], q(ids=",".join(weg[i:i + 40]))), key, "DELETE")
+    ohne = sorted(str(namen[i]) for i in film_ids if not any(i in s for s in soll.values()))
+    if not still:
+        print("\n".join(zeilen) if zeilen else "Alles passt schon.")
+        print("{}: {} dazu, {} raus{}".format("Geändert" if los else "Vorschau", dazu_n, weg_n, "" if los else " (mit --los ausführen)"))
+        if ohne:
+            print("Ohne Kategorie:", ", ".join(ohne))
+    return dazu_n, weg_n
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
     if not a:
@@ -233,4 +352,16 @@ if __name__ == "__main__":
     elif a[0] == "daten":
         befehl_daten(a[1] if len(a) > 1 else os.path.join(WERK, "film_daten.json"))
     elif a[0] == "trailer":
-        befehl_trailer(alle="--alle" in a)
+        befehl_trailer(alle="--alle" in a, ohne_neu="--ohne" in a)
+    elif a[0] == "kategorien":
+        befehl_kategorien(los="--los" in a)
+    elif a[0] == "auto":
+        # für den Sensor: kurze Zeile, Fehler als „fehler: …“
+        try:
+            o = befehl_trailer(still=True)
+            d, w = befehl_kategorien(los=True, still=True)
+            print("ok {} ohne Trailer, Kategorien +{} -{}".format(o, d, w))
+        except SystemExit as ex:
+            print("fehler: " + str(ex)[:100])
+        except Exception as ex:
+            print("fehler: " + str(ex)[:100])
