@@ -1302,62 +1302,134 @@ body {
 .kg-zahl { position: absolute; left: 0; right: 0; top: 238px; text-align: center; font-size: 22px; color: rgba(255, 255, 255, .7); }
 
 /* ------------------------------------------------------------ Bewerten (nach dem Film und in den Details) */
+/* Seit 03.11.2026: „–“ statt 5, Feld „Keine Bewertung“, eigener Look je Note (wie BewertenKarte.java am TCL). */
 
 #bewerten { background: rgba(0, 0, 0, .6); z-index: 6; }
 
-.b-karte {
-  left: 570px;
-  top: 236px;
-  width: 780px;
-  height: 600px;
-  border-radius: 52px;
-  text-align: center;
-}
+.b-karte { left: 550px; top: 190px; width: 820px; height: 660px; border-radius: 52px; text-align: center; }
+.b-karte.zwei { left: 340px; width: 1240px; }
 
-.b-karte.zwei { left: 440px; width: 1040px; }
-
-.b-film { position: absolute; left: 60px; right: 60px; top: 50px; font-size: 28px; font-weight: 600; color: rgba(255, 255, 255, .7);
+.b-film { position: absolute; left: 60px; right: 60px; top: 44px; font-size: 28px; font-weight: 600; color: rgba(255, 255, 255, .7);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-frage { position: absolute; left: 40px; right: 40px; top: 98px; font-size: 42px; font-weight: 650;
+.b-frage { position: absolute; left: 40px; right: 40px; top: 92px; font-size: 42px; font-weight: 650;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.b-zaehler { position: absolute; left: 0; right: 0; top: 190px; display: flex; justify-content: center; }
+.b-reihe { position: absolute; left: 0; right: 0; top: 170px; height: 430px; display: flex; justify-content: center; }
+.b-reihe > * { flex: none; }
+.b-x-platz, .b-x-leer { width: 150px; height: 430px; display: flex; align-items: center; }
+.b-x-platz[data-x="0"] { margin-right: 26px; }
+.b-x-platz[data-x="1"], .b-x-leer { margin-left: 26px; }
+.b-spalte + .b-spalte { margin-left: 40px; }
 
-.b-spalte {
-  position: relative;
-  width: 400px;
-  height: 370px;
-  margin: 0 50px;
-  border-radius: 36px;
-  opacity: .55;
-}
+/* Feld „Keine Bewertung“ */
+.b-x { position: relative; width: 150px; height: 230px; border-radius: 30px; background: rgba(255, 255, 255, .07); color: #fff; opacity: .6; }
+.b-x.aktiv { opacity: 1; background: rgba(255, 255, 255, .18); box-shadow: inset 0 0 0 3px rgba(255, 255, 255, .87); }
+.b-x.entfernt { background: rgba(229, 72, 77, .25); color: #FCA5A5; }
+.b-x-symbol { position: absolute; left: 42px; top: 45px; width: 56px; height: 56px; border: 5px solid currentColor; border-radius: 50%; box-sizing: border-box; }
+.b-x-symbol::after { content: ''; position: absolute; left: 21px; top: -4px; width: 5px; height: 54px; border-radius: 3px; background: currentColor; transform: rotate(45deg); }
+.b-x-text { position: absolute; left: 0; right: 0; top: 128px; font-size: 24px; font-weight: 600; line-height: 30px; }
 
-.b-karte:not(.zwei) .b-spalte { opacity: 1; }
-.b-karte.zwei .b-spalte { background: rgba(255, 255, 255, .05); }
-.b-karte.zwei .b-spalte.aktiv { opacity: 1; background: rgba(255, 255, 255, .14); box-shadow: inset 0 0 0 3px rgba(255, 255, 255, .8); }
+/* Zähler-Kachel */
+.b-spalte { position: relative; width: 380px; height: 430px; border-radius: 38px;
+  background: linear-gradient(rgba(255, 255, 255, .1), rgba(255, 255, 255, .05)); box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .2); }
+.b-karte.zwei .b-spalte { opacity: .8; }
+.b-karte.zwei .b-spalte.aktiv { opacity: 1; }
+.b-karte.zwei .b-spalte.aktiv::after { content: ''; position: absolute; left: -7px; top: -7px; right: -7px; bottom: -7px; border-radius: 45px;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, .9); pointer-events: none; }
 
-.b-pfeil { position: absolute; left: 182px; width: 36px; height: 36px; border: solid #fff; border-width: 7px 7px 0 0;
-  border-radius: 3px; opacity: .9; }
+.b-spalte.s1 { background: linear-gradient(#3A1212, #120707); box-shadow: inset 0 0 0 2px #7F1D1D; }
+.b-spalte.s2 { background: linear-gradient(rgba(58, 21, 23, .8), rgba(23, 10, 11, .8)); box-shadow: inset 0 0 0 2px #9B2C2C; }
+.b-spalte.s3 { background: linear-gradient(rgba(58, 26, 18, .33), rgba(0, 0, 0, .13)); box-shadow: inset 0 0 0 2px rgba(242, 107, 58, .4); }
+.b-spalte.s4 { background: linear-gradient(rgba(245, 158, 11, .18), rgba(245, 158, 11, .04)); box-shadow: inset 0 0 0 2px rgba(245, 158, 11, .4); }
+.b-spalte.s5 { background: linear-gradient(rgba(242, 201, 76, .15), rgba(242, 201, 76, .04)); box-shadow: inset 0 0 0 2px rgba(242, 201, 76, .4); }
+.b-spalte.s6 { background: linear-gradient(rgba(181, 211, 52, .15), rgba(181, 211, 52, .04)); box-shadow: inset 0 0 0 2px rgba(181, 211, 52, .4); }
+.b-spalte.s7 { background: linear-gradient(rgba(34, 197, 94, .2), rgba(34, 197, 94, .05)); box-shadow: inset 0 0 0 2px rgba(107, 212, 138, .53); }
+.b-spalte.s8 { background: linear-gradient(rgba(34, 197, 94, .33), rgba(34, 197, 94, .08)); box-shadow: inset 0 0 0 2px rgba(34, 197, 94, .67), 0 0 14px rgba(34, 197, 94, .35); }
+.b-spalte.s9 { background: linear-gradient(rgba(17, 107, 60, .85), rgba(10, 46, 28, .85)); box-shadow: inset 0 0 0 3px #4ADE80, 0 0 24px rgba(74, 222, 128, .65);
+  animation: b-gruen 2s ease-in-out infinite; }
+.b-spalte.s10 { background: linear-gradient(#7A5A00, #261B00); box-shadow: inset 0 0 0 3px #FFD54A, 0 0 34px rgba(255, 213, 74, .8);
+  animation: b-gold 1.9s ease-in-out infinite; }
+@keyframes b-gruen { 50% { box-shadow: inset 0 0 0 3px #4ADE80, 0 0 12px rgba(74, 222, 128, .4); } }
+@keyframes b-gold { 50% { box-shadow: inset 0 0 0 3px #FFE58A, 0 0 52px rgba(255, 213, 74, 1); } }
+
+.b-pfeil { position: absolute; left: 172px; width: 36px; height: 36px; border: solid #fff; border-width: 7px 7px 0 0; border-radius: 3px; opacity: .9; z-index: 2; }
 .b-pfeil.hoch { top: 40px; transform: rotate(-45deg); }
-.b-pfeil.runter { top: 226px; transform: rotate(135deg); }
+.b-pfeil.runter { top: 270px; transform: rotate(135deg); }
 .b-pfeil.grau { opacity: .25; }
 
-.b-zahl { position: absolute; left: 0; right: 0; top: 70px; font-size: 150px; font-weight: 800; line-height: 160px; }
+.b-zahl { position: absolute; left: 0; right: 0; top: 78px; font-size: 150px; font-weight: 800; line-height: 160px; z-index: 2; }
+.s8 .b-zahl { text-shadow: 0 0 12px rgba(34, 197, 94, .55); }
+.s9 .b-zahl { text-shadow: 0 0 22px rgba(34, 197, 94, .85); }
+.s1 .b-zahl { text-shadow: 0 4px 14px rgba(0, 0, 0, .8); }
+.s10 .b-zahl { background: linear-gradient(#FFF6C2, #FFD54A 55%, #E09A00); -webkit-background-clip: text; background-clip: text; color: transparent;
+  -webkit-filter: drop-shadow(0 0 16px rgba(242, 183, 5, .85)); filter: drop-shadow(0 0 16px rgba(242, 183, 5, .85)); }
+.b-zahl.pop { animation: b-pop .28s ease-out; }
+.b-zahl.wackeln { animation: b-wackeln .6s linear; }
+@keyframes b-pop { 45% { transform: scale(1.25); } }
+@keyframes b-wackeln { 15% { transform: translateX(-10px); } 30% { transform: translateX(9px); } 45% { transform: translateX(-7px); }
+  60% { transform: translateX(5px); } 75% { transform: translateX(-3px); } }
 
-.b-punkte { position: absolute; left: 0; right: 0; top: 296px; display: flex; justify-content: center; }
-.b-punkte i { width: 13px; height: 13px; margin: 0 8px; border-radius: 50%; background: #fff; opacity: .18; }
+.b-wort { position: absolute; left: 0; right: 0; top: 240px; font-size: 30px; font-weight: 650; line-height: 36px; color: rgba(255, 255, 255, .9); z-index: 2; }
+.s0 .b-wort { color: rgba(255, 255, 255, .6); }
 
-.b-wer { position: absolute; left: 0; right: 0; top: 322px; font-size: 38px; font-weight: 650; }
+.b-punkte { position: absolute; left: 0; right: 0; top: 338px; display: flex; justify-content: center; z-index: 2; }
+.b-punkte i { width: 13px; height: 13px; margin: 0 8.5px; border-radius: 50%; background: #fff; opacity: .18; }
+.b-punkte i.jetzt { transform: scale(1.35); }
+.b-punkte i.huepf { animation: b-huepf 1.2s ease-in-out infinite; }
+@keyframes b-huepf { 50% { transform: translateY(-4px); } }
 
-.b-hilfe { position: absolute; left: 0; right: 0; top: 886px; text-align: center; font-size: 26px; color: rgba(255, 255, 255, .8); white-space: pre; }
+.b-wer { position: absolute; left: 0; right: 0; top: 368px; font-size: 34px; font-weight: 650; z-index: 2; }
 
-.b-haken { position: absolute; left: 320px; top: 150px; width: 140px; height: 140px; border-radius: 50%; background: #22C55E; }
-.b-karte.zwei .b-haken { left: 450px; }
+/* Effekte (in der Kachel) */
+.b-fx { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; border-radius: 38px; pointer-events: none; }
+.bx-k { position: absolute; top: -20px; height: 6px; border-radius: 2px; animation: bx-fall linear infinite; }
+@keyframes bx-fall { from { transform: translateY(0) rotateZ(0) rotateX(0); } to { transform: translateY(470px) rotateZ(540deg) rotateX(720deg); } }
+.b-karte.danke .bx-k { animation-name: bx-fall-gross; }
+@keyframes bx-fall-gross { from { transform: translateY(0) rotateZ(0) rotateX(0); } to { transform: translateY(700px) rotateZ(540deg) rotateX(720deg); } }
+.bx-f { position: absolute; margin: -12px 0 0 -12px; background: currentColor;
+  -webkit-clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%);
+  clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); animation: bx-funkel 2.4s ease-in-out infinite; }
+@keyframes bx-funkel { 0%, 100% { transform: scale(.3); opacity: .3; } 50% { transform: scale(1); opacity: 1; } }
+.bx-l { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.bx-l path { fill: none; stroke-width: 6; stroke-linecap: round; transform-box: fill-box; transform-origin: 50% 0;
+  animation: bx-wehen 1.6s ease-in-out infinite alternate; }
+@keyframes bx-wehen { from { transform: skewX(-8deg); } to { transform: skewX(8deg); } }
+.bx-schein { position: absolute; top: 0; bottom: 0; left: -200px; width: 180px;
+  background: linear-gradient(105deg, rgba(255, 243, 196, 0), rgba(255, 243, 196, .33), rgba(255, 243, 196, 0)); animation: bx-schein 2.8s linear infinite; }
+@keyframes bx-schein { to { transform: translateX(780px); } }
+.bx-riss { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.bx-riss path { fill: none; stroke: rgba(255, 255, 255, .28); stroke-width: 2.5; }
+.bx-wolke { position: absolute; left: 120px; top: 82px; width: 132px; height: 28px; border-radius: 14px; color: #4B5059; background: currentColor; }
+.bx-wolke::before { content: ''; position: absolute; left: 6px; top: -24px; width: 50px; height: 50px; border-radius: 50%; background: currentColor;
+  box-shadow: 38px -14px 0 10px currentColor, 80px 0 0 4px currentColor; }
+.bx-wolke.klein { left: 212px; color: #6B7280; transform: scale(.7); }
+.bx-r { position: absolute; top: 112px; width: 3px; height: 18px; border-radius: 2px; background: rgba(147, 164, 195, .75); animation: bx-regen linear infinite; }
+@keyframes bx-regen { from { transform: translateY(0) rotate(12deg); opacity: 1; } 75% { opacity: 1; } to { transform: translateY(230px) rotate(12deg); opacity: 0; } }
+.bx-blitz { position: absolute; left: 186px; top: 106px; width: 30px; height: 78px; background: #FDE68A; opacity: 0;
+  -webkit-clip-path: polygon(60% 0, 100% 0, 55% 42%, 85% 44%, 10% 100%, 35% 52%, 5% 50%);
+  clip-path: polygon(60% 0, 100% 0, 55% 42%, 85% 44%, 10% 100%, 35% 52%, 5% 50%); animation: bx-blitz 3.4s linear infinite; }
+.bx-flash { position: absolute; left: 0; top: 0; right: 0; bottom: 0; background: #fff; opacity: 0; animation: bx-flash 3.4s linear infinite; }
+@keyframes bx-blitz { 0% { opacity: 1; } 6% { opacity: 0; } 100% { opacity: 0; } }
+@keyframes bx-flash { 0% { opacity: .16; } 4% { opacity: 0; } 100% { opacity: 0; } }
+
+.b-knall { position: absolute; left: 190px; top: 160px; width: 0; height: 0; z-index: 3; }
+.b-knall i { position: absolute; width: 12px; height: 12px; margin: -6px; border-radius: 50%; animation: bx-knall 1.4s cubic-bezier(.15, .7, .3, 1) forwards; }
+@keyframes bx-knall { from { transform: translate(0, 0); opacity: 1; } to { transform: translate(var(--dx), var(--dy)); opacity: 0; } }
+
+.b-hilfe { position: absolute; left: 0; right: 0; top: 878px; text-align: center; font-size: 26px; color: rgba(255, 255, 255, .8); white-space: pre; }
+
+/* Danke */
+.b-karte.danke .b-fx { border-radius: 52px; }
+.b-haken { position: absolute; left: calc(50% - 70px); top: 120px; width: 140px; height: 140px; border-radius: 50%; background: #22C55E; z-index: 2; }
+.b-haken.grau { background: #6B7280; }
 .b-haken svg { position: absolute; left: 30px; top: 30px; width: 80px; height: 80px; }
-.b-danke { position: absolute; left: 0; right: 0; top: 345px; font-size: 46px; font-weight: 650; }
-.b-film.b-zus { top: 430px; white-space: pre; }
+.b-danke { position: absolute; left: 0; right: 0; top: 318px; font-size: 46px; font-weight: 650; z-index: 2; }
+.b-zus { position: absolute; left: 0; right: 0; top: 396px; display: flex; justify-content: center; font-size: 30px; font-weight: 650; z-index: 2; }
+.b-zus span { margin: 0 30px; }
+.b-film.b-name-unten { top: 452px; z-index: 2; }
 
 .leicht .b-karte { background: rgba(28, 30, 38, .96); }
+.leicht .b-spalte.s9, .leicht .b-spalte.s10 { animation: none; }
 
 /* ------------------------------------------------------------ Live-Kacheln ganz links in Weiterschauen */
 

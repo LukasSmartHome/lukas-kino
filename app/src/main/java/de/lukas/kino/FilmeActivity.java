@@ -236,11 +236,7 @@ public class FilmeActivity extends Activity {
 
     // Bewerten (nach dem Film ab 80 % oder über den Knopf in den Details)
     private boolean bew;
-    private JSONObject bewFilm;
-    private String[] bewNamen;
-    private int[] bewNoten;
-    private int bewAktiv;
-    private long bewDanke;      // > 0: „Danke“ wird gezeigt (seit)
+    private BewertenKarte bewKarte;   // Zustand und Zeichnen des Fensters (seit 03.11.2026)
 
     // Foto-Vollbild
     private final List<JSONObject> fotos = new ArrayList<>();
@@ -788,65 +784,51 @@ public class FilmeActivity extends Activity {
     /** Fenster „Lukas, wie hat dir der Film gefallen?“ – Eltern bekommen zwei Zähler (Papa links, Mama rechts). */
     private void bewertenOeffnen(JSONObject film) {
         if (film == null || !"Movie".equals(typ(film))) return;
-        bewFilm = film;
-        bewNamen = Bewerten.namen();
-        bewNoten = new int[bewNamen.length];
+        String[] namen = Bewerten.namen();
+        int[] alt = new int[namen.length];
         Familie.Info info = Familie.fuer(film);
-        for (int i = 0; i < bewNamen.length; i++) {
-            Integer n = info != null ? info.noten.get(bewNamen[i]) : null;
-            bewNoten[i] = n != null && n >= 1 && n <= 10 ? n : 5;
+        for (int i = 0; i < namen.length; i++) {
+            Integer n = info != null ? info.noten.get(namen[i]) : null;
+            alt[i] = n != null && n >= 1 && n <= 10 ? n : 0;
         }
-        bewAktiv = 0;
-        bewDanke = 0;
+        bewKarte = new BewertenKarte(this, film, namen, alt);
         bew = true;
         leiste = false;
         buehne.invalidate();
     }
 
     private boolean bewertenTaste(int k, boolean ok, boolean zurueck, int wiederholung) {
-        if (bewDanke > 0) {
-            if (zurueck || ok) bewSchliessen();
-            return true;
-        }
-        if (zurueck) {
+        if (bewKarte == null) {
             bewSchliessen();
             return true;
         }
-        switch (k) {
-            case KeyEvent.KEYCODE_DPAD_UP:
-                bewNoten[bewAktiv] = Math.min(10, bewNoten[bewAktiv] + 1);
-                break;
-            case KeyEvent.KEYCODE_DPAD_DOWN:
-                bewNoten[bewAktiv] = Math.max(1, bewNoten[bewAktiv] - 1);
-                break;
-            case KeyEvent.KEYCODE_DPAD_LEFT:
-                if (wiederholung == 0) bewAktiv = Math.max(0, bewAktiv - 1);
-                break;
-            case KeyEvent.KEYCODE_DPAD_RIGHT:
-                if (wiederholung == 0) bewAktiv = Math.min(bewNamen.length - 1, bewAktiv + 1);
-                break;
-            default:
-                if (ok && wiederholung == 0) bewSenden();
-        }
+        int was = bewKarte.taste(k, ok, zurueck, wiederholung);
+        if (was == BewertenKarte.SCHLIESSEN) bewSchliessen();
+        else if (was == BewertenKarte.ABGEBEN) bewSenden();
         buehne.invalidate();
         return true;
     }
 
+    /** Schickt nur, was geändert wurde (Note 0 = eigene Bewertung herausnehmen). */
     private void bewSenden() {
-        final JSONObject film = bewFilm;
-        final String[] namen = bewNamen.clone();
-        final int[] noten = bewNoten.clone();
-        bewDanke = SystemClock.uptimeMillis();
+        final BewertenKarte karte = bewKarte;
+        final List<int[]> l = karte.aenderungen();
+        if (l.isEmpty()) {
+            bewSchliessen();
+            hinweis("Nichts geändert");
+            return;
+        }
+        karte.danke();
         buehne.invalidate();
         h.postDelayed(() -> {
-            if (bewDanke > 0) bewSchliessen();
-        }, 2200);
+            if (bewKarte == karte && karte.imDanke()) bewSchliessen();
+        }, karte.mitZehn() ? 3200 : 2200);
         netz.execute(() -> {
             boolean alles = true;
-            for (int i = 0; i < namen.length; i++) {
+            for (int[] e : l) {
                 try {
-                    Bewerten.senden(film, namen[i], noten[i]);
-                } catch (Exception e) {
+                    Bewerten.senden(karte.film, karte.namen[e[0]], e[1]);
+                } catch (Exception ex) {
                     alles = false;
                 }
             }
@@ -858,7 +840,6 @@ public class FilmeActivity extends Activity {
 
     private void bewSchliessen() {
         bew = false;
-        bewDanke = 0;
         buehne.invalidate();
     }
 
@@ -2188,7 +2169,7 @@ public class FilmeActivity extends Activity {
             float bz = bew ? 1f : 0f;
             bewAnim = naeher(bewAnim, bz, dt, 60);
             if (bewAnim != bz) weiter = true;
-            if (bewAnim > 0.002f && bewNamen != null) weiter |= bewertenZeichnen(c);
+            if (bewAnim > 0.002f && bewKarte != null) weiter |= bewertenZeichnen(c);
 
             if (hinweisText != null && SystemClock.uptimeMillis() < hinweisBis) {
                 knopf.setTextSize(30);
@@ -2521,130 +2502,14 @@ public class FilmeActivity extends Activity {
 
         private boolean bewertenZeichnen(Canvas c) {
             float a = Ani.AUS.getInterpolation(Math.max(0f, Math.min(1f, bewAnim)));
-            int al = Math.round(255 * a);
             p.setColor(0xFF000000);
             p.setAlpha(Math.round(150 * a));
             c.drawRect(0, 0, 1920, 1080, p);
             p.setAlpha(255);
-            int n = bewNamen.length;
-            float breite = n == 1 ? 780 : 1040, oben = 236 + (1 - a) * 40;
-            RectF karteR = new RectF(960 - breite / 2, oben, 960 + breite / 2, oben + 600);
-            echtesGlas(c, karteR, 52, a);
-            String film = bewFilm != null ? bewFilm.optString("Name") : "";
-            boolean danke = bewDanke > 0;
-            if (danke) {
-                float t = Math.min(1f, (SystemClock.uptimeMillis() - bewDanke) / 350f);
-                float cy = oben + 230;
-                p.setColor(0xFF22C55E);
-                p.setAlpha(al);
-                c.drawCircle(960, cy, 70 * (0.6f + 0.4f * Ani.AUS.getInterpolation(t)), p);
-                p.setStyle(Paint.Style.STROKE);
-                p.setStrokeWidth(12);
-                p.setStrokeCap(Paint.Cap.ROUND);
-                p.setColor(0xFFFFFFFF);
-                p.setAlpha(al);
-                c.drawLine(930, cy + 2, 952, cy + 26, p);
-                c.drawLine(952, cy + 26, 994, cy - 24, p);
-                p.setStyle(Paint.Style.FILL);
-                knopf.setTextSize(46);
-                knopf.setTextAlign(Paint.Align.CENTER);
-                knopf.setAlpha(al);
-                c.drawText(Bewerten.danke(), 960, cy + 160, knopf);
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < n; i++)
-                    sb.append(i > 0 ? "     " : "").append(n > 1 ? Bewerten.schild(bewNamen[i]) + ": " : "").append(bewNoten[i]).append(" von 10");
-                meta.setTextAlign(Paint.Align.CENTER);
-                meta.setAlpha(Math.round(0xE6 * a));
-                c.drawText(kuerzen(film, meta, breite - 120) + "   ·   " + sb, 960, cy + 220, meta);
-                meta.setTextAlign(Paint.Align.LEFT);
-                meta.setAlpha(0xE6);
-                knopf.setTextAlign(Paint.Align.LEFT);
-                knopf.setTextSize(30);
-                knopf.setAlpha(255);
-                return t < 1f;
-            }
-            // Film und Frage
-            meta.setTextAlign(Paint.Align.CENTER);
-            meta.setAlpha(Math.round(0xB3 * a));
-            c.drawText(kuerzen(film, meta, breite - 120), 960, oben + 78, meta);
-            meta.setAlpha(0xE6);
-            meta.setTextAlign(Paint.Align.LEFT);
-            knopf.setTextSize(42);
-            knopf.setTextAlign(Paint.Align.CENTER);
-            knopf.setAlpha(al);
-            c.drawText(kuerzen(Bewerten.frage(), knopf, breite - 80), 960, oben + 138, knopf);
-            // Zähler
-            float cy = oben + 340;
-            for (int i = 0; i < n; i++) {
-                float cx = n == 1 ? 960 : 960 + (i == 0 ? -250 : 250);
-                boolean aktiv = i == bewAktiv;
-                float ia = aktiv ? 1f : 0.5f;
-                if (n > 1) {
-                    r.set(cx - 200, cy - 150, cx + 200, cy + 200);
-                    p.setColor(aktiv ? 0x24FFFFFF : 0x0DFFFFFF);
-                    p.setAlpha(Math.round((aktiv ? 0x24 : 0x0D) * a));
-                    c.drawRoundRect(r, 36, 36, p);
-                    if (aktiv) {
-                        p.setStyle(Paint.Style.STROKE);
-                        p.setStrokeWidth(3);
-                        p.setColor(0xFFFFFFFF);
-                        p.setAlpha(Math.round(200 * a));
-                        c.drawRoundRect(r, 36, 36, p);
-                        p.setStyle(Paint.Style.FILL);
-                    }
-                }
-                int note = bewNoten[i];
-                int nf = Bewerten.farbe(note);
-                // Pfeile hoch und runter
-                p.setStyle(Paint.Style.STROKE);
-                p.setStrokeWidth(7);
-                p.setStrokeCap(Paint.Cap.ROUND);
-                p.setColor(0xFFFFFFFF);
-                p.setAlpha(Math.round((note < 10 ? 230 : 60) * a * ia));
-                c.drawLine(cx - 26, cy - 92, cx, cy - 118, p);
-                c.drawLine(cx, cy - 118, cx + 26, cy - 92, p);
-                p.setAlpha(Math.round((note > 1 ? 230 : 60) * a * ia));
-                c.drawLine(cx - 26, cy + 76, cx, cy + 102, p);
-                c.drawLine(cx, cy + 102, cx + 26, cy + 76, p);
-                p.setStyle(Paint.Style.FILL);
-                // Zahl in der Farbe der Note
-                gross.setTextSize(150);
-                gross.setTextAlign(Paint.Align.CENTER);
-                gross.setColor(nf);
-                gross.setAlpha(Math.round(255 * a * (aktiv ? 1f : 0.7f)));
-                c.drawText(String.valueOf(note), cx, cy + 52, gross);
-                gross.setColor(0xFFFFFFFF);
-                gross.setTextAlign(Paint.Align.LEFT);
-                gross.setTextSize(130);
-                // zehn Punkte als Skala
-                for (int k = 1; k <= 10; k++) {
-                    float px = cx - 135 + (k - 1) * 30;
-                    p.setColor(k <= note ? nf : 0xFFFFFFFF);
-                    p.setAlpha(Math.round((k <= note ? 255 : 45) * a * ia));
-                    c.drawCircle(px, cy + 136, k == note ? 8 : 6, p);
-                }
-                // wer
-                Integer farbe = Familie.FARBEN.get(bewNamen[i]);
-                leisteText.setTextAlign(Paint.Align.CENTER);
-                leisteText.setColor(farbe != null ? farbe : 0xFFFFFFFF);
-                leisteText.setAlpha(Math.round(255 * a * (aktiv ? 1f : 0.65f)));
-                c.drawText(Bewerten.schild(bewNamen[i]), cx, cy + 186, leisteText);
-                leisteText.setColor(0xFFFFFFFF);
-                leisteText.setTextAlign(Paint.Align.LEFT);
-            }
-            knopf.setTextAlign(Paint.Align.LEFT);
-            knopf.setTextSize(30);
-            knopf.setAlpha(255);
-            // Hilfe unten
-            String hilfe = n > 1 ? "↑ ↓  Note      ← →  Papa / Mama      OK  abgeben      Zurück  später"
-                    : "↑ ↓  Note      OK  abgeben      Zurück  später";
-            klein.setTextAlign(Paint.Align.CENTER);
-            klein.setAlpha(Math.round(0xC8 * a));
-            c.drawText(hilfe, 960, oben + 650, klein);
-            klein.setTextAlign(Paint.Align.LEFT);
-            klein.setAlpha(0xB3);
+            echtesGlas(c, bewKarte.rahmen(a), 52, a);
+            boolean weiter = bewKarte.zeichnen(c, a);
             p.setAlpha(255);
-            return false;
+            return weiter && bew;
         }
 
         // -------------------------------------------------- Weiterschauen mit Live-Kacheln vorne

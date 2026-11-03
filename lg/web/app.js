@@ -721,7 +721,28 @@
 
   function deutschWert(name) { return /german|deutsch|\bde\b|offiziell/i.test(name || '') ? 1 : 0; }
 
+  // Liste vom Pi (werkzeuge/kino_pflege.py trailer, /share/kino/trailer.json): dort ist jeder Film schon geprüft
+  // (gibt es den Trailer, darf man ihn einbetten, deutsch zuerst, ohne Untertitel). Nur für Filme, die dort noch
+  // fehlen (ganz neu), sucht die Oberfläche selbst wie bisher.
+  let trailerListe = null, trailerListeZeit = 0;
+
+  async function trailerListeHolen() {
+    if (trailerListe && Date.now() - trailerListeZeit < 10 * 60000) return trailerListe;
+    try {
+      const r = await fetch('../trailer.json?t=' + Date.now());
+      if (r.ok) {
+        const j = await r.json();
+        trailerListe = (j && j.filme) || {};
+        trailerListeZeit = Date.now();
+      }
+    } catch (x) { /* dann selbst suchen */ }
+    return trailerListe || {};
+  }
+
   async function trailerSuchen(e) {
+    const liste = await trailerListeHolen();
+    const eintrag = liste[e.Id];
+    if (eintrag) return eintrag.yt ? { yt: eintrag.yt, titel: eintrag.t || '', quelle: eintrag.q || 'Pi' } : null;
     const tmdb = e.ProviderIds && (e.ProviderIds.Tmdb || e.ProviderIds.tmdb);
     const key = tmdb ? 'm' + tmdb : 'j' + e.Id;
     const s = trailerSpeicher[key];
@@ -1163,11 +1184,23 @@
   }
 
   // ------------------------------------------------------------------ Bewerten (nach dem Film ab 80 % und in den Details)
-  // Lukas und Jonas haben einen Zähler, die Eltern zwei (links Papa = Uli, rechts Mama = Moni). Start 5 bzw. die alte Note.
+  // Wie am TCL (BewertenKarte.java, Wunsch Lukas 03.11.2026):
+  // - Feld ohne Bewertung zeigt „–“, erst ↑ oder ↓ holt die 5. Abgeben schickt nur geänderte Felder
+  //   (ändert Papa seine Note, bleibt Mama unberührt).
+  // - Neben jedem Zähler ein Feld „Keine Bewertung“ (links neben Papa bzw. dem eigenen Zähler, rechts neben Mama):
+  //   OK darauf nimmt die Bewertung heraus (Note 0). Lukas/Jonas: geht sofort raus.
+  // - Jede Note hat ihren eigenen Look: 1 Gewitter mit Riss, ab 7 grün, 8 funkelt, 9 grün mit Konfetti,
+  //   10 golden mit Konfetti, Luftschlangen und Lichtschein.
   // Geht über den Webhook von Automation 84 an Skript 00v (Plex bewerten) – dieselben Bewertungen wie im Dashboard.
 
-  const B = { offen: false, film: null, namen: [], noten: [], aktiv: 0, danke: 0, timer: 0 };
+  const B = { offen: false, film: null, namen: [], alt: [], wert: [], geaendert: [], fokus: 1, danke: 0, timer: 0,
+    nurEntfernt: false, stufe: [], dom: null };
   const PERSONEN_FARBE = { Lukas: '#F2B705', Moni: '#E8559A', Uli: '#1FA463', Jonas: '#2F6FEB' };
+  const B_WORT = ['Noch keine Note', 'Katastrophe', 'Schlecht', 'Schwach', 'Mäh', 'Geht so', 'Ganz okay', 'Gut', 'Sehr gut',
+    'Super!', 'Meisterwerk!'];
+  const B_FARBE = ['#FFFFFF', '#E0322F', '#EF4444', '#F26B3A', '#F59E0B', '#F2C94C', '#B5D334', '#6BD48A', '#22C55E', '#39E072', '#FFD54A'];
+  const B_BUNT = ['#F2B705', '#E8559A', '#22C55E', '#3E9BF0', '#FF6B35', '#A855F7', '#FFFFFF', '#2DD4BF'];
+  const B_GRUEN = ['#4ADE80', '#22C55E', '#BBF7D0', '#F2B705', '#FFFFFF'];
 
   function bewNamen() { return PERSON.schluessel === 'eltern' ? ['Uli', 'Moni'] : [PERSON.ha]; }
   function bewFrage() {
@@ -1186,18 +1219,38 @@
     return l.length ? 'Bewertet  ·  ' + l.join(' / ') : 'Bewerten';
   }
 
+  function bewZwei() { return B.namen.length > 1; }
+  function bewSlots() { return bewZwei() ? 4 : 2; }
+  function bewIstX(s) { return s === 0 || (bewZwei() && s === 3); }
+  function bewPerson(s) { return !bewZwei() ? 0 : (s <= 1 ? 0 : 1); }
+
+  function bewAenderungen() {
+    const l = [];
+    B.namen.forEach(function (n, i) {
+      if (!B.geaendert[i] || B.wert[i] === B.alt[i]) return;
+      if (B.wert[i] === 0 && B.alt[i] === 0) return;
+      l.push({ i: i, note: B.wert[i] });
+    });
+    return l;
+  }
+
   function bewertenOeffnen(f) {
     if (!f || typ(f) !== 'Movie') return;
     const fam = familieFuer(f);
     B.film = f;
     B.namen = bewNamen();
-    B.noten = B.namen.map(function (n) {
+    B.alt = B.namen.map(function (n) {
       const w = fam && fam.noten[n] ? Number(fam.noten[n]) : 0;
-      return w >= 1 && w <= 10 ? w : 5;
+      return w >= 1 && w <= 10 ? w : 0;
     });
-    B.aktiv = 0;
+    B.wert = B.alt.slice();
+    B.geaendert = B.namen.map(function () { return false; });
+    B.stufe = B.namen.map(function () { return -1; });
+    B.fokus = 1;
     B.danke = 0;
+    B.nurEntfernt = false;
     B.offen = true;
+    B.dom = null;
     if (leiste) leisteZu();
     bewertenZeichnen();
   }
@@ -1205,6 +1258,7 @@
   function bewertenSchliessen() {
     B.offen = false;
     B.danke = 0;
+    B.dom = null;
     clearTimeout(B.timer);
     bewertenZeichnen();
   }
@@ -1215,26 +1269,61 @@
       return;
     }
     if (k === TASTE.ZURUECK) return bewertenSchliessen();
-    if (k === TASTE.HOCH) B.noten[B.aktiv] = Math.min(10, B.noten[B.aktiv] + 1);
-    else if (k === TASTE.RUNTER) B.noten[B.aktiv] = Math.max(1, B.noten[B.aktiv] - 1);
-    else if (k === TASTE.LINKS && wiederholung === 0) B.aktiv = Math.max(0, B.aktiv - 1);
-    else if (k === TASTE.RECHTS && wiederholung === 0) B.aktiv = Math.min(B.namen.length - 1, B.aktiv + 1);
-    else if (k === TASTE.OK && wiederholung === 0) return bewertenSenden();
+    const pi = bewPerson(B.fokus);
+    if (k === TASTE.HOCH || k === TASTE.RUNTER) {
+      if (bewIstX(B.fokus)) {
+        B.fokus = bewZwei() ? (B.fokus === 0 ? 1 : 2) : 1;
+      } else {
+        const vorher = B.wert[pi];
+        if (!B.wert[pi]) B.wert[pi] = 5;
+        else if (k === TASTE.HOCH) B.wert[pi] = Math.min(10, B.wert[pi] + 1);
+        else B.wert[pi] = Math.max(1, B.wert[pi] - 1);
+        if (B.wert[pi] !== vorher) {
+          B.geaendert[pi] = true;
+          bewertenZeichnen(pi);
+          return;
+        }
+      }
+    } else if (k === TASTE.LINKS && wiederholung === 0) {
+      B.fokus = Math.max(0, B.fokus - 1);
+    } else if (k === TASTE.RECHTS && wiederholung === 0) {
+      B.fokus = Math.min(bewSlots() - 1, B.fokus + 1);
+    } else if (k === TASTE.OK && wiederholung === 0) {
+      if (bewIstX(B.fokus)) {
+        B.wert[pi] = 0;
+        B.geaendert[pi] = true;
+        if (!bewZwei()) {
+          B.nurEntfernt = true;
+          return bewAenderungen().length ? bewertenSenden() : bewertenSchliessen();
+        }
+        B.fokus = B.fokus === 0 ? 1 : 2;
+        bewertenZeichnen(pi);
+        return;
+      }
+      B.nurEntfernt = !bewAenderungen().some(function (a) { return a.note > 0; });
+      return bewertenSenden();
+    }
     bewertenZeichnen();
   }
 
   function bewertenSenden() {
-    const f = B.film, namen = B.namen.slice(), noten = B.noten.slice();
+    const f = B.film, namen = B.namen.slice(), l = bewAenderungen();
+    if (!l.length) {
+      bewertenSchliessen();
+      hinweis('Nichts geändert');
+      return;
+    }
     B.danke = Date.now();
+    B.dom = null;
     bewertenZeichnen();
-    B.timer = setTimeout(bewertenSchliessen, 2200);
+    B.timer = setTimeout(bewertenSchliessen, l.some(function (a) { return a.note === 10; }) ? 3200 : 2200);
     (async function () {
       try {
         await merk.plexLaden();
         const id = merk.plexIdFuer(f) || 'jf:' + f.Id;
         const titel = (f.Name || '') + (f.ProductionYear ? ' (' + f.ProductionYear + ')' : '');
-        for (let i = 0; i < namen.length; i++) {
-          await merk.senden({ art: 'bewerten', wer: namen[i], id: id, titel: titel, wertung: String(noten[i]) });
+        for (let i = 0; i < l.length; i++) {
+          await merk.senden({ art: 'bewerten', wer: namen[l[i].i], id: id, titel: titel, wertung: String(l[i].note) });
         }
         setTimeout(familieLaden, 3000);
       } catch (x) {
@@ -1243,45 +1332,192 @@
     })();
   }
 
-  function bewertenZeichnen() {
-    const b = el.bewerten;
-    b.classList.toggle('aus', !B.offen);
-    if (!B.offen) return;
-    const zwei = B.namen.length > 1;
-    let h = '<div class="glas b-karte' + (zwei ? ' zwei' : '') + '">';
-    const film = B.film ? String(B.film.Name || '') : '';
-    if (B.danke) {
-      const zus = B.namen.map(function (n, i) { return (zwei ? bewSchild(n) + ': ' : '') + B.noten[i] + ' von 10'; }).join('     ');
-      h += '<div class="b-haken"><svg viewBox="0 0 40 40" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round" '
-        + 'stroke-linejoin="round"><path d="M11 21l6 6 13-14"/></svg></div>'
-        + '<div class="b-danke"></div><div class="b-film b-zus"></div>';
-      h += '</div>';
-      b.innerHTML = h;
-      b.querySelector('.b-danke').textContent = PERSON.schluessel === 'eltern' ? 'Danke für eure Bewertung!' : 'Danke für deine Bewertung!';
-      b.querySelector('.b-zus').textContent = film + '   ·   ' + zus;
-      return;
+  // --- Effekte je Note (nur neu gebaut, wenn sich die Stufe ändert, damit die Animationen weiterlaufen)
+  function bewZufall(k) {
+    let x = (k * 374761393 + 668265263) | 0;
+    x = Math.imul(x ^ (x >>> 13), 1274126177);
+    x ^= x >>> 16;
+    return (x & 0xFFFFFF) / 0x1000000;
+  }
+
+  function bewKonfetti(n, farben, tempo, saat) {
+    let h = '';
+    for (let k = 0; k < n; k++) {
+      const s = k * 3 + saat * 997;
+      const dauer = (2.2 + 2.4 * bewZufall(s + 2)) / tempo;
+      h += '<i class="bx-k" style="left:' + (bewZufall(s + 1) * 100).toFixed(1) + '%;width:' + (10 + 6 * bewZufall(s + 3)).toFixed(0)
+        + 'px;background:' + farben[k % farben.length] + ';animation-duration:' + dauer.toFixed(2)
+        + 's;animation-delay:-' + (bewZufall(s + 4) * dauer).toFixed(2) + 's"></i>';
     }
-    h += '<div class="b-film"></div><div class="b-frage"></div><div class="b-zaehler">';
-    B.namen.forEach(function (n, i) {
-      const note = B.noten[i], farbe = notenFarbe(note);
-      let punkte = '';
-      for (let k = 1; k <= 10; k++) punkte += '<i style="' + (k <= note ? 'background:' + farbe + ';opacity:1' : '') + (k === note ? ';transform:scale(1.35)' : '') + '"></i>';
-      h += '<div class="b-spalte' + (i === B.aktiv ? ' aktiv' : '') + '">'
-        + '<div class="b-pfeil hoch' + (note >= 10 ? ' grau' : '') + '"></div>'
-        + '<div class="b-zahl" style="color:' + farbe + '">' + note + '</div>'
-        + '<div class="b-pfeil runter' + (note <= 1 ? ' grau' : '') + '"></div>'
-        + '<div class="b-punkte">' + punkte + '</div>'
-        + '<div class="b-wer" style="color:' + (PERSONEN_FARBE[n] || '#fff') + '"></div></div>';
+    return h;
+  }
+
+  function bewFunkeln(n, farbe) {
+    let h = '';
+    for (let k = 0; k < n; k++) {
+      const g = 16 + 20 * bewZufall(k * 7 + 5);
+      h += '<i class="bx-f" style="left:' + (7 + bewZufall(k * 7 + 3) * 86).toFixed(1) + '%;top:' + (12 + bewZufall(k * 7 + 4) * 70).toFixed(1)
+        + '%;width:' + g.toFixed(0) + 'px;height:' + g.toFixed(0) + 'px;color:' + farbe + ';animation-delay:-' + (k * 0.73).toFixed(2) + 's"></i>';
+    }
+    return h;
+  }
+
+  function bewSchlangen() {
+    const stellen = [8, 28, 50, 72, 92];
+    let h = '<svg class="bx-l" viewBox="0 0 380 430" preserveAspectRatio="none">';
+    stellen.forEach(function (x0, i) {
+      const x = x0 * 3.8, laenge = 110 + 90 * bewZufall(i * 11 + 5);
+      let d = 'M' + x.toFixed(1) + ' -4';
+      for (let s = 6; s <= laenge; s += 6) {
+        const amp = 16 * (s / laenge) + 4;
+        d += ' L' + (x + amp * Math.sin(s / 11 + i * 1.3)).toFixed(1) + ' ' + s;
+      }
+      h += '<path d="' + d + '" stroke="' + B_BUNT[(i * 3) % B_BUNT.length] + '" style="animation-delay:-' + (i * 0.4).toFixed(1) + 's"/>';
     });
+    return h + '</svg>';
+  }
+
+  function bewRegen(n, breite, links) {
+    let h = '';
+    for (let k = 0; k < n; k++) {
+      const dauer = 0.55 + 0.3 * bewZufall(k * 5 + 2);
+      h += '<i class="bx-r" style="left:calc(' + links + '% + ' + ((bewZufall(k * 5 + 1) - 0.5) * breite).toFixed(0)
+        + 'px);animation-duration:' + dauer.toFixed(2) + 's;animation-delay:-' + (bewZufall(k * 5 + 3) * dauer).toFixed(2) + 's"></i>';
+    }
+    return h;
+  }
+
+  function bewEffekt(note, saat) {
+    const wenig = LEICHT;
+    if (note === 10) {
+      return '<div class="bx-schein"></div>' + bewKonfetti(wenig ? 24 : 54, B_BUNT, 1, saat) + bewSchlangen();
+    }
+    if (note === 9) return bewKonfetti(wenig ? 8 : 16, B_GRUEN, 0.7, saat) + bewFunkeln(wenig ? 4 : 8, '#FFFFFF');
+    if (note === 8) return bewFunkeln(4, '#D1FAE5');
+    if (note === 1) {
+      return '<svg class="bx-riss" viewBox="0 0 380 430" preserveAspectRatio="none"><path d="M27 0 L57 56 L38 95 L72 150 M57 56 L91 73'
+        + ' M361 430 L327 374 L346 331 L308 284"/></svg>'
+        + bewRegen(wenig ? 10 : 22, 150, 50) + '<div class="bx-wolke"></div><div class="bx-blitz"></div><div class="bx-flash"></div>';
+    }
+    if (note === 2) return bewRegen(6, 110, 68) + '<div class="bx-wolke klein"></div>';
+    return '';
+  }
+
+  function bewXFeld(pi, slot) {
+    const entfernt = B.geaendert[pi] && B.wert[pi] === 0 && B.alt[pi] > 0;
+    return '<div class="b-x' + (B.fokus === slot ? ' aktiv' : '') + (entfernt ? ' entfernt' : '') + '">'
+      + '<div class="b-x-symbol"></div><div class="b-x-text">' + (entfernt ? 'Wird<br>entfernt' : 'Keine<br>Bewertung') + '</div></div>';
+  }
+
+  function bewertenAufbauen() {
+    const b = el.bewerten, zwei = bewZwei();
+    let h = '<div class="glas b-karte' + (zwei ? ' zwei' : '') + '"><div class="b-film"></div><div class="b-frage"></div><div class="b-reihe">';
+    const spalte = function (pi) {
+      return '<div class="b-spalte" data-p="' + pi + '"><div class="b-fx"></div><div class="b-rand"></div>'
+        + '<div class="b-pfeil hoch"></div><div class="b-zahl"></div><div class="b-wort"></div><div class="b-pfeil runter"></div>'
+        + '<div class="b-punkte">' + '<i></i>'.repeat(10) + '</div><div class="b-wer"></div><div class="b-knall"></div></div>';
+    };
+    if (zwei) h += '<div class="b-x-platz" data-x="0"></div>' + spalte(0) + spalte(1) + '<div class="b-x-platz" data-x="1"></div>';
+    else h += '<div class="b-x-platz" data-x="0"></div>' + spalte(0) + '<div class="b-x-leer"></div>';
     h += '</div></div><div class="b-hilfe"></div>';
     b.innerHTML = h;
-    b.querySelector('.b-film').textContent = film;
+    b.querySelector('.b-film').textContent = B.film ? String(B.film.Name || '') : '';
     b.querySelector('.b-frage').textContent = bewFrage();
-    const wer = b.querySelectorAll('.b-wer');
-    B.namen.forEach(function (n, i) { wer[i].textContent = bewSchild(n); });
-    b.querySelector('.b-hilfe').textContent = zwei
-      ? '↑ ↓  Note      ← →  Papa / Mama      OK  abgeben      Zurück  später'
-      : '↑ ↓  Note      OK  abgeben      Zurück  später';
+    B.dom = { spalten: Array.prototype.slice.call(b.querySelectorAll('.b-spalte')), x: Array.prototype.slice.call(b.querySelectorAll('.b-x-platz')),
+      hilfe: b.querySelector('.b-hilfe') };
+    B.dom.spalten.forEach(function (sp, i) {
+      const n = B.namen[i];
+      const w = sp.querySelector('.b-wer');
+      w.textContent = bewSchild(n);
+      w.style.color = PERSONEN_FARBE[n] || '#fff';
+    });
+  }
+
+  function bewertenZeichnen(geaendertBei) {
+    const b = el.bewerten;
+    b.classList.toggle('aus', !B.offen);
+    if (!B.offen) {
+      b.innerHTML = '';
+      return;
+    }
+    if (B.danke) return bewertenDankeZeichnen();
+    if (!B.dom) bewertenAufbauen();
+    const zwei = bewZwei();
+    B.dom.spalten.forEach(function (sp, i) {
+      const note = B.wert[i], slot = zwei ? i + 1 : 1;
+      const entfernt = B.geaendert[i] && note === 0 && B.alt[i] > 0;
+      sp.className = 'b-spalte s' + note + (B.fokus === slot ? ' aktiv' : '');
+      const z = sp.querySelector('.b-zahl');
+      z.textContent = note ? String(note) : '–';
+      z.style.color = note === 10 ? '' : (note ? B_FARBE[note] : 'rgba(255,255,255,.5)');
+      const wo = sp.querySelector('.b-wort');
+      wo.textContent = entfernt ? 'Wird entfernt' : B_WORT[note];
+      wo.style.color = entfernt ? '#FCA5A5' : (note >= 9 || (note && note <= 2) ? B_FARBE[note] : '');
+      sp.querySelector('.b-pfeil.hoch').classList.toggle('grau', note >= 10);
+      sp.querySelector('.b-pfeil.runter').classList.toggle('grau', note === 1);
+      const punkte = sp.querySelectorAll('.b-punkte i');
+      for (let q = 0; q < 10; q++) {
+        const an = q < note;
+        punkte[q].style.background = an ? (note === 10 ? B_BUNT[q % B_BUNT.length] : B_FARBE[note]) : '';
+        punkte[q].style.opacity = an ? '1' : '';
+        punkte[q].className = (q + 1 === note ? 'jetzt' : '') + (note === 10 && an ? ' huepf' : '');
+        punkte[q].style.animationDelay = note === 10 ? (-q * 0.12).toFixed(2) + 's' : '';
+      }
+      if (B.stufe[i] !== note) {
+        sp.querySelector('.b-fx').innerHTML = bewEffekt(note, i);
+        B.stufe[i] = note;
+      }
+      if (geaendertBei === i) {
+        // kurzer Pop der Zahl, bei 10 platzt Konfetti aus der Zahl, bei 1 wackelt sie
+        z.classList.remove('pop', 'wackeln');
+        void z.offsetWidth;
+        z.classList.add(note === 1 ? 'wackeln' : 'pop');
+        const knall = sp.querySelector('.b-knall');
+        if (note === 10) {
+          let h = '';
+          for (let k = 0; k < (LEICHT ? 18 : 36); k++) {
+            const w = bewZufall(k * 13 + i * 101) * Math.PI * 2, v = 160 + 260 * bewZufall(k * 13 + 7 + i * 101);
+            h += '<i style="background:' + B_BUNT[k % B_BUNT.length] + ';--dx:' + (Math.cos(w) * v).toFixed(0) + 'px;--dy:'
+              + (Math.sin(w) * v + 120).toFixed(0) + 'px"></i>';
+          }
+          knall.innerHTML = h;
+        } else knall.innerHTML = '';
+      }
+    });
+    B.dom.x.forEach(function (xp) {
+      const pi = Number(xp.getAttribute('data-x'));
+      const slot = pi === 0 ? 0 : 3;
+      xp.innerHTML = bewXFeld(pi, slot);
+    });
+    let hilfe;
+    if (bewIstX(B.fokus)) {
+      hilfe = zwei ? 'OK  keine Bewertung für ' + (B.fokus === 0 ? 'Papa' : 'Mama') + '      ← →  wechseln      Zurück  später'
+        : 'OK  keine Bewertung      →  zurück zur Note      Zurück  später';
+    } else {
+      hilfe = zwei ? '↑ ↓  Note      ← →  Papa / Mama / keine      OK  abgeben      Zurück  später'
+        : '↑ ↓  Note      ←  keine Bewertung      OK  abgeben      Zurück  später';
+    }
+    B.dom.hilfe.textContent = hilfe;
+  }
+
+  function bewertenDankeZeichnen() {
+    const b = el.bewerten, zwei = bewZwei(), l = bewAenderungen();
+    const zehn = l.some(function (a) { return a.note === 10; });
+    let h = '<div class="glas b-karte' + (zwei ? ' zwei' : '') + ' danke">';
+    if (zehn) h += '<div class="b-fx">' + bewKonfetti(LEICHT ? 30 : 70, B_BUNT, 1.1, 3) + '</div>';
+    h += '<div class="b-haken' + (B.nurEntfernt ? ' grau' : '') + '"><svg viewBox="0 0 40 40" fill="none" stroke="#fff" stroke-width="4.5" '
+      + 'stroke-linecap="round" stroke-linejoin="round"><path d="M11 21l6 6 13-14"/></svg></div>'
+      + '<div class="b-danke"></div><div class="b-zus">';
+    l.forEach(function (a) {
+      const n = B.namen[a.i];
+      h += '<span style="color:' + (a.note ? B_FARBE[a.note] : '#FCA5A5') + '">' + (zwei ? bewSchild(n) + ':  ' : '')
+        + (a.note ? a.note + ' von 10' : 'entfernt') + '</span>';
+    });
+    h += '</div><div class="b-film b-name-unten"></div></div>';
+    b.innerHTML = h;
+    b.querySelector('.b-danke').textContent = B.nurEntfernt ? 'Bewertung entfernt'
+      : (PERSON.schluessel === 'eltern' ? 'Danke für eure Bewertung!' : 'Danke für deine Bewertung!');
+    b.querySelector('.b-name-unten').textContent = B.film ? String(B.film.Name || '') : '';
   }
 
   function familieFuer(e) {
@@ -3718,6 +3954,7 @@
     T.offen = true;
     T.meldung = 'Trailer wird geladen …';
     T.zeitZiel = -1;
+    T.utZ = 0;
     el.tTitel.textContent = titel;
     el.tBox.innerHTML = '';
     trailerLeiste(0);
@@ -3740,10 +3977,12 @@
       videoId: tr.yt,
       playerVars: {
         autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, iv_load_policy: 3, modestbranding: 1,
-        playsinline: 1, hl: 'de', cc_load_policy: 0, origin: location.origin
+        playsinline: 1, hl: 'de', cc_load_policy: 0, cc_lang_pref: 'xx', origin: location.origin
       },
       events: {
+        onApiChange: function () { trailerOhneUntertitel(); },
         onReady: function (ev) {
+          trailerOhneUntertitel();
           try {
             const f = ev.target.getIframe();
             f.setAttribute('tabindex', '-1');
@@ -3755,6 +3994,7 @@
           window.focus();
         },
         onStateChange: function (ev) {
+          trailerOhneUntertitel();
           if (ev.data === 0) trailerSchliessen();           // zu Ende
           else if (ev.data === 1) {
             T.meldung = null;
@@ -3771,6 +4011,17 @@
     });
     clearInterval(T.tick);
     T.tick = setInterval(trailerTick, 250);
+  }
+
+  // Untertitel immer aus (Wunsch Lukas 03.11.2026): cc_load_policy allein reicht nicht, YouTube blendet bei
+  // fremdsprachigen Trailern sonst automatisch Untertitel ein – darum das Untertitel-Modul jedes Mal entladen.
+  function trailerOhneUntertitel() {
+    try {
+      if (!T.player || !T.player.unloadModule) return;
+      T.player.unloadModule('captions');
+      T.player.unloadModule('cc');
+      if (T.player.setOption) T.player.setOption('captions', 'track', {});
+    } catch (e) { /* egal */ }
   }
 
   function trailerSchliessen() {
@@ -3796,6 +4047,8 @@
 
   function trailerTick() {
     if (!T.offen) return;
+    T.utZ = (T.utZ || 0) + 1;
+    if (T.utZ <= 40 && T.utZ % 4 === 0) trailerOhneUntertitel();   // die ersten 10 Sekunden immer wieder
     if (T.an && Date.now() > T.bis && trailerZustand() === 1 && !T.meldung) T.an = false;
     trailerZeichnen();
   }
