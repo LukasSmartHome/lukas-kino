@@ -45,7 +45,7 @@ public class StartseitenWaechter extends AccessibilityService {
     private static final String GOOGLE_STARTSEITE = "com.google.android.apps.tv.launcherx";
     private static final String GOOGLE_HOME_ACTIVITY = "com.google.android.apps.tv.launcherx.home.HomeActivity";
     /** Fire TV: Amazon-Startseite (com.amazon.tv.launcher/.ui.HomeActivity_vNext). Einstellungen liegen im
-     *  selben Paket (SettingsActivity) und bleiben unangetastet – darum nur Klassen mit „HomeActivity“. */
+     *  selben Paket (SettingsActivity) und bleiben unangetastet – darum alles außer Klassen mit „Settings“. */
     private static final String AMAZON_STARTSEITE = "com.amazon.tv.launcher";
     private static final String HA = "http://192.168.178.44:8123";
     /** So lange nach dem Hochfahren gilt das Verbinden des Dienstes als „Fernseher ist gerade gestartet“. */
@@ -204,7 +204,10 @@ public class StartseitenWaechter extends AccessibilityService {
         if (paket == null || klasse == null) return;
         // Nur die eigentliche Startseite ersetzen, keine Einstellungs- oder Suchfenster.
         boolean google = GOOGLE_STARTSEITE.contentEquals(paket) && GOOGLE_HOME_ACTIVITY.contentEquals(klasse);
-        boolean amazon = AMAZON_STARTSEITE.contentEquals(paket) && klasse.toString().contains("HomeActivity");
+        boolean amazonPaket = AMAZON_STARTSEITE.contentEquals(paket);
+        if (amazonPaket) Log.i(TAG, "Waechter Fenster " + paket + " / " + klasse);
+        // Amazon: alles aus dem Startseiten-Paket außer den Einstellungen (SettingsActivity und Co.)
+        boolean amazon = amazonPaket && !klasse.toString().contains("Settings");
         if (!google && !amazon) return;
         if (amazon) haBitten();
         holen(amazon ? "amazon-startseite" : "google-startseite");
