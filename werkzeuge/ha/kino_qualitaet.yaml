@@ -1,0 +1,46 @@
+# Paket „Kino Qualität“ (Claude, Konto B, 03.11.2026) - Doku: claude/62_Filmbereich_Lukas_Kino_02-11-2026.md
+# Idee von Jonas: An jedem Fernseher kann jeder bei einem Film „schlechte Qualität“ melden (kleiner Fahnen-Knopf
+# ganz rechts in der Detailansicht). Nur Lukas sieht die gemeldeten Filme (TCL: Kachel „Schlechte Qualität“ ganz
+# rechts in den Kategorien), die anderen bekommen davon nichts mit. Keine Push-Nachricht.
+# Quelle: Automation 84 (Webhook, art = qualitaet) -> Ereignis kino_qualitaet mit wer, id, titel, an.
+# an = false: von Lukas = erledigt (Meldung ganz weg), von Eltern/Jonas = nur die eigene Meldung zurücknehmen.
+# Attribut filme = { HA-ID: { t: "Titel (Jahr)", wer: [Profile], z: Zeit der ersten Meldung } }. Zustand = Anzahl Filme.
+# HA-ID wie überall im Dashboard: alte Plex-ID oder jf:<Jellyfin-ID>.
+# kino_export.yaml schreibt es als „qualitaet“ in /share/kino/bewertungen.json.
+template:
+  - triggers:
+      - trigger: event
+        event_type: kino_qualitaet
+    actions:
+      - variables:
+          neu: >-
+            {%- set alt = state_attr('sensor.kino_qualitaet', 'filme') or {} -%}
+            {%- set e = trigger.event.data -%}
+            {%- set k = e.id | default('') | string -%}
+            {%- set w = e.wer | default('') | string -%}
+            {%- set an = (e.an | default(true) | string | lower) in ['true', '1', 'on', 'ja'] -%}
+            {%- if k == '' or w not in ['Lukas', 'Eltern', 'Jonas'] -%}
+              {{ alt }}
+            {%- else -%}
+              {%- set f = alt.get(k, {}) -%}
+              {%- set leute = f.get('wer', []) | list -%}
+              {%- if an -%}
+                {%- set leute = leute if w in leute else leute + [w] -%}
+                {%- set t = (e.titel | default('') | string) or f.get('t', '') -%}
+                {{ dict(alt, **{k: {'t': t, 'wer': leute, 'z': f.get('z', utcnow().isoformat())}}) }}
+              {%- else -%}
+                {%- set rest = [] if w == 'Lukas' else leute | reject('eq', w) | list -%}
+                {%- if rest | count > 0 -%}
+                  {{ dict(alt, **{k: dict(f, wer=rest)}) }}
+                {%- else -%}
+                  {{ dict(alt.items() | rejectattr('0', 'eq', k) | list) }}
+                {%- endif -%}
+              {%- endif -%}
+            {%- endif -%}
+    sensor:
+      - name: Kino Qualitaet
+        unique_id: kino_qualitaet
+        icon: mdi:flag-outline
+        state: "{{ neu | count }}"
+        attributes:
+          filme: "{{ neu }}"
