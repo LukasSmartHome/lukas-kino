@@ -670,8 +670,8 @@
     const l = merk.liste();
     const filme = l.filter(function (e) { return typ(e) !== 'Series'; });
     const serien = l.filter(function (e) { return typ(e) === 'Series'; });
-    for (let i = 0; i < filme.length; i += 8) s.reihen.push(reiheAus(i === 0 ? 'Filme' : '', filme.slice(i, i + 8), POSTER));
-    for (let i = 0; i < serien.length; i += 8) s.reihen.push(reiheAus(i === 0 ? 'Serien' : '', serien.slice(i, i + 8), POSTER));
+    if (filme.length) s.reihen.push(reiheAus('Filme', filme, POSTER));
+    if (serien.length) s.reihen.push(reiheAus('Serien', serien, POSTER));
     if (!s.reihen.length) s.leer = 'Noch nichts gemerkt';
     return s;
   }
@@ -883,8 +883,8 @@
     const s = neueSeite('Empfohlen');
     empfohlen.gruppen.forEach(function (g) {
       const l = g.eintraege.filter(function (e) { return !istGesehen(e); });
-      for (let i = 0; i < l.length; i += 8) {
-        s.reihen.push(reiheAus(i === 0 ? 'Mit ' + g.note + ' bewertet' : '', l.slice(i, i + 8), POSTER));
+      if (l.length) {
+        s.reihen.push(reiheAus('Mit ' + g.note + ' bewertet', l, POSTER));
       }
     });
     if (!s.reihen.length) s.leer = empfohlen.sig === null ? 'Bewertungen werden geladen …' : 'Noch nichts mit 7 oder besser bewertet';
@@ -1177,7 +1177,7 @@
       }
       const l = ids.map(function (id) { return gefunden[id]; }).filter(Boolean);
       neu.reihen = [];
-      for (let i = 0; i < l.length; i += 8) neu.reihen.push(reiheAus(i === 0 ? (l.length === 1 ? '1 Film' : l.length + ' Filme') : '', l.slice(i, i + 8), POSTER));
+      if (l.length) neu.reihen.push(reiheAus(l.length === 1 ? '1 Film' : l.length + ' Filme', l, POSTER));
       if (!neu.reihen.length) neu.leer = 'Noch nichts gesehen';
       if (seite === neu) fokusGeaendert();
     })();
@@ -1387,19 +1387,21 @@
     return h;
   }
 
+  // Jonas' Fernseher (leichter Modus, Wunsch Lukas 03.11.2026): deutlich weniger bewegte Teile, keine 3D-Drehungen,
+  // kein Lichtschein, stehende Luftschlangen – der Look je Note bleibt, nur ruhiger.
   function bewEffekt(note, saat) {
     const wenig = LEICHT;
     if (note === 10) {
-      return '<div class="bx-schein"></div>' + bewKonfetti(wenig ? 24 : 54, B_BUNT, 1, saat) + bewSchlangen();
+      return (wenig ? '' : '<div class="bx-schein"></div>') + bewKonfetti(wenig ? 10 : 54, B_BUNT, wenig ? 0.8 : 1, saat) + bewSchlangen();
     }
-    if (note === 9) return bewKonfetti(wenig ? 8 : 16, B_GRUEN, 0.7, saat) + bewFunkeln(wenig ? 4 : 8, '#FFFFFF');
-    if (note === 8) return bewFunkeln(4, '#D1FAE5');
+    if (note === 9) return (wenig ? '' : bewKonfetti(16, B_GRUEN, 0.7, saat)) + bewFunkeln(wenig ? 3 : 8, '#FFFFFF');
+    if (note === 8) return bewFunkeln(wenig ? 2 : 4, '#D1FAE5');
     if (note === 1) {
       return '<svg class="bx-riss" viewBox="0 0 380 430" preserveAspectRatio="none"><path d="M27 0 L57 56 L38 95 L72 150 M57 56 L91 73'
         + ' M361 430 L327 374 L346 331 L308 284"/></svg>'
-        + bewRegen(wenig ? 10 : 22, 150, 50) + '<div class="bx-wolke"></div><div class="bx-blitz"></div><div class="bx-flash"></div>';
+        + bewRegen(wenig ? 6 : 22, 150, 50) + '<div class="bx-wolke"></div><div class="bx-blitz"></div>' + (wenig ? '' : '<div class="bx-flash"></div>');
     }
-    if (note === 2) return bewRegen(6, 110, 68) + '<div class="bx-wolke klein"></div>';
+    if (note === 2) return bewRegen(wenig ? 3 : 6, 110, 68) + '<div class="bx-wolke klein"></div>';
     return '';
   }
 
@@ -1475,7 +1477,7 @@
         const knall = sp.querySelector('.b-knall');
         if (note === 10) {
           let h = '';
-          for (let k = 0; k < (LEICHT ? 18 : 36); k++) {
+          for (let k = 0; k < (LEICHT ? 10 : 36); k++) {
             const w = bewZufall(k * 13 + i * 101) * Math.PI * 2, v = 160 + 260 * bewZufall(k * 13 + 7 + i * 101);
             h += '<i style="background:' + B_BUNT[k % B_BUNT.length] + ';--dx:' + (Math.cos(w) * v).toFixed(0) + 'px;--dy:'
               + (Math.sin(w) * v + 120).toFixed(0) + 'px"></i>';
@@ -1504,7 +1506,7 @@
     const b = el.bewerten, zwei = bewZwei(), l = bewAenderungen();
     const zehn = l.some(function (a) { return a.note === 10; });
     let h = '<div class="glas b-karte' + (zwei ? ' zwei' : '') + ' danke">';
-    if (zehn) h += '<div class="b-fx">' + bewKonfetti(LEICHT ? 30 : 70, B_BUNT, 1.1, 3) + '</div>';
+    if (zehn) h += '<div class="b-fx">' + bewKonfetti(LEICHT ? 12 : 70, B_BUNT, 1.1, 3) + '</div>';
     h += '<div class="b-haken' + (B.nurEntfernt ? ' grau' : '') + '"><svg viewBox="0 0 40 40" fill="none" stroke="#fff" stroke-width="4.5" '
       + 'stroke-linecap="round" stroke-linejoin="round"><path d="M11 21l6 6 13-14"/></svg></div>'
       + '<div class="b-danke"></div><div class="b-zus">';
@@ -2227,41 +2229,59 @@
     }
   }
 
-  // ------------------------------------------------------------------ Logos (dunkle werden weiß)
+  // ------------------------------------------------------------------ Logos (dunkle werden weiß oder bekommen einen Schein)
+  // Fast ganz dunkle, einfarbige Logos (schwarze Schrift) werden weiß. Dunkle Logos mit hellen oder bunten Teilen
+  // (z. B. Masters of the Universe) bleiben wie sie sind und bekommen nur einen hellen Schein – früher wurden auch sie
+  // ganz weiß und waren dann ein weißer Klecks (Meldung Lukas 03.11.2026). Gleiche Regel wie Logo.java am TCL.
 
-  let logoDunkel = {};
-  try { logoDunkel = JSON.parse(speicherLesen('lk_logos') || '{}') || {}; } catch (e) { logoDunkel = {}; }
+  let logoArt = {};
+  try { logoArt = JSON.parse(speicherLesen('lk_logos2') || '{}') || {}; } catch (e) { logoArt = {}; }
   let logoSpeichern = 0;
 
+  function logoKlasse(img, art) {
+    img.classList.toggle('weiss', art === 'w');
+    img.classList.toggle('schein', art === 's');
+  }
+
   function logoPruefen(img, url) {
-    if (logoDunkel[url] !== undefined) {
-      img.classList.toggle('weiss', logoDunkel[url]);
+    if (logoArt[url] !== undefined) {
+      logoKlasse(img, logoArt[url]);
       return;
     }
     try {
       const c = document.createElement('canvas');
-      c.width = 48;
-      c.height = 24;
+      c.width = 64;
+      c.height = 32;
       const g = c.getContext('2d');
-      g.drawImage(img, 0, 0, 48, 24);
-      const d = g.getImageData(0, 0, 48, 24).data;
-      let summe = 0, n = 0;
+      g.drawImage(img, 0, 0, 64, 32);
+      const d = g.getImageData(0, 0, 64, 32).data;
+      let summe = 0, n = 0, hell = 0, bunt = 0;
       for (let i = 0; i < d.length; i += 4) {
         if (d[i + 3] < 128) continue;
-        summe += (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+        const l = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+        const sat = Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
+        summe += l;
+        if (l > 160) hell++;
+        if (sat > 60 && l > 50) bunt++;
         n++;
       }
-      logoDunkel[url] = n > 0 && summe / n < 95;
+      let art = '';
+      if (n > 0) {
+        const L = summe / n, H = hell / n, B = bunt / n;
+        if (L < 95 && H < 0.10 && B < 0.15) art = 'w';
+        else if (L < 115) art = 's';
+      }
+      logoArt[url] = art;
       clearTimeout(logoSpeichern);
       logoSpeichern = setTimeout(function () {
-        const k = Object.keys(logoDunkel);
-        if (k.length > 800) k.slice(0, k.length - 800).forEach(function (x) { delete logoDunkel[x]; });
-        speicherSetzen('lk_logos', JSON.stringify(logoDunkel));
+        const k = Object.keys(logoArt);
+        if (k.length > 800) k.slice(0, k.length - 800).forEach(function (x) { delete logoArt[x]; });
+        speicherSetzen('lk_logos2', JSON.stringify(logoArt));
       }, 3000);
     } catch (e) {
-      logoDunkel[url] = false;
+      logoArt[url] = '';
     }
-    img.classList.toggle('weiss', logoDunkel[url]);
+    logoKlasse(img, logoArt[url]);
   }
 
   // ------------------------------------------------------------------ Zeichnen
@@ -2947,6 +2967,44 @@
     fokusGeaendert();
   }
 
+  // Eine geöffnete Kategorie in Reihen, die man auch sieht (Meldung Lukas 03.11.2026: Kanu des Manitu fehlte scheinbar
+  // in Komödien). Reihen unter der aktiven zeigen nur ihre Überschrift – die alten Reihen „zu je 8 ohne Überschrift“
+  // waren dadurch unsichtbar. Jetzt: bis 10 Filme eine Reihe, sonst nach Jahren (neueste zuerst), Jahre mit weniger
+  // als 4 Filmen zusammengefasst („2019 – 2024“). Gleiche Regel wie am TCL (reihenNachJahren).
+  function reihenNachJahren(titel, roh) {
+    if (!roh.length) return [];
+    if (roh.length <= 10) return [reiheAus(titel, roh, POSTER)];
+    const jahr = function (e) { return Number(e.ProductionYear) || 0; };
+    const l = roh.map(function (e, i) { return { e: e, i: i }; })
+      .sort(function (a, b) { return jahr(b.e) - jahr(a.e) || a.i - b.i; }).map(function (x) { return x.e; });
+    const anzahl = {};
+    l.forEach(function (e) { anzahl[jahr(e)] = (anzahl[jahr(e)] || 0) + 1; });
+    const titelVon = function (von, bis) { return !von && !bis ? 'Ohne Jahr' : (von === bis ? String(von) : von + ' – ' + bis); };
+    const out = [];
+    let gruppe = [], von = 0, bis = 0, grossGruppe = false;
+    l.forEach(function (e) {
+      const j = jahr(e), gross = j !== 0 && anzahl[j] >= 4;
+      if (gruppe.length) {
+        const passt = grossGruppe ? (gross && j === von) : (!gross && (j === 0) === (von === 0));
+        if (!passt) {
+          out.push(reiheAus(titelVon(von, bis), gruppe, POSTER));
+          gruppe = [];
+        }
+      }
+      if (!gruppe.length) {
+        von = j;
+        bis = j;
+        grossGruppe = gross;
+      }
+      von = Math.min(von, j);
+      bis = Math.max(bis, j);
+      gruppe.push(e);
+    });
+    if (gruppe.length) out.push(reiheAus(titelVon(von, bis), gruppe, POSTER));
+    if (out.length) out[0].titel = titel + '  ·  ' + out[0].titel;   // oben steht die Kategorie dabei
+    return out;
+  }
+
   function kategorieOeffnen(k) {
     const neu = neueSeite(k.Name);
     neu.kopf = k;
@@ -2955,7 +3013,7 @@
     jf.inhalt(k.Id).then(function (roh) {
       neu.reihen = [];
       const a = roh.filter(function (e) { return !istGesehen(e); });
-      for (let i = 0; i < a.length; i += 8) neu.reihen.push(reiheAus(i === 0 ? k.Name : '', a.slice(i, i + 8), POSTER));
+      reihenNachJahren(k.Name, a).forEach(function (r) { neu.reihen.push(r); });
       if (!neu.reihen.length) neu.leer = roh.length ? 'Alles schon gesehen' : 'Keine Filme';
       if (seite === neu) fokusGeaendert();
     }, function () { /* bleibt leer */ });

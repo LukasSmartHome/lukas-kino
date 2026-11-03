@@ -141,6 +141,7 @@ body {
 }
 
 .i-logo img.weiss { filter: brightness(0) invert(1) drop-shadow(0 3px 18px rgba(0, 0, 0, .35)); }
+.i-logo img.schein { filter: drop-shadow(0 0 2px rgba(255, 255, 255, .75)) drop-shadow(0 0 14px rgba(255, 255, 255, .35)); }
 
 .i-titel {
   height: 200px;
@@ -880,6 +881,7 @@ body {
 }
 
 .p-logo.weiss { filter: brightness(0) invert(1); }
+.p-logo.schein { filter: drop-shadow(0 0 2px rgba(255, 255, 255, .75)) drop-shadow(0 0 12px rgba(255, 255, 255, .3)); }
 
 .p-titel {
   position: absolute;
@@ -1157,6 +1159,7 @@ body {
 .leicht .i-gross, .leicht .i-titel span { text-shadow: none; }
 .leicht .i-logo img { filter: none; }
 .leicht .i-logo img.weiss { filter: brightness(0) invert(1); }
+.leicht .i-logo img.schein { filter: drop-shadow(0 0 2px rgba(255, 255, 255, .8)); }
 .leicht .bg { transition-duration: .3s; }
 .leicht #info .neu { animation: none; }
 
@@ -1429,7 +1432,19 @@ body {
 .b-film.b-name-unten { top: 452px; z-index: 2; }
 
 .leicht .b-karte { background: rgba(28, 30, 38, .96); }
+/* Jonas' Fernseher (leichter Modus): ruhigere Effekte, keine 3D-Drehungen, keine weichen Filter */
 .leicht .b-spalte.s9, .leicht .b-spalte.s10 { animation: none; }
+.leicht .b-spalte.s8 { box-shadow: inset 0 0 0 2px rgba(34, 197, 94, .67); }
+.leicht .b-spalte.s9 { box-shadow: inset 0 0 0 3px #4ADE80; }
+.leicht .b-spalte.s10 { box-shadow: inset 0 0 0 3px #FFD54A; }
+.leicht .s10 .b-zahl { background: none; color: #FFD54A; -webkit-filter: none; filter: none; }
+.leicht .s9 .b-zahl, .leicht .s8 .b-zahl { text-shadow: none; }
+.leicht .bx-l path, .leicht .b-punkte i.huepf, .leicht .bx-f { animation: none; }
+.leicht .bx-f { transform: scale(.8); opacity: .8; }
+.leicht .bx-k { animation-name: bx-fall-flach; }
+.leicht .b-karte.danke .bx-k { animation-name: bx-fall-flach-gross; }
+@keyframes bx-fall-flach { from { transform: translateY(0) rotate(0); } to { transform: translateY(470px) rotate(360deg); } }
+@keyframes bx-fall-flach-gross { from { transform: translateY(0) rotate(0); } to { transform: translateY(700px) rotate(360deg); } }
 
 /* ------------------------------------------------------------ Live-Kacheln ganz links in Weiterschauen */
 

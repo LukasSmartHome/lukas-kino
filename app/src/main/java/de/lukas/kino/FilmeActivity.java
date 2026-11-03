@@ -434,10 +434,8 @@ public class FilmeActivity extends Activity {
             if ("Series".equals(typ(o))) serien.add(o);
             else filme.add(o);
         }
-        for (int i = 0; i < filme.size(); i += 8)
-            s.reihen.add(reiheAus(i == 0 ? "Filme" : "", filme.subList(i, Math.min(filme.size(), i + 8)), POSTER));
-        for (int i = 0; i < serien.size(); i += 8)
-            s.reihen.add(reiheAus(i == 0 ? "Serien" : "", serien.subList(i, Math.min(serien.size(), i + 8)), POSTER));
+        if (!filme.isEmpty()) s.reihen.add(reiheAus("Filme", filme, POSTER));
+        if (!serien.isEmpty()) s.reihen.add(reiheAus("Serien", serien, POSTER));
         if (s.reihen.isEmpty()) s.leer = "Noch nichts gemerkt";
         return s;
     }
@@ -516,8 +514,7 @@ public class FilmeActivity extends Activity {
         for (Empfohlen.Gruppe g : Empfohlen.gruppen()) {
             List<JSONObject> l = new ArrayList<>();
             for (JSONObject o : g.eintraege) if (!Gesehen.hat(o)) l.add(o);
-            for (int i = 0; i < l.size(); i += 8)
-                s.reihen.add(reiheAus(i == 0 ? "Mit " + g.note + " bewertet" : "", l.subList(i, Math.min(l.size(), i + 8)), POSTER));
+            if (!l.isEmpty()) s.reihen.add(reiheAus("Mit " + g.note + " bewertet", l, POSTER));
         }
         if (s.reihen.isEmpty())
             s.leer = Empfohlen.geladen() ? "Noch nichts mit 7 oder besser bewertet" : "Bewertungen werden geladen …";
@@ -768,8 +765,7 @@ public class FilmeActivity extends Activity {
                 List<JSONObject> l = new ArrayList<>();
                 for (String id : ids) if (gefunden.containsKey(id)) l.add(gefunden.get(id));
                 neu.reihen.clear();
-                for (int i = 0; i < l.size(); i += 8)
-                    neu.reihen.add(reiheAus(i == 0 ? (l.size() == 1 ? "1 Film" : l.size() + " Filme") : "", l.subList(i, Math.min(l.size(), i + 8)), POSTER));
+                if (!l.isEmpty()) neu.reihen.add(reiheAus(l.size() == 1 ? "1 Film" : l.size() + " Filme", l, POSTER));
                 if (neu.reihen.isEmpty()) neu.leer = "Noch nichts gesehen";
                 if (seite == neu) {
                     nachladen();
@@ -985,6 +981,64 @@ public class FilmeActivity extends Activity {
         }
         r.geladen = true;
         return r;
+    }
+
+    /**
+     * Eine geöffnete Kategorie in Reihen, die man auch sieht (Meldung Lukas 03.11.2026: Kanu des Manitu fehlte scheinbar
+     * in Komödien). Seit 1.0.35 zeigen Reihen unter der aktiven nur ihre Überschrift – die alten Reihen „zu je 8 ohne
+     * Überschrift“ waren dadurch unsichtbar. Jetzt: bis 10 Filme eine Reihe, sonst nach Jahren (neueste zuerst),
+     * Jahre mit weniger als 4 Filmen zusammengefasst („2019 – 2024“).
+     */
+    private static List<Reihe> reihenNachJahren(String titel, List<JSONObject> roh) {
+        List<Reihe> out = new ArrayList<>();
+        if (roh.isEmpty()) return out;
+        if (roh.size() <= 10) {
+            out.add(reiheAus(titel, roh, POSTER));
+            return out;
+        }
+        // nach Jahr (neueste zuerst), innerhalb eines Jahres bleibt die Reihenfolge von Jellyfin (stabil sortiert)
+        List<JSONObject> l = new ArrayList<>(roh);
+        Collections.sort(l, (a, b) -> Integer.compare(b.optInt("ProductionYear", 0), a.optInt("ProductionYear", 0)));
+        Map<Integer, Integer> anzahl = new HashMap<>();
+        for (JSONObject o : l) {
+            int j = o.optInt("ProductionYear", 0);
+            Integer n = anzahl.get(j);
+            anzahl.put(j, n == null ? 1 : n + 1);
+        }
+        List<JSONObject> gruppe = new ArrayList<>();
+        int von = 0, bis = 0;
+        boolean grossGruppe = false;
+        for (JSONObject o : l) {
+            int j = o.optInt("ProductionYear", 0);
+            boolean gross = j != 0 && anzahl.get(j) >= 4;
+            if (!gruppe.isEmpty()) {
+                boolean passt = grossGruppe ? (gross && j == von) : (!gross && (j == 0) == (von == 0));
+                if (!passt) {
+                    out.add(reiheAus(jahrTitel(von, bis), gruppe, POSTER));
+                    gruppe = new ArrayList<>();
+                }
+            }
+            if (gruppe.isEmpty()) {
+                von = j;
+                bis = j;
+                grossGruppe = gross;
+            }
+            von = Math.min(von, j);
+            bis = Math.max(bis, j);
+            gruppe.add(o);
+        }
+        if (!gruppe.isEmpty()) out.add(reiheAus(jahrTitel(von, bis), gruppe, POSTER));
+        if (!out.isEmpty()) {
+            Reihe erste = out.get(0);   // oben steht die Kategorie dabei
+            Reihe neu = reiheAus(titel + "  ·  " + erste.titel, erste.eintraege, POSTER);
+            out.set(0, neu);
+        }
+        return out;
+    }
+
+    private static String jahrTitel(int von, int bis) {
+        if (von == 0 && bis == 0) return "Ohne Jahr";
+        return von == bis ? String.valueOf(von) : von + " – " + bis;
     }
 
     private static Reihe reiheAus(String titel, List<JSONObject> l, int form) {
@@ -1634,8 +1688,7 @@ public class FilmeActivity extends Activity {
                         JSONObject o = roh.optJSONObject(k);
                         if (o != null && !Gesehen.hat(o)) a.add(o);
                     }
-                    for (int i = 0; i < a.size(); i += 8)
-                        neu.reihen.add(reiheAus(i == 0 ? name : "", a.subList(i, Math.min(a.size(), i + 8)), POSTER));
+                    neu.reihen.addAll(reihenNachJahren(name, a));
                     if (neu.reihen.isEmpty()) neu.leer = roh.length() > 0 ? "Alles schon gesehen" : "Keine Filme";
                     if (seite == neu) {
                         nachladen();
