@@ -7,7 +7,7 @@
 #
 # Befehle:
 #   daten [ziel.json]        alle Filme mit Genres, Sammlungen, Trailer-Links (zum Prüfen)
-#   trailer [--alle|--ohne]  /share/kino/trailer.json neu: je Film der beste YouTube-Trailer
+#   trailer [--alle|--ohne|--suche]  /share/kino/trailer.json neu (--suche: Treffer der YouTube-Suche nochmal prüfen): je Film der beste YouTube-Trailer
 #                            (eigene Liste > KinoCheck deutsch > Jellyfin deutsch > KinoCheck englisch > Jellyfin),
 #                            jeder Kandidat wird per YouTube-oEmbed geprüft (gibt es ihn, darf man ihn einbetten?).
 #                            Ohne --alle nur Filme, die noch nicht in der Liste stehen oder ohne Trailer älter als 7 Tage.
@@ -197,12 +197,19 @@ def youtube_kandidaten(e):
                 continue
             if "trailer" not in nt and "teaser" not in nt:
                 continue
-            # der Filmname muss vorkommen (erstes Wort mit mindestens 3 Zeichen aus Titel oder Originaltitel)
+            # der ganze Filmname muss als zusammenhängende Wörter im Videotitel stehen (Titel, Originaltitel oder der Teil
+            # vor „ - “/„:“), und eine Jahreszahl im Videotitel muss passen – sonst landet z. B. „In the Line of Fire“
+            # bei „A Line of Fire“ oder „Der Passfälscher (2022)“ bei „Der Fälscher (2025)“
+            pad = " " + nt + " "
             treffer = False
             for n in namen:
-                woerter = [w for w in normal(n).split() if len(w) >= 3] or normal(n).split()
-                if woerter and all(w in nt for w in woerter[:2]):
-                    treffer = True
+                for teil in [n] + re.split(r"\s+[-–:]\s+|:\s*", n)[:1]:
+                    nn = normal(teil)
+                    if len(nn) >= 3 and (" " + nn + " ") in pad:
+                        treffer = True
+            jahre = [int(x) for x in re.findall(r"\b(19[0-9]{2}|20[0-9]{2})\b", t)]
+            if jahre and jahr and not any(abs(x - int(jahr)) <= 1 for x in jahre):
+                treffer = False
             if not treffer:
                 continue
             gesehen.add(v["yt"])
@@ -244,7 +251,7 @@ def rang(k, i):
     return (1 + unter * 2 + (0 if k.get("spr") == "de" else 1), i)
 
 
-def befehl_trailer(alle=False, still=False, ohne_neu=False):
+def befehl_trailer(alle=False, still=False, ohne_neu=False, suche_neu=False):
     key = schluessel()
     user = anfrage("/Users", key)[0]["Id"]
     filme = filme_holen(key, user)
@@ -255,6 +262,8 @@ def befehl_trailer(alle=False, still=False, ohne_neu=False):
     for e in filme:
         a = alt.get(e["Id"])
         fest = eigen.get(e["Id"]) or eigen.get("tmdb:" + str((e.get("ProviderIds") or {}).get("Tmdb", "")))
+        if suche_neu and a and a.get("q") == "YouTube-Suche":
+            a = None
         if a and not alle and not fest and (a.get("yt") or (not ohne_neu and jetzt - a.get("z", 0) < 7 * 86400)):
             neu[e["Id"]] = a
             continue
@@ -352,7 +361,7 @@ if __name__ == "__main__":
     elif a[0] == "daten":
         befehl_daten(a[1] if len(a) > 1 else os.path.join(WERK, "film_daten.json"))
     elif a[0] == "trailer":
-        befehl_trailer(alle="--alle" in a, ohne_neu="--ohne" in a)
+        befehl_trailer(alle="--alle" in a, ohne_neu="--ohne" in a, suche_neu="--suche" in a)
     elif a[0] == "kategorien":
         befehl_kategorien(los="--los" in a)
     elif a[0] == "auto":
