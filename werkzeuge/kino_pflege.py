@@ -600,8 +600,13 @@ if __name__ == "__main__":
             d, w = befehl_kategorien(los=True, still=True)
             teile.append("Kategorien +{} -{}".format(d, w))
             befehl_logos(los=True)
-            befehl_vorwaermen("alles", 2, nur_neue=True)
-            teile.append("Bilder ok")
+            if os.path.exists(os.path.join(WERK, "vorwaermen_pause")):
+                # pausiert (Lukas 03.11.2026): Vorwärmen füllt über Jellyfin die Platte, erst nach dem Umzug der Filme
+                # auf die 14-TB-Platte fortsetzen – dann die Datei vorwaermen_pause löschen
+                teile.append("Bilder pausiert")
+            else:
+                befehl_vorwaermen("alles", 2, nur_neue=True)
+                teile.append("Bilder ok")
             text = "ok " + time.strftime("%d.%m. %H:%M") + ": " + ", ".join(teile)
         except BaseException as ex:
             text = "fehler " + time.strftime("%d.%m. %H:%M") + ": " + str(ex)[:150]
