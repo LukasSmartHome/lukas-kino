@@ -226,7 +226,7 @@ public class FilmeActivity extends Activity {
             {"com.netflix.ninja"},
             {"com.google.android.youtube.tv", "com.amazon.firetv.youtube"}};
     static final int APP_YOUTUBE = 2;
-    static final boolean YT_ALS_WEB = true;
+    static final boolean YT_ALS_WEB = false; // seit 03.11.2026 abends: YouTube öffnet die echte App (Wunsch Lukas)
     private static final String[] LEISTE = {"Prime Video", "Netflix", "YouTube",
             "Suche", "Filme", "Serien", "Merkliste", "Empfohlen", "Fotos"};
     private static final float LEISTE_SCHRITT = 90;
