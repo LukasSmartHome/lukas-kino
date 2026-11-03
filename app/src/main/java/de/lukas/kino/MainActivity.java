@@ -62,8 +62,8 @@ public class MainActivity extends Activity {
 
     // ---------- Einstellungen der Oberfläche ----------
     private static final List<String> FAVORITEN = Arrays.asList(
-            "com.google.android.youtube.tv", "com.spotify.tv.android", "com.netflix.ninja", "@hdmi2",
-            "com.amazon.amazonvideo.livingroom", "com.plexapp.android", "com.google.android.youtube.tvmusic",
+            "com.google.android.youtube.tv", "com.amazon.firetv.youtube", "com.spotify.tv.android", "com.netflix.ninja", "@hdmi2",
+            "com.amazon.amazonvideo.livingroom", "com.amazon.firebat", "com.plexapp.android", "com.google.android.youtube.tvmusic",
             "com.limelight", "com.valvesoftware.steamlink", "tunein.player");
     private static final Pattern VERSTECKT = Pattern.compile(
             "^(de\\.lukas\\.kino$|com\\.tcl\\.|com\\.google\\.android\\.apps\\.tv\\.launcherx|com\\.google\\.android\\.tungsten)");
@@ -86,6 +86,8 @@ public class MainActivity extends Activity {
     private static final App PLAYSTATION = new App("@hdmi2", "PlayStation", false, true, "HDMI 2");
     /** Filmbereich (eigene Oberfläche für die Filme auf dem Jellyfin-Server). */
     private static final App FILME = new App("@filme", "Filme", false, true, "Lukas Kino");
+    /** Fire TV: Die Amazon-Einstellungen haben keine eigene App-Kachel und die Fernbedienung keine Einstellungstaste. */
+    private static final App EINSTELLUNGEN = new App("@einstellungen", "Einstellungen", false, false, null);
 
     // ---------- Zustand (wie in der Web-Version) ----------
     private final List<App> apps = new ArrayList<>();
@@ -334,9 +336,12 @@ public class MainActivity extends Activity {
             }
             liste.add(new App(pkg, String.valueOf(ri.loadLabel(pm)), hatBanner, false, null));
         }
+        // Fire TV: kein HDMI-Eingang (PlayStation-Kachel weg), dafür eine Einstellungen-Kachel.
+        boolean fire = istFireTv();
+        if (fire) liste.add(EINSTELLUNGEN);
         Map<String, App> nachPkg = new HashMap<>();
         for (App a : liste) nachPkg.put(a.pkg, a);
-        nachPkg.put(PLAYSTATION.pkg, PLAYSTATION);
+        if (!fire) nachPkg.put(PLAYSTATION.pkg, PLAYSTATION);
         nachPkg.put(FILME.pkg, FILME);
 
         List<String> basis = gespeicherteReihenfolge();
@@ -366,6 +371,14 @@ public class MainActivity extends Activity {
             StringBuilder sb = new StringBuilder();
             for (int k = 0; k < Math.min(12, apps.size()); k++) sb.append(k > 0 ? ", " : "").append(apps.get(k).name).append(apps.get(k).banner ? "*" : "");
             Log.i(TAG, "apps " + apps.size() + ": " + sb);
+        }
+    }
+
+    private boolean istFireTv() {
+        try {
+            return getPackageManager().hasSystemFeature("amazon.hardware.fire_tv");
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -452,7 +465,7 @@ public class MainActivity extends Activity {
 
     private void bilderHolen(Kachel k, int nummer) {
         final App a = k.app;
-        if (a.spiel) {
+        if (a.spiel || a.pkg.startsWith("@")) {
             k.bilderDa(null, null);
             return;
         }
@@ -712,6 +725,10 @@ public class MainActivity extends Activity {
             if (!hdmi(2)) zeigen("HDMI 2 nicht gefunden");
             return;
         }
+        if (a.pkg.equals(EINSTELLUNGEN.pkg)) {
+            if (!einstellungenOeffnen(this)) zeigen("Einstellungen gehen nicht");
+            return;
+        }
         if (a.pkg.equals(FILME.pkg)) {
             try {
                 startActivity(new Intent(this, FilmeActivity.class));
@@ -959,11 +976,15 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             try {
                 PackageManager pm = getPackageManager();
-                Intent i = pm.getLeanbackLaunchIntentForPackage("com.android.vending");
-                if (i == null) i = pm.getLaunchIntentForPackage("com.android.vending");
-                if (i != null) {
-                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(i);
+                // Play Store, auf dem Fire TV der Amazon Appstore
+                for (String laden : new String[]{"com.android.vending", "com.amazon.venezia"}) {
+                    Intent i = pm.getLeanbackLaunchIntentForPackage(laden);
+                    if (i == null) i = pm.getLaunchIntentForPackage(laden);
+                    if (i != null) {
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(i);
+                        break;
+                    }
                 }
             } catch (Exception ignored) {
             }

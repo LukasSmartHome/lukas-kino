@@ -3,6 +3,7 @@ package de.lukas.kino;
 import android.accessibilityservice.AccessibilityService;
 import android.content.Intent;
 import android.graphics.PixelFormat;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -10,6 +11,13 @@ import android.util.Log;
 import android.view.KeyEvent;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
+
+import org.json.JSONObject;
+
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Sanfte Startseite: Die Google-TV-Startseite bleibt installiert. Dieser Dienst
@@ -19,6 +27,12 @@ import android.view.accessibility.AccessibilityEvent;
  *  3. holt Lukas Kino einmal nach dem Hochfahren des Fernsehers,
  *  4. leitet die Mikro-Taste an Claude weiter (Push-to-Talk, Google kommt darüber nie mehr)
  *     und zeigt den orangen Sprach-Rahmen als Overlay über allem an.
+ * Fire TV (Cube, seit 03.11.2026): Amazon lässt sich die Home-Taste nicht wegnehmen und die
+ * Amazon-Startseite nicht abschalten (geschütztes Paket), und Tasten kommen hier gar nicht an.
+ * Darum erkennt der Wächter die Amazon-Startseite, sobald sie aufgeht, und bittet Home Assistant
+ * (Webhook startseiteWebhook aus kino_geheim.json, Automation 90), Lukas Kino per ADB sofort nach
+ * vorn zu holen – ADB darf das gleich, eine App erst 5 s nach Home (Android-Sperre). Parallel
+ * versucht er es selbst (Rückfall, falls HA nicht erreichbar ist).
  * Es wird kein Systempaket angefasst. Abschalten: Dienst in den Bedienungshilfen aus
  * oder per ADB aus enabled_accessibility_services entfernen.
  */
@@ -30,10 +44,16 @@ public class StartseitenWaechter extends AccessibilityService {
     private static final String TAG = "LukasKino";
     private static final String GOOGLE_STARTSEITE = "com.google.android.apps.tv.launcherx";
     private static final String GOOGLE_HOME_ACTIVITY = "com.google.android.apps.tv.launcherx.home.HomeActivity";
+    /** Fire TV: Amazon-Startseite (com.amazon.tv.launcher/.ui.HomeActivity_vNext). Einstellungen liegen im
+     *  selben Paket (SettingsActivity) und bleiben unangetastet – darum nur Klassen mit „HomeActivity“. */
+    private static final String AMAZON_STARTSEITE = "com.amazon.tv.launcher";
+    private static final String HA = "http://192.168.178.44:8123";
     /** So lange nach dem Hochfahren gilt das Verbinden des Dienstes als „Fernseher ist gerade gestartet“. */
     private static final long BOOT_FENSTER_MS = 5 * 60 * 1000;
 
     private long letzterStart = 0;
+    private long letzteHaBitte = 0;
+    private static String haWebhook;
 
     private static StartseitenWaechter aktiv;
     private static final Handler HAUPT = new Handler(Looper.getMainLooper());
@@ -47,6 +67,24 @@ public class StartseitenWaechter extends AccessibilityService {
         Log.i(TAG, "Waechter verbunden, " + (seitStart / 1000) + " s nach dem Hochfahren");
         if (seitStart < BOOT_FENSTER_MS) holen("hochgefahren");
         Sprache.starten(this);
+        if (istFireTv()) {
+            // Webhook schon jetzt holen, damit die erste Home-Taste nicht auf das Laden wartet.
+            new Thread(() -> {
+                try {
+                    startseitenWebhook();
+                } catch (Exception e) {
+                    Log.w(TAG, "Waechter: Startseiten-Webhook fehlt noch", e);
+                }
+            }, "ha-webhook").start();
+        }
+    }
+
+    private boolean istFireTv() {
+        try {
+            return getPackageManager().hasSystemFeature("amazon.hardware.fire_tv");
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @Override
@@ -164,10 +202,46 @@ public class StartseitenWaechter extends AccessibilityService {
         CharSequence paket = e.getPackageName();
         CharSequence klasse = e.getClassName();
         if (paket == null || klasse == null) return;
-        if (!GOOGLE_STARTSEITE.contentEquals(paket)) return;
         // Nur die eigentliche Startseite ersetzen, keine Einstellungs- oder Suchfenster.
-        if (!GOOGLE_HOME_ACTIVITY.contentEquals(klasse)) return;
-        holen("google-startseite");
+        boolean google = GOOGLE_STARTSEITE.contentEquals(paket) && GOOGLE_HOME_ACTIVITY.contentEquals(klasse);
+        boolean amazon = AMAZON_STARTSEITE.contentEquals(paket) && klasse.toString().contains("HomeActivity");
+        if (!google && !amazon) return;
+        if (amazon) haBitten();
+        holen(amazon ? "amazon-startseite" : "google-startseite");
+    }
+
+    /** Fire TV: Home Assistant holt Lukas Kino per ADB sofort nach vorn (Automation 90). */
+    private void haBitten() {
+        long jetzt = SystemClock.elapsedRealtime();
+        if (jetzt - letzteHaBitte < 1500) return;
+        letzteHaBitte = jetzt;
+        new Thread(() -> {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL(startseitenWebhook()).openConnection();
+                c.setConnectTimeout(3000);
+                c.setReadTimeout(5000);
+                c.setRequestMethod("POST");
+                c.setDoOutput(true);
+                c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                try (OutputStream o = c.getOutputStream()) {
+                    o.write(("geraet=" + Jellyfin.enc(Build.MODEL)).getBytes(StandardCharsets.UTF_8));
+                }
+                int code = c.getResponseCode();
+                c.disconnect();
+                Log.i(TAG, "Waechter bittet HA, Lukas Kino zu holen (" + code + ")");
+            } catch (Exception e) {
+                Log.w(TAG, "Waechter: HA nicht erreichbar", e);
+            }
+        }, "ha-startseite").start();
+    }
+
+    private static synchronized String startseitenWebhook() throws Exception {
+        if (haWebhook != null) return haWebhook;
+        JSONObject j = new JSONObject(Jellyfin.holen(Familie.BASIS + "kino_geheim.json?t=" + System.currentTimeMillis()));
+        String id = j.optString("startseiteWebhook", "");
+        if (id.isEmpty()) throw new Exception("kein Startseiten-Webhook");
+        haWebhook = HA + "/api/webhook/" + Jellyfin.enc(id);
+        return haWebhook;
     }
 
     private boolean holen(String grund) {
