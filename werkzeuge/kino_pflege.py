@@ -418,6 +418,12 @@ def befehl_vorwaermen(teil="alles", faeden=2, nur_neue=False):
     teil: alles, filme, fotos oder ordner. Arbeitet sofort los (die Liste wird nebenbei geholt), Stand in
     vorwaermen_stand.json."""
     import threading, concurrent.futures
+    # läuft schon ein Vorwärmen (auch aus dem anderen Container, z. B. von Hand im File editor)? Dann nicht doppelt.
+    sp = os.path.join(WERK, "vorwaermen_stand.json")
+    alt = lesen(sp)
+    if alt and alt.get("phase") != "fertig" and os.path.exists(sp) and time.time() - os.path.getmtime(sp) < 600:
+        print("Vorwärmen läuft schon – übersprungen")
+        return
     key = schluessel()
     user = anfrage("/Users", key)[0]["Id"]
     stand = {"phase": "start", "fertig": 0, "fehler": 0, "bytes": 0, "angefragt": 0}
