@@ -6,6 +6,8 @@
 # Jellyfin-Schlüssel nur aus <config>/jellyfin_schluessel.txt (wird nie ausgegeben).
 #
 # Befehle:
+#   vorwaermen [alles|filme|fotos] [--faeden N]   alle Vorschaubilder in den Größen der Fernseher bei Jellyfin
+#                            einmal anfragen (danach liegen sie fertig im Zwischenspeicher), Stand in vorwaermen_stand.json
 #   logos [--los]            verpixelte Logos (SVG oder klein) gegen große PNG-Logos aus TMDB/Fanart tauschen
 #   daten [ziel.json]        alle Filme mit Genres, Sammlungen, Trailer-Links (zum Prüfen)
 #   trailer [--alle|--ohne|--suche]  /share/kino/trailer.json neu (--suche: Treffer der YouTube-Suche nochmal prüfen): je Film der beste YouTube-Trailer
@@ -402,6 +404,102 @@ def befehl_logos(los=False):
         print("  kein besseres gefunden:", x)
 
 
+
+# ------------------------------------------------------------------ vorwaermen
+
+WEBP = "image/webp,image/apng,image/*,*/*;q=0.8"   # so fragt der Browser der LG-Fernseher (bekommt WebP)
+
+
+def befehl_vorwaermen(teil="alles", faeden=2):
+    """Alle Vorschaubilder einmal in genau den Größen anfragen, die die Fernseher benutzen. Jellyfin rechnet jedes Bild
+    beim ersten Abruf aus dem Original (bei Fotos 12 Megapixel) klein und legt es in seinen Zwischenspeicher – danach
+    kommt es sofort. TCL (ohne Accept, bekommt JPEG) und LG-Browser (WebP) bekommen je eine eigene Fassung.
+    teil: alles, filme oder fotos."""
+    import threading, concurrent.futures
+    key = schluessel()
+    user = anfrage("/Users", key)[0]["Id"]
+    urls = []
+    if teil in ("alles", "filme"):
+        for e in anfrage("/Items?" + q(userId=user, includeItemTypes="Movie,Series", recursive="true",
+                                         fields="ImageTags,BackdropImageTags"), key).get("Items") or []:
+            i, t, b = e["Id"], e.get("ImageTags") or {}, e.get("BackdropImageTags") or []
+            if t.get("Primary"):
+                urls.append("/Items/{}/Images/Primary?fillHeight=330&quality=90&tag={}".format(i, t["Primary"]))
+                if not b:
+                    urls.append("/Items/{}/Images/Primary?fillHeight=1080&quality=90&tag={}".format(i, t["Primary"]))
+            if t.get("Logo"):
+                urls.append("/Items/{}/Images/Logo?fillHeight=220&quality=90&tag={}".format(i, t["Logo"]))
+            if b:
+                urls.append("/Items/{}/Images/Backdrop/0?fillWidth=1920&quality=85&tag={}".format(i, b[0]))
+                urls.append("/Items/{}/Images/Backdrop/0?fillWidth=1280&quality=80&tag={}".format(i, b[0]))
+                urls.append("/Items/{}/Images/Backdrop/0?fillWidth=940&quality=85&tag={}".format(i, b[0]))
+    if teil in ("alles", "fotos"):
+        fotos = None
+        for v in anfrage("/UserViews?" + q(userId=user), key).get("Items") or []:
+            if v.get("CollectionType") in ("photos", "homevideos") and fotos is None:
+                fotos = v["Id"]
+        if fotos:
+            start = 0
+            while True:
+                seite = anfrage("/Items?" + q(userId=user, parentId=fotos, recursive="true", includeItemTypes="Photo",
+                                              imageTypes="Primary", fields="ImageTags", enableUserData="false",
+                                              startIndex=start, limit=2000), key).get("Items") or []
+                for e in seite:
+                    tg = (e.get("ImageTags") or {}).get("Primary")
+                    if tg:
+                        urls.append("/Items/{}/Images/Primary?fillWidth=360&quality=85&tag={}".format(e["Id"], tg))
+                if len(seite) < 2000:
+                    break
+                start += 2000
+            # Titelbilder der Ordner: wie die Apps das erste Foto suchen (erst direkt, sonst in Unterordnern)
+            ordner = anfrage("/Items?" + q(userId=user, parentId=fotos, recursive="true", isFolder="true",
+                                           enableImages="false", enableUserData="false"), key).get("Items") or []
+            for o in ordner:
+                a = anfrage("/Items?" + q(userId=user, parentId=o["Id"], includeItemTypes="Photo", imageTypes="Primary",
+                                          limit=1, fields="ImageTags"), key).get("Items") or []
+                if not a:
+                    a = anfrage("/Items?" + q(userId=user, parentId=o["Id"], recursive="true", includeItemTypes="Photo",
+                                              imageTypes="Primary", limit=1, fields="ImageTags"), key).get("Items") or []
+                if a and (a[0].get("ImageTags") or {}).get("Primary"):
+                    tg = a[0]["ImageTags"]["Primary"]
+                    for w in (536, 704, 1280):
+                        urls.append("/Items/{}/Images/Primary?fillWidth={}&quality=85&tag={}".format(a[0]["Id"], w, tg))
+    gesamt = len(urls) * 2
+    zaehler = {"fertig": 0, "fehler": 0, "bytes": 0}
+    sperre = threading.Lock()
+    beginn = time.time()
+
+    def eins(arg):
+        pfad, accept = arg
+        kopf = {"Authorization": 'MediaBrowser Token="{}"'.format(key)}
+        if accept:
+            kopf["Accept"] = accept
+        try:
+            with urllib.request.urlopen(urllib.request.Request(S + pfad, headers=kopf), timeout=120) as r:
+                n = len(r.read())
+            ok = True
+        except Exception:
+            n, ok = 0, False
+        with sperre:
+            zaehler["fertig"] += 1
+            zaehler["bytes"] += n
+            if not ok:
+                zaehler["fehler"] += 1
+            f = zaehler["fertig"]
+            if f % 500 == 0 or f == gesamt:
+                dauer = time.time() - beginn
+                rest = (gesamt - f) / max(0.1, f / max(1, dauer))
+                schreiben(os.path.join(WERK, "vorwaermen_stand.json"), {"fertig": f, "gesamt": gesamt, "fehler": zaehler["fehler"],
+                          "mb": round(zaehler["bytes"] / 1e6), "pro_sekunde": round(f / max(1, dauer), 1),
+                          "rest_minuten": round(rest / 60), "zeit": time.strftime("%H:%M")})
+
+    auftraege = [(u, a) for u in urls for a in (None, WEBP)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=faeden) as ex:
+        list(ex.map(eins, auftraege))
+    print("vorgewärmt: {} Bilder ({} Abrufe), Fehler {}, {} MB, {} Minuten".format(len(urls), gesamt, zaehler["fehler"],
+                                                                                 round(zaehler["bytes"] / 1e6), round((time.time() - beginn) / 60)))
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
     if not a:
@@ -410,6 +508,9 @@ if __name__ == "__main__":
         befehl_daten(a[1] if len(a) > 1 else os.path.join(WERK, "film_daten.json"))
     elif a[0] == "trailer":
         befehl_trailer(alle="--alle" in a, ohne_neu="--ohne" in a, suche_neu="--suche" in a)
+    elif a[0] == "vorwaermen":
+        befehl_vorwaermen(a[1] if len(a) > 1 and not a[1].startswith("-") else "alles",
+                          int(a[a.index("--faeden") + 1]) if "--faeden" in a else 2)
     elif a[0] == "logos":
         befehl_logos(los="--los" in a)
     elif a[0] == "kategorien":
