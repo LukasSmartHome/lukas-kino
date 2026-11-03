@@ -63,6 +63,21 @@ def anfrage(pfad, key, methode="GET", daten=None):
     return json.loads(d) if d and d[:1] in (b"{", b"[") else None
 
 
+def anfrage_sicher(pfad, key, stand=None):
+    """Wie anfrage, aber ein Fehler (z. B. 502 bei einem einzelnen Ordner) bricht den Lauf nicht ab:
+    einmal nach 3 s nochmal versuchen, sonst None (und als Fehler zählen)."""
+    for versuch in (0, 1):
+        try:
+            return anfrage(pfad, key)
+        except Exception:
+            if versuch == 0:
+                time.sleep(3)
+    if stand is not None:
+        stand["fehler"] = stand.get("fehler", 0) + 1
+        stand["ordner_fehler"] = stand.get("ordner_fehler", 0) + 1
+    return None
+
+
 def q(**werte):
     return "&".join("{}={}".format(k, urllib.parse.quote(str(v), safe=",")) for k, v in werte.items())
 
@@ -520,8 +535,8 @@ def befehl_vorwaermen(teil="alles", faeden=2, nur_neue=False):
                 if oid in gesehen:
                     continue
                 gesehen.add(oid)
-                inhalt = anfrage("/Items?" + q(userId=user, parentId=oid, fields="ImageTags", enableUserData="false"),
-                                 key).get("Items") or []
+                inhalt = (anfrage_sicher("/Items?" + q(userId=user, parentId=oid, fields="ImageTags",
+                                                       enableUserData="false"), key, stand) or {}).get("Items") or []
                 naechste.extend(x["Id"] for x in inhalt if x.get("IsFolder"))
                 if mit_fotos:
                     for x in inhalt:
@@ -530,8 +545,9 @@ def befehl_vorwaermen(teil="alles", faeden=2, nur_neue=False):
                             dazu("/Items/{}/Images/Primary?fillWidth=360&quality=85&tag={}".format(x["Id"], tg))
                 a = [x for x in inhalt if x.get("Type") == "Photo" and (x.get("ImageTags") or {}).get("Primary")][:1]
                 if not a:
-                    a = anfrage("/Items?" + q(userId=user, parentId=oid, recursive="true", includeItemTypes="Photo",
-                                              imageTypes="Primary", limit=1, fields="ImageTags"), key).get("Items") or []
+                    a = (anfrage_sicher("/Items?" + q(userId=user, parentId=oid, recursive="true", includeItemTypes="Photo",
+                                                      imageTypes="Primary", limit=1, fields="ImageTags"), key, stand)
+                         or {}).get("Items") or []
                 if a and (a[0].get("ImageTags") or {}).get("Primary"):
                     tg = a[0]["ImageTags"]["Primary"]
                     for w in (536, 704, 1280):
