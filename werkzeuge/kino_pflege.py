@@ -6,6 +6,7 @@
 # Jellyfin-Schlüssel nur aus <config>/jellyfin_schluessel.txt (wird nie ausgegeben).
 #
 # Befehle:
+#   logos [--los]            verpixelte Logos (SVG oder klein) gegen große PNG-Logos aus TMDB/Fanart tauschen
 #   daten [ziel.json]        alle Filme mit Genres, Sammlungen, Trailer-Links (zum Prüfen)
 #   trailer [--alle|--ohne|--suche]  /share/kino/trailer.json neu (--suche: Treffer der YouTube-Suche nochmal prüfen): je Film der beste YouTube-Trailer
 #                            (eigene Liste > KinoCheck deutsch > Jellyfin deutsch > KinoCheck englisch > Jellyfin),
@@ -64,7 +65,7 @@ def q(**werte):
 
 
 def filme_holen(key, user):
-    felder = "Genres,Tags,ProviderIds,RemoteTrailers,ProductionYear,OriginalTitle,Overview,Studios"
+    felder = "Genres,Tags,ProviderIds,RemoteTrailers,ProductionYear,OriginalTitle,Overview,Studios,ImageTags"
     return anfrage("/Items?" + q(userId=user, includeItemTypes="Movie", recursive="true", fields=felder), key).get("Items") or []
 
 
@@ -358,6 +359,49 @@ def befehl_kategorien(los=False, still=False):
     return dazu_n, weg_n
 
 
+
+# ------------------------------------------------------------------ logos
+
+SPRACHE_RANG = {"de": 0, "en": 1, None: 2, "": 2}
+
+
+def befehl_logos(los=False):
+    """Logos, die als SVG oder sehr klein vorliegen, sehen am Fernseher verpixelt aus (Jellyfin rechnet SVG in der
+    winzigen Grundgröße, z. B. 36x24, und die Apps ziehen das hoch). Für diese Filme ein großes PNG-Logo aus den
+    Bildquellen von Jellyfin (TMDB, Fanart) holen. Ohne --los nur anzeigen."""
+    key = schluessel()
+    user = anfrage("/Users", key)[0]["Id"]
+    filme = filme_holen(key, user)
+    schlecht, besser, ohne = 0, 0, []
+    for e in filme:
+        if not (e.get("ImageTags") or {}).get("Logo"):
+            continue
+        info = [x for x in (anfrage("/Items/{}/Images".format(e["Id"]), key) or []) if x.get("ImageType") == "Logo"]
+        if not info:
+            continue
+        i = info[0]
+        svg = (i.get("Path") or "").lower().endswith(".svg")
+        if not svg and (i.get("Width") or 0) >= 400:
+            continue
+        schlecht += 1
+        fern = anfrage("/Items/{}/RemoteImages?".format(e["Id"]) + q(type="Logo", includeAllLanguages="true"), key) or {}
+        kand = [b for b in (fern.get("Images") or []) if b.get("Url") and not b["Url"].lower().endswith(".svg")
+                and (b.get("Width") or 0) >= 400]
+        kand.sort(key=lambda b: (SPRACHE_RANG.get(b.get("Language"), 3), -(b.get("Width") or 0)))
+        if not kand:
+            ohne.append("{} ({}x{}{})".format(e.get("Name"), i.get("Width"), i.get("Height"), ", svg" if svg else ""))
+            continue
+        b = kand[0]
+        print("{}: {}x{}{} -> {}x{} {} {}".format(e.get("Name"), i.get("Width"), i.get("Height"), " svg" if svg else "",
+                                                b.get("Width"), b.get("Height"), b.get("Language") or "-", b.get("ProviderName")))
+        if los:
+            anfrage("/Items/{}/RemoteImages/Download?".format(e["Id"]) + q(type="Logo", imageUrl=b["Url"]), key, "POST")
+        besser += 1
+    print("Logos verpixelt/klein: {}, {} {}".format(schlecht, "ersetzt" if los else "ersetzbar", besser))
+    for x in ohne:
+        print("  kein besseres gefunden:", x)
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
     if not a:
@@ -366,6 +410,8 @@ if __name__ == "__main__":
         befehl_daten(a[1] if len(a) > 1 else os.path.join(WERK, "film_daten.json"))
     elif a[0] == "trailer":
         befehl_trailer(alle="--alle" in a, ohne_neu="--ohne" in a, suche_neu="--suche" in a)
+    elif a[0] == "logos":
+        befehl_logos(los="--los" in a)
     elif a[0] == "kategorien":
         befehl_kategorien(los="--los" in a)
     elif a[0] == "auto":
