@@ -105,3 +105,19 @@ Für Standbilder braucht es ffmpeg (`apk add --no-cache ffmpeg` im File editor, 
    Bewertungen in HA hängen an den HA-IDs (alte Plex-IDs bzw. `jf:<Jellyfin-ID>`) – Filme, die Jellyfin neu anlegt,
    bekommen neue IDs. Die Apps finden sie über den Titel wieder (FilmIndex), trotzdem erst mit wenigen Filmen testen.
 4. **Trailer:** Dafür braucht es keine Dateien (TMDB/KinoCheck in der Kino-Oberfläche).
+
+## kino_pflege.py – Trailer und Kategorien (Konto B, 03.11.2026)
+
+Läuft im File editor auf dem Pi (Kopie in `/config/kino_werkzeuge/`, Jellyfin-Schlüssel aus `/config/jellyfin_schluessel.txt`).
+
+- `trailer` – schreibt `/share/kino/trailer.json` (Lukas Kino Web liefert sie unter `:8098/trailer.json` aus). Je Film der beste
+  YouTube-Trailer: eigene Wahl (`trailer_eigen.json`) > KinoCheck deutsch > Jellyfin deutsch > KinoCheck englisch > Jellyfin >
+  YouTube-Suche (ganzer Filmname und Jahr müssen passen). OmU/Untertitel nach hinten, jeder Kandidat per oEmbed geprüft.
+  Ohne Schalter nur neue Filme und solche ohne Trailer (älter als 7 Tage); `--alle` alles neu, `--ohne` nur die ohne Trailer,
+  `--suche` die Treffer der YouTube-Suche nochmal. Die TV-Apps nehmen zuerst diese Liste.
+- `kategorien` – gleicht die Jellyfin-Sammlungen mit `kategorien.json` ab (Genre → Kategorie plus Ausnahmen je Film, Schlüssel
+  `tmdb:ID`, `dazu`/`weg`). Ohne `--los` nur Vorschau. Ein Film darf in mehreren Kategorien stehen.
+- `daten` – alle Filme mit Genres, Sammlungen und Trailer-Anzahl als JSON (zum Prüfen).
+- `auto` – beides nacheinander, höchstens 60 neue Filme je Lauf (für einen späteren Sensor alle 6 Stunden).
+- Nach dem Filme4-Umzug: `trailer`, dann `kategorien` ansehen und `kategorien --los`; neue Filme mit falschen Genres in
+  `kategorien.json` eintragen.
