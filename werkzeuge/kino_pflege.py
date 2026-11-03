@@ -414,60 +414,22 @@ def befehl_vorwaermen(teil="alles", faeden=2):
     """Alle Vorschaubilder einmal in genau den Größen anfragen, die die Fernseher benutzen. Jellyfin rechnet jedes Bild
     beim ersten Abruf aus dem Original (bei Fotos 12 Megapixel) klein und legt es in seinen Zwischenspeicher – danach
     kommt es sofort. TCL (ohne Accept, bekommt JPEG) und LG-Browser (WebP) bekommen je eine eigene Fassung.
-    teil: alles, filme oder fotos."""
+    teil: alles, filme, fotos oder ordner. Arbeitet sofort los (die Liste wird nebenbei geholt), Stand in
+    vorwaermen_stand.json."""
     import threading, concurrent.futures
     key = schluessel()
     user = anfrage("/Users", key)[0]["Id"]
-    urls = []
-    if teil in ("alles", "filme"):
-        for e in anfrage("/Items?" + q(userId=user, includeItemTypes="Movie,Series", recursive="true",
-                                         fields="ImageTags,BackdropImageTags"), key).get("Items") or []:
-            i, t, b = e["Id"], e.get("ImageTags") or {}, e.get("BackdropImageTags") or []
-            if t.get("Primary"):
-                urls.append("/Items/{}/Images/Primary?fillHeight=330&quality=90&tag={}".format(i, t["Primary"]))
-                if not b:
-                    urls.append("/Items/{}/Images/Primary?fillHeight=1080&quality=90&tag={}".format(i, t["Primary"]))
-            if t.get("Logo"):
-                urls.append("/Items/{}/Images/Logo?fillHeight=220&quality=90&tag={}".format(i, t["Logo"]))
-            if b:
-                urls.append("/Items/{}/Images/Backdrop/0?fillWidth=1920&quality=85&tag={}".format(i, b[0]))
-                urls.append("/Items/{}/Images/Backdrop/0?fillWidth=1280&quality=80&tag={}".format(i, b[0]))
-                urls.append("/Items/{}/Images/Backdrop/0?fillWidth=940&quality=85&tag={}".format(i, b[0]))
-    if teil in ("alles", "fotos"):
-        fotos = None
-        for v in anfrage("/UserViews?" + q(userId=user), key).get("Items") or []:
-            if v.get("CollectionType") in ("photos", "homevideos") and fotos is None:
-                fotos = v["Id"]
-        if fotos:
-            start = 0
-            while True:
-                seite = anfrage("/Items?" + q(userId=user, parentId=fotos, recursive="true", includeItemTypes="Photo",
-                                              imageTypes="Primary", fields="ImageTags", enableUserData="false",
-                                              startIndex=start, limit=2000), key).get("Items") or []
-                for e in seite:
-                    tg = (e.get("ImageTags") or {}).get("Primary")
-                    if tg:
-                        urls.append("/Items/{}/Images/Primary?fillWidth=360&quality=85&tag={}".format(e["Id"], tg))
-                if len(seite) < 2000:
-                    break
-                start += 2000
-            # Titelbilder der Ordner: wie die Apps das erste Foto suchen (erst direkt, sonst in Unterordnern)
-            ordner = anfrage("/Items?" + q(userId=user, parentId=fotos, recursive="true", isFolder="true",
-                                           enableImages="false", enableUserData="false"), key).get("Items") or []
-            for o in ordner:
-                a = anfrage("/Items?" + q(userId=user, parentId=o["Id"], includeItemTypes="Photo", imageTypes="Primary",
-                                          limit=1, fields="ImageTags"), key).get("Items") or []
-                if not a:
-                    a = anfrage("/Items?" + q(userId=user, parentId=o["Id"], recursive="true", includeItemTypes="Photo",
-                                              imageTypes="Primary", limit=1, fields="ImageTags"), key).get("Items") or []
-                if a and (a[0].get("ImageTags") or {}).get("Primary"):
-                    tg = a[0]["ImageTags"]["Primary"]
-                    for w in (536, 704, 1280):
-                        urls.append("/Items/{}/Images/Primary?fillWidth={}&quality=85&tag={}".format(a[0]["Id"], w, tg))
-    gesamt = len(urls) * 2
-    zaehler = {"fertig": 0, "fehler": 0, "bytes": 0}
+    stand = {"phase": "start", "fertig": 0, "fehler": 0, "bytes": 0, "angefragt": 0}
     sperre = threading.Lock()
     beginn = time.time()
+
+    def melden(zwang=False):
+        if zwang or stand["fertig"] % 200 == 0:
+            dauer = max(1, time.time() - beginn)
+            schreiben(os.path.join(WERK, "vorwaermen_stand.json"), {
+                "phase": stand["phase"], "fertig": stand["fertig"], "angefragt": stand["angefragt"], "fehler": stand["fehler"],
+                "mb": round(stand["bytes"] / 1e6), "pro_sekunde": round(stand["fertig"] / dauer, 1),
+                "minuten": round(dauer / 60), "zeit": time.strftime("%H:%M")})
 
     def eins(arg):
         pfad, accept = arg
@@ -481,23 +443,101 @@ def befehl_vorwaermen(teil="alles", faeden=2):
         except Exception:
             n, ok = 0, False
         with sperre:
-            zaehler["fertig"] += 1
-            zaehler["bytes"] += n
+            stand["fertig"] += 1
+            stand["bytes"] += n
             if not ok:
-                zaehler["fehler"] += 1
-            f = zaehler["fertig"]
-            if f % 500 == 0 or f == gesamt:
-                dauer = time.time() - beginn
-                rest = (gesamt - f) / max(0.1, f / max(1, dauer))
-                schreiben(os.path.join(WERK, "vorwaermen_stand.json"), {"fertig": f, "gesamt": gesamt, "fehler": zaehler["fehler"],
-                          "mb": round(zaehler["bytes"] / 1e6), "pro_sekunde": round(f / max(1, dauer), 1),
-                          "rest_minuten": round(rest / 60), "zeit": time.strftime("%H:%M")})
+                stand["fehler"] += 1
+            melden()
 
-    auftraege = [(u, a) for u in urls for a in (None, WEBP)]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=faeden) as ex:
-        list(ex.map(eins, auftraege))
-    print("vorgewärmt: {} Bilder ({} Abrufe), Fehler {}, {} MB, {} Minuten".format(len(urls), gesamt, zaehler["fehler"],
-                                                                                 round(zaehler["bytes"] / 1e6), round((time.time() - beginn) / 60)))
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=faeden)
+    offen = []
+
+    def dazu(pfad):
+        for a in (None, WEBP):
+            offen.append(ex.submit(eins, (pfad, a)))
+            stand["angefragt"] += 1
+        # nicht zu viel auf Vorrat (Speicher): warten, wenn mehr als 400 Abrufe offen sind
+        while len(offen) > 400:
+            offen.pop(0).result()
+
+    if teil in ("alles", "filme"):
+        stand["phase"] = "filme"
+        melden(True)
+        for e in anfrage("/Items?" + q(userId=user, includeItemTypes="Movie,Series", recursive="true",
+                                         fields="ImageTags,BackdropImageTags"), key).get("Items") or []:
+            i, t, b = e["Id"], e.get("ImageTags") or {}, e.get("BackdropImageTags") or []
+            if t.get("Primary"):
+                dazu("/Items/{}/Images/Primary?fillHeight=330&quality=90&tag={}".format(i, t["Primary"]))
+                if not b:
+                    dazu("/Items/{}/Images/Primary?fillHeight=1080&quality=90&tag={}".format(i, t["Primary"]))
+            if t.get("Logo"):
+                dazu("/Items/{}/Images/Logo?fillHeight=220&quality=90&tag={}".format(i, t["Logo"]))
+            if b:
+                for w, qu in ((1920, 85), (1280, 80), (940, 85)):
+                    dazu("/Items/{}/Images/Backdrop/0?fillWidth={}&quality={}&tag={}".format(i, w, qu, b[0]))
+    fotos = None
+    if teil in ("alles", "fotos", "ordner"):
+        for v in anfrage("/UserViews?" + q(userId=user), key).get("Items") or []:
+            if v.get("CollectionType") in ("photos", "homevideos") and fotos is None:
+                fotos = v["Id"]
+    if fotos and teil in ("alles", "ordner"):
+        # zuerst die Titelbilder der obersten Ordner (das sieht man beim Umschalten auf Fotos zuerst)
+        stand["phase"] = "ordner"
+        melden(True)
+        wurzel = anfrage("/Items?" + q(userId=user, parentId=fotos, fields="ImageTags", enableUserData="false"),
+                         key).get("Items") or []
+        ebene = [o["Id"] for o in wurzel if o.get("IsFolder")]
+        mit_fotos = teil == "alles"     # beim Durchgehen gleich alle Fotos für die Bilderwand mitnehmen
+        if mit_fotos:
+            for x in wurzel:
+                tg = (x.get("ImageTags") or {}).get("Primary")
+                if x.get("Type") == "Photo" and tg:
+                    dazu("/Items/{}/Images/Primary?fillWidth=360&quality=85&tag={}".format(x["Id"], tg))
+        gesehen = set()
+        while ebene:
+            naechste = []
+            for oid in ebene:
+                if oid in gesehen:
+                    continue
+                gesehen.add(oid)
+                inhalt = anfrage("/Items?" + q(userId=user, parentId=oid, fields="ImageTags", enableUserData="false"),
+                                 key).get("Items") or []
+                naechste.extend(x["Id"] for x in inhalt if x.get("IsFolder"))
+                if mit_fotos:
+                    for x in inhalt:
+                        tg = (x.get("ImageTags") or {}).get("Primary")
+                        if x.get("Type") == "Photo" and tg:
+                            dazu("/Items/{}/Images/Primary?fillWidth=360&quality=85&tag={}".format(x["Id"], tg))
+                a = [x for x in inhalt if x.get("Type") == "Photo" and (x.get("ImageTags") or {}).get("Primary")][:1]
+                if not a:
+                    a = anfrage("/Items?" + q(userId=user, parentId=oid, recursive="true", includeItemTypes="Photo",
+                                              imageTypes="Primary", limit=1, fields="ImageTags"), key).get("Items") or []
+                if a and (a[0].get("ImageTags") or {}).get("Primary"):
+                    tg = a[0]["ImageTags"]["Primary"]
+                    for w in (536, 704, 1280):
+                        dazu("/Items/{}/Images/Primary?fillWidth={}&quality=85&tag={}".format(a[0]["Id"], w, tg))
+            ebene = naechste
+    if fotos and teil == "fotos":
+        stand["phase"] = "fotos"
+        melden(True)
+        start = 0
+        while True:
+            seite = anfrage("/Items?" + q(userId=user, parentId=fotos, recursive="true", includeItemTypes="Photo",
+                                          fields="ImageTags", enableUserData="false", startIndex=start, limit=500), key).get("Items") or []
+            for e in seite:
+                tg = (e.get("ImageTags") or {}).get("Primary")
+                if tg:
+                    dazu("/Items/{}/Images/Primary?fillWidth=360&quality=85&tag={}".format(e["Id"], tg))
+            if len(seite) < 500:
+                break
+            start += 500
+    for f in offen:
+        f.result()
+    ex.shutdown(wait=True)
+    stand["phase"] = "fertig"
+    melden(True)
+    print("vorgewärmt: {} Abrufe, Fehler {}, {} MB, {} Minuten".format(stand["fertig"], stand["fehler"],
+                                                                       round(stand["bytes"] / 1e6), round((time.time() - beginn) / 60)))
 
 
 if __name__ == "__main__":
