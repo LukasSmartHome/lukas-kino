@@ -13,7 +13,7 @@
 #                            Ohne --alle nur Filme, die noch nicht in der Liste stehen oder ohne Trailer älter als 7 Tage.
 #   kategorien [--los]       Sammlungen in Jellyfin nach kategorien.json (Genres plus Ausnahmen je Film) abgleichen.
 #                            Ohne --los nur anzeigen, was sich ändern würde.
-#   auto                     trailer und kategorien --los nacheinander (für den Sensor, kurze Ausgabe)
+#   auto                     trailer (höchstens 60 neue Filme je Lauf) und kategorien --los (für den Sensor, kurze Ausgabe)
 import json, os, re, sys, time, unicodedata, urllib.request, urllib.parse, urllib.error
 
 S = "http://192.168.178.44:8096"
@@ -251,7 +251,7 @@ def rang(k, i):
     return (1 + unter * 2 + (0 if k.get("spr") == "de" else 1), i)
 
 
-def befehl_trailer(alle=False, still=False, ohne_neu=False, suche_neu=False):
+def befehl_trailer(alle=False, still=False, ohne_neu=False, suche_neu=False, max_neu=None):
     key = schluessel()
     user = anfrage("/Users", key)[0]["Id"]
     filme = filme_holen(key, user)
@@ -267,6 +267,10 @@ def befehl_trailer(alle=False, still=False, ohne_neu=False, suche_neu=False):
         if a and not alle and not fest and (a.get("yt") or (not ohne_neu and jetzt - a.get("z", 0) < 7 * 86400)):
             neu[e["Id"]] = a
             continue
+        if max_neu is not None and gezaehlt["geprueft"] >= max_neu:
+            if a:
+                neu[e["Id"]] = a
+            continue          # Rest beim nächsten Lauf (viele neue Filme auf einmal, z. B. Filme4)
         gezaehlt["geprueft"] += 1
         l = kandidaten(e, eigen)
         bester = None
@@ -367,7 +371,7 @@ if __name__ == "__main__":
     elif a[0] == "auto":
         # für den Sensor: kurze Zeile, Fehler als „fehler: …“
         try:
-            o = befehl_trailer(still=True)
+            o = befehl_trailer(still=True, max_neu=60)
             d, w = befehl_kategorien(los=True, still=True)
             print("ok {} ohne Trailer, Kategorien +{} -{}".format(o, d, w))
         except SystemExit as ex:
