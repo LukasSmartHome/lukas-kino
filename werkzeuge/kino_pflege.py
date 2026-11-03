@@ -16,6 +16,7 @@
 #                            Ohne --alle nur Filme, die noch nicht in der Liste stehen oder ohne Trailer älter als 7 Tage.
 #   kategorien [--los]       Sammlungen in Jellyfin nach kategorien.json (Genres plus Ausnahmen je Film) abgleichen.
 #                            Ohne --los nur anzeigen, was sich ändern würde.
+#   taeglich                 alles für den täglichen Lauf (Trailer, Kategorien, Logos, nur neue Vorschaubilder)
 #   auto                     trailer (höchstens 60 neue Filme je Lauf) und kategorien --los (für den Sensor, kurze Ausgabe)
 import json, os, re, sys, time, unicodedata, urllib.request, urllib.parse, urllib.error
 
@@ -410,7 +411,7 @@ def befehl_logos(los=False):
 WEBP = "image/webp,image/apng,image/*,*/*;q=0.8"   # so fragt der Browser der LG-Fernseher (bekommt WebP)
 
 
-def befehl_vorwaermen(teil="alles", faeden=2):
+def befehl_vorwaermen(teil="alles", faeden=2, nur_neue=False):
     """Alle Vorschaubilder einmal in genau den Größen anfragen, die die Fernseher benutzen. Jellyfin rechnet jedes Bild
     beim ersten Abruf aus dem Original (bei Fotos 12 Megapixel) klein und legt es in seinen Zwischenspeicher – danach
     kommt es sofort. TCL (ohne Accept, bekommt JPEG) und LG-Browser (WebP) bekommen je eine eigene Fassung.
@@ -451,8 +452,21 @@ def befehl_vorwaermen(teil="alles", faeden=2):
 
     ex = concurrent.futures.ThreadPoolExecutor(max_workers=faeden)
     offen = []
+    merk_pfad = os.path.join(WERK, "vorwaermen_erledigt.txt")
+    erledigt = set()
+    if nur_neue:
+        try:
+            with open(merk_pfad, encoding="utf-8") as f:
+                erledigt = set(z.strip() for z in f if z.strip())
+        except Exception:
+            erledigt = set()
+    neu_gemerkt = []
 
     def dazu(pfad):
+        if pfad in erledigt:
+            return
+        erledigt.add(pfad)
+        neu_gemerkt.append(pfad)
         for a in (None, WEBP):
             offen.append(ex.submit(eins, (pfad, a)))
             stand["angefragt"] += 1
@@ -534,6 +548,9 @@ def befehl_vorwaermen(teil="alles", faeden=2):
     for f in offen:
         f.result()
     ex.shutdown(wait=True)
+    # gemerkt wird alles, was jetzt angefragt wurde (beim ersten Lauf ohne --neue die ganze Liste)
+    with open(merk_pfad, "a" if nur_neue else "w", encoding="utf-8") as f:
+        f.write("\n".join(neu_gemerkt if nur_neue else sorted(erledigt)) + "\n")
     stand["phase"] = "fertig"
     melden(True)
     print("vorgewärmt: {} Abrufe, Fehler {}, {} MB, {} Minuten".format(stand["fertig"], stand["fehler"],
@@ -550,7 +567,24 @@ if __name__ == "__main__":
         befehl_trailer(alle="--alle" in a, ohne_neu="--ohne" in a, suche_neu="--suche" in a)
     elif a[0] == "vorwaermen":
         befehl_vorwaermen(a[1] if len(a) > 1 and not a[1].startswith("-") else "alles",
-                          int(a[a.index("--faeden") + 1]) if "--faeden" in a else 2)
+                          int(a[a.index("--faeden") + 1]) if "--faeden" in a else 2, nur_neue="--neue" in a)
+    elif a[0] == "taeglich":
+        # täglicher Lauf (Automation 89 über shell_command.kino_pflege_starten): Trailer und Kategorien für neue Filme,
+        # Logos, dann nur neue Vorschaubilder. Kurzer Stand für sensor.kino_pflege in kino_pflege_stand.txt.
+        stand_pfad = os.path.join(WERK, "kino_pflege_stand.txt")
+        teile = []
+        try:
+            teile.append("{} ohne Trailer".format(befehl_trailer(still=True, max_neu=60)))
+            d, w = befehl_kategorien(los=True, still=True)
+            teile.append("Kategorien +{} -{}".format(d, w))
+            befehl_logos(los=True)
+            befehl_vorwaermen("alles", 2, nur_neue=True)
+            teile.append("Bilder ok")
+            text = "ok " + time.strftime("%d.%m. %H:%M") + ": " + ", ".join(teile)
+        except BaseException as ex:
+            text = "fehler " + time.strftime("%d.%m. %H:%M") + ": " + str(ex)[:150]
+        with open(stand_pfad, "w", encoding="utf-8") as f:
+            f.write(text[:250] + "\n")
     elif a[0] == "logos":
         befehl_logos(los="--los" in a)
     elif a[0] == "kategorien":
