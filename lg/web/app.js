@@ -814,6 +814,7 @@
       if (ansicht === A.LISTE || ansicht === A.DETAIL) zeichnen();
       try { await merk.ausHa(j); } catch (x) { /* Merkliste bleibt, wie sie war */ }
       try { await gesehenAusHa(j); } catch (x) { /* Gesehen bleibt, wie es war */ }
+      try { qualitaetAusHa(j); } catch (x) { /* Meldungen bleiben, wie sie waren */ }
       try { await empfohlenAusHa(j); } catch (x) { /* Empfohlen bleibt, wie es war */ }
     } catch (e) { /* ohne Bewertungen weiter */ }
   }
@@ -1118,6 +1119,62 @@
         await merk.senden({ art: 'gesehen', wer: PERSON.ha, id: merk.plexIdFuer(f) || 'jf:' + f.Id,
           titel: (f.Name || '') + (f.ProductionYear ? ' (' + f.ProductionYear + ')' : ''), an: 'true' });
       } catch (x) { /* Automation 44 trägt es sonst ohnehin ein */ }
+    })();
+  }
+
+  // ------------------------------------------------------------------ Schlechte Qualität melden (03.11.2026)
+  // Kleiner Fahnen-Knopf ganz rechts in der Detailansicht. Jeder kann melden, die Liste sieht nur Lukas (am TCL).
+  // Quelle: sensor.kino_qualitaet (Paket kino_qualitaet.yaml) über bewertungen.json → qualitaet
+  // { HA-ID: { t, wer: [Profile], z } }. Schreiben: Webhook (art=qualitaet, an=true/false).
+  const qual = { wer: {}, lokal: {} };
+
+  function qualitaetAn(e) {
+    const l = e ? qual.wer[e.Id] : null;
+    if (!l || !l.length) return false;
+    return PERSON.ha === 'Lukas' || l.indexOf(PERSON.ha) >= 0;
+  }
+
+  function qualitaetAnwenden(w, id, an) {
+    let l = (w[id] || []).slice();
+    if (an) { if (l.indexOf(PERSON.ha) < 0) l.push(PERSON.ha); }
+    else l = PERSON.ha === 'Lukas' ? [] : l.filter(function (x) { return x !== PERSON.ha; });
+    if (l.length) w[id] = l; else delete w[id];
+  }
+
+  function qualitaetAusHa(j) {
+    const alle = (j && j.qualitaet) || {}, w = {};
+    Object.keys(alle).forEach(function (id) {
+      const x = alle[id] || {};
+      let jfId = id.indexOf('jf:') === 0 ? id.substring(3) : (merk.haZuJf || {})[id];
+      if (!jfId) jfId = jfIdFuerTitel(x.t);
+      if (jfId && x.wer && x.wer.length) w[jfId] = x.wer.slice();
+    });
+    Object.keys(qual.lokal).forEach(function (id) {
+      const lo = qual.lokal[id];
+      const ist = !!(w[id] && w[id].length && (PERSON.ha === 'Lukas' || w[id].indexOf(PERSON.ha) >= 0));
+      if (ist === lo.an || lo.bis < Date.now()) delete qual.lokal[id];
+      else qualitaetAnwenden(w, id, lo.an);
+    });
+    qual.wer = w;
+    knoepfeAktualisieren();
+  }
+
+  function qualitaetUmschalten(f) {
+    if (!f || typ(f) !== 'Movie') return;
+    const an = !qualitaetAn(f);
+    qual.lokal[f.Id] = { an: an, bis: Date.now() + 15 * 60000 };
+    qualitaetAnwenden(qual.wer, f.Id, an);
+    knoepfeAktualisieren();
+    hinweis(an ? 'Danke! Schlechte Qualität gemeldet' : PERSON.ha === 'Lukas' ? 'Meldung erledigt' : 'Meldung zurückgenommen');
+    (async function () {
+      try {
+        await merk.plexLaden();
+        await merk.senden({ art: 'qualitaet', wer: PERSON.ha, id: merk.plexIdFuer(f) || 'jf:' + f.Id,
+          titel: (f.Name || '') + (f.ProductionYear ? ' (' + f.ProductionYear + ')' : ''), an: String(an) });
+      } catch (x) {
+        delete qual.lokal[f.Id];
+        hinweis('Meldung ließ sich nicht senden');
+      }
     })();
   }
 
@@ -2659,7 +2716,11 @@
     gemerkt: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" '
       + 'stroke-linejoin="round"><path d="M5 15.5l6.5 6.5L25 8.5"/></svg>',
     bewerten: '<svg viewBox="0 0 30 30"><path d="M15 3.5l3.4 7 7.6 1-5.5 5.3 1.4 7.6L15 20.8l-6.9 3.6 1.4-7.6L4 11.5l7.6-1z" '
-      + 'fill="currentColor"/></svg>'
+      + 'fill="currentColor"/></svg>',
+    melden: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" '
+      + 'stroke-linejoin="round"><path d="M6 2.5v26"/><path d="M6 3.5h18l-5 6 5 6H6z"/></svg>',
+    gemeldet: '<svg viewBox="0 0 30 30" fill="currentColor" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" '
+      + 'stroke-linejoin="round"><path d="M6 2.5v26" fill="none"/><path d="M6 3.5h18l-5 6 5 6H6z"/></svg>'
   };
 
   function knoepfeFuer(e) {
@@ -2679,6 +2740,10 @@
       const drin = merk.hat(e.Id);
       l.push({ art: 'merken', text: drin ? 'Gemerkt' : 'Merken', symbol: drin ? 'gemerkt' : 'merken' });
       l.push({ art: 'bewerten', text: eigeneNoten(e), symbol: 'bewerten' });
+      const qa = qualitaetAn(e);
+      l.push({ art: 'qualitaet', text: '', symbol: qa ? 'gemeldet' : 'melden', an: qa,
+        tipp: qa ? (PERSON.ha === 'Lukas' ? 'Gemeldet von ' + (qual.wer[e.Id] || []).join(', ') + '  ·  drücken = erledigt'
+          : 'Gemeldet  ·  nochmal drücken nimmt es zurück') : 'Schlechte Qualität melden' });
     }
     return l;
   }
@@ -2689,7 +2754,7 @@
     detailKnoepfe = detail ? knoepfeFuer(detailEintrag) : [];
     if (!k) return;
     if (!detail) return; // außerhalb der Detailansicht unsichtbar, Inhalt bleibt
-    const sig = detailKnoepfe.map(function (x) { return x.art + ':' + x.text; }).join('|');
+    const sig = detailKnoepfe.map(function (x) { return x.art + ':' + x.text + ':' + (x.tipp || ''); }).join('|');
     if (k._sig !== sig) {
       k._sig = sig;
       k.innerHTML = '';
@@ -2698,6 +2763,14 @@
         b._knopf = i;
         b.innerHTML = KNOPF_SYMBOL[x.symbol] + '<span></span>';
         b.querySelector('span').textContent = x.text;
+        if (!x.text) b.classList.add('nur-symbol');
+        if (x.an) b.classList.add('an');
+        if (x.tipp) {
+          const t = document.createElement('em');
+          t.className = 'tipp';
+          t.textContent = x.tipp;
+          b.appendChild(t);
+        }
         k.appendChild(b);
       });
     }
@@ -2712,6 +2785,7 @@
     else if (x.art === 'vorne') abspielen(f, false);
     else if (x.art === 'trailer' && detailTrailer) trailerAbspielen(detailTrailer, f.Name || '');
     else if (x.art === 'bewerten') bewertenOeffnen(f);
+    else if (x.art === 'qualitaet') qualitaetUmschalten(f);
     else if (x.art === 'merken') {
       merk.umschalten(f);
       hinweis(merk.hat(f.Id) ? 'Auf der Merkliste' : 'Von der Merkliste entfernt');

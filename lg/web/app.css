@@ -281,6 +281,30 @@ body {
   box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
 }
 
+/* Kleiner Knopf nur mit Symbol (Schlechte Qualität melden, ganz rechts) */
+.knopf.nur-symbol {
+  width: 84px;
+  padding: 0;
+}
+
+.knopf.nur-symbol span { display: none; }
+
+.knopf.an:not(.fokus) { color: #f2b705; }
+
+.knopf .tipp {
+  display: none;
+  position: absolute;
+  top: 106px;
+  right: 0;
+  font-size: 26px;
+  font-style: normal;
+  font-weight: 500;
+  color: rgba(255, 255, 255, .9);
+  white-space: nowrap;
+}
+
+.knopf.fokus .tipp { display: block; }
+
 .i-gross {
   font-size: 130px;
   font-weight: 800;

@@ -79,6 +79,7 @@ public class FilmeActivity extends Activity {
         FARBEN.put("Historienfilme", 0xFF9C7442);
         FARBEN.put("Western", 0xFFE9A23B);
         FARBEN.put("Gesehen", 0xFF3E4A5E);
+        FARBEN.put("Schlechte Qualität", 0xFF5C4630);
     }
 
     // ------------------------------------------------------------------ Daten
@@ -413,9 +414,11 @@ public class FilmeActivity extends Activity {
         List<JSONObject> gemerkt = merkliste.liste();
         if (!gemerkt.isEmpty()) s.reihen.add(reiheAus("Merkliste", gemerkt, POSTER));
         s.reihen.add(ohneGesehenes(reihe("Neu", neu, POSTER)));
-        if (samml.length() > 0 || Gesehen.anzahl() > 0) {
+        boolean qk = Qualitaet.nurLukas() && Qualitaet.anzahl() > 0;
+        if (samml.length() > 0 || Gesehen.anzahl() > 0 || qk) {
             Reihe kat = reihe("Kategorien", samml, POSTER);
             if (Gesehen.anzahl() > 0) kat.eintraege.add(gesehenKachel());
+            if (qk) kat.eintraege.add(qualitaetKachel());
             s.reihen.add(kat);
             for (int i = 0; i < samml.length(); i++) {
                 JSONObject k = samml.getJSONObject(i);
@@ -494,6 +497,11 @@ public class FilmeActivity extends Activity {
             g = Gesehen.ausHa(jf);
         } catch (Exception ignored) {
             // Gesehen bleibt, wie es war
+        }
+        try {
+            if (Qualitaet.ausHa(jf)) g = true;
+        } catch (Exception ignored) {
+            // Meldungen bleiben, wie sie waren
         }
         try {
             e = Empfohlen.berechnen(jf);
@@ -709,6 +717,19 @@ public class FilmeActivity extends Activity {
         return o;
     }
 
+    /** Kachel „Schlechte Qualität“ ganz rechts in der Reihe Kategorien – nur bei Lukas. */
+    private static JSONObject qualitaetKachel() {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("Type", "Qualitaet");
+            o.put("Id", "@qualitaet");
+            o.put("Name", "Schlechte Qualität");
+            o.put("ChildCount", Qualitaet.anzahl());
+        } catch (Exception ignored) {
+        }
+        return o;
+    }
+
     /** Neue Gesehen-Liste: Gesehenes aus allen offenen Reihen nehmen, Kachel nachziehen. */
     private void gesehenGeaendert() {
         List<Seite> alle = new ArrayList<>(startseiten.values());
@@ -732,8 +753,9 @@ public class FilmeActivity extends Activity {
         if (start != null) {
             for (Reihe r : start.reihen) {
                 if (!"Kategorien".equals(r.titel)) continue;
-                r.eintraege.removeIf(o -> "Gesehen".equals(typ(o)));
+                r.eintraege.removeIf(o -> "Gesehen".equals(typ(o)) || "Qualitaet".equals(typ(o)));
                 if (Gesehen.anzahl() > 0) r.eintraege.add(gesehenKachel());
+                if (Qualitaet.nurLukas() && Qualitaet.anzahl() > 0) r.eintraege.add(qualitaetKachel());
                 r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.size() - 1));
             }
         }
@@ -743,12 +765,20 @@ public class FilmeActivity extends Activity {
 
     /** Kategorie „Gesehen“: alle Filme, die dieses Profil schon gesehen hat, zuletzt gesehen zuerst. */
     private void gesehenOeffnen(JSONObject kachel) {
-        final Seite neu = new Seite("Gesehen");
+        listeOeffnen(kachel, "Gesehen", Gesehen.liste(), "Noch nichts gesehen");
+    }
+
+    /** Kategorie „Schlechte Qualität“ (nur Lukas): gemeldete Filme, zuletzt gemeldet zuerst. */
+    private void qualitaetOeffnen(JSONObject kachel) {
+        listeOeffnen(kachel, "Schlechte Qualität", Qualitaet.liste(), "Nichts gemeldet");
+    }
+
+    private void listeOeffnen(JSONObject kachel, String titel, final List<String> ids, final String leer) {
+        final Seite neu = new Seite(titel);
         neu.kopf = kachel;
         neu.ohneFilter = true;
-        neu.reihen.add(new Reihe("Gesehen", null, POSTER));
+        neu.reihen.add(new Reihe(titel, null, POSTER));
         neueSeite(neu);
-        final List<String> ids = Gesehen.liste();
         netz.execute(() -> {
             Map<String, JSONObject> gefunden = new HashMap<>();
             for (int i = 0; i < ids.size(); i += 60) {
@@ -766,7 +796,7 @@ public class FilmeActivity extends Activity {
                 for (String id : ids) if (gefunden.containsKey(id)) l.add(gefunden.get(id));
                 neu.reihen.clear();
                 if (!l.isEmpty()) neu.reihen.add(reiheAus(l.size() == 1 ? "1 Film" : l.size() + " Filme", l, POSTER));
-                if (neu.reihen.isEmpty()) neu.leer = "Noch nichts gesehen";
+                if (neu.reihen.isEmpty()) neu.leer = leer;
                 if (seite == neu) {
                     nachladen();
                     fokusGeaendert();
@@ -862,6 +892,7 @@ public class FilmeActivity extends Activity {
         if ("Movie".equals(typ(e))) {
             l.add(merkliste.hat(e.optString("Id")) ? new String[]{"gemerkt", "Gemerkt"} : new String[]{"merken", "Merken"});
             l.add(new String[]{"bewerten", eigeneNoten(e)});
+            l.add(new String[]{"qualitaet", ""});   // klein, nur Symbol, ganz rechts
         }
         return l;
     }
@@ -892,6 +923,22 @@ public class FilmeActivity extends Activity {
             case "bewerten":
                 bewertenOeffnen(f);
                 break;
+            case "qualitaet": {
+                final boolean an = Qualitaet.umschalten(f);
+                gesehenGeaendert(); // Kachel „Schlechte Qualität“ nachziehen
+                hinweis(an ? "Danke! Schlechte Qualität gemeldet" : Qualitaet.nurLukas() ? "Meldung erledigt" : "Meldung zurückgenommen");
+                netz.execute(() -> {
+                    try {
+                        Qualitaet.senden(f, an);
+                        h.postDelayed(() -> netz.execute(this::familieLaden), 2500);
+                    } catch (Exception ex) {
+                        Qualitaet.vergessen(f.optString("Id"));
+                        h.post(() -> hinweis("Meldung ließ sich nicht senden"));
+                        familieLaden();
+                    }
+                });
+                break;
+            }
             case "merken":
             case "gemerkt": {
                 final boolean drin = merkliste.umschalten(f);
@@ -1224,7 +1271,7 @@ public class FilmeActivity extends Activity {
             return;
         }
         String t = typ(e);
-        if ("BoxSet".equals(t) || "Gesehen".equals(t)) {
+        if ("BoxSet".equals(t) || "Gesehen".equals(t) || "Qualitaet".equals(t)) {
             Integer f = FARBEN.get(e.optString("Name"));
             setzeHintergrund(null, f != null ? f : 0xFF444444);
             return;
@@ -1605,6 +1652,9 @@ public class FilmeActivity extends Activity {
                 break;
             case "Gesehen":
                 gesehenOeffnen(e);
+                break;
+            case "Qualitaet":
+                qualitaetOeffnen(e);
                 break;
             case "Series":
                 serieOeffnen(e);
@@ -2467,7 +2517,7 @@ public class FilmeActivity extends Activity {
                 klein.setAlpha(0xB3);
             } else if (e != null) {
                 String t = typ(e);
-                if ("BoxSet".equals(t) || "Gesehen".equals(t)) kategorieInfo(c, e);
+                if ("BoxSet".equals(t) || "Gesehen".equals(t) || "Qualitaet".equals(t)) kategorieInfo(c, e);
                 else if ("Folder".equals(t) || "PhotoAlbum".equals(t) || "CollectionFolder".equals(t)) ordnerInfo(c, e);
                 else if ("Photo".equals(t) || "Video".equals(t)) fotoInfo(c, e);
                 else filmInfo(c, e, detail);
@@ -2938,6 +2988,11 @@ public class FilmeActivity extends Activity {
                 p.setAlpha(255);
                 return;
             }
+            if ("Qualitaet".equals(t)) {
+                qualitaetKarte(c, e, rad, al);
+                p.setAlpha(255);
+                return;
+            }
             String url = kartenUrl(e, form);
             Bitmap b = url != null ? bilder.sofort(url) : null;
             if (b == null && url != null && !bilder.fehlgeschlagen(url)) bilder.laden(url, (u, bm) -> invalidate());
@@ -3034,6 +3089,54 @@ public class FilmeActivity extends Activity {
         }
 
         /** Kachel „Gesehen“ in den Kategorien: ruhiges Blaugrau, Auge mit Haken, Anzahl. */
+        /** Kachel „Schlechte Qualität“: Fahne auf braunem Grund. */
+        private void qualitaetKarte(Canvas c, JSONObject e, float rad, int al) {
+            p.setShader(new LinearGradient(r.left, r.top, r.right, r.bottom, 0xFF7A5A36, 0xFF2E2418, Shader.TileMode.CLAMP));
+            p.setAlpha(al);
+            c.drawRoundRect(r, rad, rad, p);
+            p.setShader(null);
+            float cx = r.centerX(), cy = r.top + r.height() * 0.40f, s = r.width() / 196f;
+            fahne(c, cx - 4 * s, cy, 2.2f * s, true, GELB, al);
+            karte.setTextSize(28 * s);
+            karte.setAlpha(al);
+            karte.setTextAlign(Paint.Align.CENTER);
+            c.drawText("Schlechte", cx, r.top + r.height() * 0.70f, karte);
+            c.drawText("Qualität", cx, r.top + r.height() * 0.79f, karte);
+            int n = e.optInt("ChildCount", 0);
+            klein.setTextSize(22 * s);
+            klein.setAlpha(Math.round(0xB3 * al / 255f));
+            klein.setTextAlign(Paint.Align.CENTER);
+            c.drawText(n == 1 ? "1 Film" : n + " Filme", cx, r.top + r.height() * 0.88f, klein);
+            karte.setTextAlign(Paint.Align.LEFT);
+            karte.setTextSize(26);
+            karte.setAlpha(255);
+            klein.setTextAlign(Paint.Align.LEFT);
+            klein.setTextSize(26);
+            klein.setAlpha(0xB3);
+        }
+
+        /** Kleine Fahne (Melden-Knopf, Kachel). Mitte (x, y), g = Größe (1 = Knopf). voll = gemeldet. */
+        private void fahne(Canvas c, float x, float y, float g, boolean voll, int farbe, int al) {
+            p.setColor(farbe);
+            p.setAlpha(al);
+            p.setStrokeCap(Paint.Cap.ROUND);
+            p.setStrokeJoin(Paint.Join.ROUND);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(3.4f * g);
+            c.drawLine(x - 10 * g, y - 15 * g, x - 10 * g, y + 16 * g, p);
+            Path d = new Path();
+            d.moveTo(x - 10 * g, y - 14 * g);
+            d.lineTo(x + 14 * g, y - 14 * g);
+            d.lineTo(x + 8 * g, y - 7 * g);
+            d.lineTo(x + 14 * g, y);
+            d.lineTo(x - 10 * g, y);
+            d.close();
+            p.setStrokeWidth(2.8f * g);
+            if (voll) p.setStyle(Paint.Style.FILL_AND_STROKE);
+            c.drawPath(d, p);
+            p.setStyle(Paint.Style.FILL);
+        }
+
         private void gesehenKarte(Canvas c, JSONObject e, float rad, int al) {
             p.setShader(new LinearGradient(r.left, r.top, r.right, r.bottom, 0xFF56637A, 0xFF242B38, Shader.TileMode.CLAMP));
             p.setAlpha(al);
@@ -3219,7 +3322,7 @@ public class FilmeActivity extends Activity {
             for (int i = 0; i < k.size(); i++) {
                 String art = k.get(i)[0], text = k.get(i)[1];
                 boolean f = i == detailKnopf;
-                float w = knopf.measureText(text) + 120;
+                float w = text.isEmpty() ? 84 : knopf.measureText(text) + 120;
                 r.set(x, y, x + w, y + 84);
                 if (f) {
                     p.setColor(0xFFFFFFFF);
@@ -3269,6 +3372,18 @@ public class FilmeActivity extends Activity {
                         c.drawLine(tx - 12, ty, tx + 12, ty, p);
                         p.setStyle(Paint.Style.FILL);
                         break;
+                    case "qualitaet": {
+                        boolean qa = Qualitaet.an(e);
+                        fahne(c, tx + 1, ty, 1f, qa, f ? 0xFF111317 : qa ? GELB : 0xFFFFFFFF, Math.round(255 * a));
+                        if (f) {
+                            klein.setTextAlign(Paint.Align.RIGHT);
+                            klein.setAlpha(Math.round(0xE6 * a));
+                            c.drawText(qualitaetTipp(e, qa), x + w, y + 84 + 44, klein);
+                            klein.setTextAlign(Paint.Align.LEFT);
+                            klein.setAlpha(0xB3);
+                        }
+                        break;
+                    }
                     case "gemerkt":
                         p.setStyle(Paint.Style.STROKE);
                         p.setStrokeWidth(3.6f);
@@ -3289,11 +3404,18 @@ public class FilmeActivity extends Activity {
                 }
                 knopf.setColor(farbe);
                 knopf.setAlpha(Math.round(255 * a));
-                c.drawText(text, x + 74, y + 53, knopf);
+                if (!text.isEmpty()) c.drawText(text, x + 74, y + 53, knopf);
                 knopf.setColor(0xFFFFFFFF);
                 x += w + 24;
             }
             p.setAlpha(255);
+        }
+
+        /** Text unter dem Melden-Knopf, solange er ausgewählt ist. */
+        private String qualitaetTipp(JSONObject e, boolean an) {
+            if (!an) return "Schlechte Qualität melden";
+            if (!Qualitaet.nurLukas()) return "Gemeldet  ·  nochmal drücken nimmt es zurück";
+            return "Gemeldet von " + TextUtils.join(", ", Qualitaet.werHat(e)) + "  ·  drücken = erledigt";
         }
 
         /** Bewertungen der Familie als kleine Pillen (Name in der eigenen Farbe, Note) und „Gesehen: …“. */
