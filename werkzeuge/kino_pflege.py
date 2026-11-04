@@ -99,7 +99,7 @@ def sammlungen_holen(key, user):
 
 def befehl_daten(ziel):
     key = schluessel()
-    user = anfrage("/Users", key)[0]["Id"]
+    user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
     filme = filme_holen(key, user)
     samm = sammlungen_holen(key, user)
     drin = {}
@@ -272,7 +272,7 @@ def rang(k, i):
 
 def befehl_trailer(alle=False, still=False, ohne_neu=False, suche_neu=False, max_neu=None):
     key = schluessel()
-    user = anfrage("/Users", key)[0]["Id"]
+    user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
     filme = filme_holen(key, user)
     eigen = lesen(TRAILER_EIGEN)
     alt = lesen(TRAILER_ZIEL).get("filme") or {}
@@ -330,7 +330,7 @@ def befehl_kategorien(los=False, still=False):
     zuo = regeln.get("zuordnung") or {}
     aus = regeln.get("filme") or {}
     key = schluessel()
-    user = anfrage("/Users", key)[0]["Id"]
+    user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
     filme = filme_holen(key, user)
     samm = {s["name"]: s for s in sammlungen_holen(key, user)}
     fehlt = sorted(set(zuo.values()) - set(samm))
@@ -388,7 +388,7 @@ def befehl_logos(los=False):
     winzigen Grundgröße, z. B. 36x24, und die Apps ziehen das hoch). Für diese Filme ein großes PNG-Logo aus den
     Bildquellen von Jellyfin (TMDB, Fanart) holen. Ohne --los nur anzeigen."""
     key = schluessel()
-    user = anfrage("/Users", key)[0]["Id"]
+    user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
     filme = filme_holen(key, user)
     schlecht, besser, ohne = 0, 0, []
     for e in filme:
@@ -440,7 +440,7 @@ def befehl_vorwaermen(teil="alles", faeden=2, nur_neue=False):
         print("Vorwärmen läuft schon – übersprungen")
         return
     key = schluessel()
-    user = anfrage("/Users", key)[0]["Id"]
+    user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
     stand = {"phase": "start", "fertig": 0, "fehler": 0, "bytes": 0, "angefragt": 0}
     sperre = threading.Lock()
     beginn = time.time()

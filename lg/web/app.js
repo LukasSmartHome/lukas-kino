@@ -4670,6 +4670,48 @@
   });
   window.addEventListener('pagehide', function () { if (P.offen && P.gemeldet) melde(2); });
 
+  // ------------------------------------------------------------------ Eigenes Jellyfin-Konto je Fernseher
+  // (04.11.2026, Konto B) Eltern- und Jonas-Fernseher nutzen ihr eigenes Jellyfin-Konto (Eltern bzw. Jonas,
+  // ohne Passwort), damit Weiterschauen und Favoriten zu ihren Handys (Moonfin) passen. Ist ein Fernseher noch
+  // als jemand anderes angemeldet, meldet er sich einmal um. Klappt das nicht, bleibt alles wie vorher.
+  async function kontoPruefen() {
+    if (PERSON.schluessel === 'lukas') return;
+    const soll = String(PERSON.name).toLowerCase();
+    let alt = null;
+    if (jf.angemeldet()) {
+      try {
+        const ich = await jf.anfrage('GET', '/Users/Me');
+        if (String((ich || {}).Name || '').toLowerCase() === soll) return;
+        alt = { token: jf.token, benutzer: jf.benutzer };
+      } catch (e) {
+        if (jf.angemeldet()) return;   // Netz- oder Serverfehler: nichts anfassen
+      }
+    }
+    const merkToken = jf.token, merkBenutzer = jf.benutzer;
+    jf.token = null;
+    try {
+      const a = await jf.anfrage('POST', '/Users/AuthenticateByName', { Username: PERSON.name, Pw: '' });
+      if (a) {
+        if (a.AccessToken) {
+          if (a.User) {
+            jf.token = a.AccessToken;
+            jf.benutzer = a.User.Id;
+            speicherSetzen('lk_token', jf.token);
+            speicherSetzen('lk_user', jf.benutzer);
+            return;
+          }
+        }
+      }
+    } catch (e) { /* kein passendes Konto ohne Passwort: alter Stand bleibt */ }
+    if (alt) {
+      jf.token = alt.token;
+      jf.benutzer = alt.benutzer;
+    } else {
+      jf.token = merkToken;
+      jf.benutzer = merkBenutzer;
+    }
+  }
+
   // ------------------------------------------------------------------ Start
 
   function start() {
@@ -4682,8 +4724,11 @@
       window.focus();
     } catch (e) { /* egal */ }
     if (parameter.abmelden === '1') jf.abmelden();
-    if (jf.angemeldet()) laden();
-    else anmelden();
+    const weiter = function () {
+      if (jf.angemeldet()) laden();
+      else anmelden();
+    };
+    kontoPruefen().then(weiter, weiter);
   }
 
   if (document.body) start();

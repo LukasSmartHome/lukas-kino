@@ -24,7 +24,7 @@ def j(pfad):
     return json.loads(holen(pfad))
 
 
-user = j("/Users")[0]["Id"]
+user = [u for u in j("/Users") if u["Policy"]["IsAdministrator"]][0]["Id"]
 fotos = None
 for v in j("/UserViews?userId=" + user).get("Items") or []:
     if v.get("CollectionType") in ("photos", "homevideos") and fotos is None:
