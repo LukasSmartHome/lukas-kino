@@ -2052,29 +2052,32 @@
   function musikInfo(box, e) {
     const LM = window.LukasMusik;
     const t = typ(e);
+    const titel = function (text) {
+      const d = div('i-titel');
+      const sp = document.createElement('span');
+      sp.textContent = text;
+      d.appendChild(sp);
+      return d;
+    };
     if (t === 'Karaoke') {
       box.appendChild(div('i-kopf', 'MUSIK'));
-      box.appendChild(div('i-titel', 'Karaoke-Modus'));
+      box.appendChild(titel('Karaoke-Modus'));
       box.appendChild(div('i-meta', e.ChildCount ? e.ChildCount + ' Lieder zum Mitsingen · gemischt' : 'Die ersten Texte kommen gerade'));
-      box.appendChild(div('i-text', 'Oben steht die ganze Zeile zum Mitlesen, darunter läuft die Zeitspur: Balken zeigen, '
+      box.appendChild(div('i-inhalt', 'Oben steht die ganze Zeile zum Mitlesen, darunter läuft die Zeitspur: Balken zeigen, '
         + 'wann und wie lange gesungen wird, Lücken sind Pausen, die gelben Punkte zählen ein.'));
       return;
     }
     if (t === 'MusikMix') {
       box.appendChild(div('i-kopf', 'MUSIK'));
-      box.appendChild(div('i-titel', 'Alles mischen'));
+      box.appendChild(titel('Alles mischen'));
       box.appendChild(div('i-meta', e.ChildCount + ' Lieder'));
       return;
     }
     box.appendChild(div('i-kopf', (e._gruppe || 'Musik').toUpperCase()));
-    const ti = div('i-titel');
-    const sp = document.createElement('span');
-    sp.textContent = e.Name || '';
-    ti.appendChild(sp);
-    box.appendChild(ti);
+    box.appendChild(titel(e.Name || ''));
     const teile = [LM ? LM.interpret(e) : '', e.Album, e.ProductionYear > 0 ? String(e.ProductionYear) : '', dauer(e.RunTimeTicks)];
     box.appendChild(div('i-meta', teile.filter(Boolean).join('  ·  ')));
-    if (e._karaoke) box.appendChild(div('i-text', 'Mit Karaoke-Text – im Player ▲ drücken.'));
+    if (e._karaoke) box.appendChild(div('i-inhalt', 'Mit Karaoke-Text – im Player ▲ drücken.'));
   }
 
   function musikKarte(c, e) {
