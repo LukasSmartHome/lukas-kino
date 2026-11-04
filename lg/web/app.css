@@ -682,7 +682,7 @@ body {
 #leiste .marke {
   position: absolute;
   left: 48px;
-  top: 112px;
+  top: 96px;
   font-size: 26px;
   font-weight: 500;
   color: rgba(255, 255, 255, .78);
@@ -692,8 +692,8 @@ body {
   position: absolute;
   left: 22px;
   right: 22px;
-  height: 92px;
-  border-radius: 46px;
+  height: 80px;
+  border-radius: 40px;
   background: rgba(255, 255, 255, .95);
   box-shadow: 0 8px 24px rgba(0, 0, 0, .25);
   transition: top .28s cubic-bezier(.2, .8, .2, 1);
@@ -712,7 +712,7 @@ body {
   position: absolute;
   left: 0;
   right: 0;
-  height: 92px;
+  height: 80px;
   color: #fff;
   transition: color .2s;
 }
@@ -722,7 +722,7 @@ body {
 .l-eintrag svg {
   position: absolute;
   left: 52px;
-  top: 26px;
+  top: 20px;
   width: 40px;
   height: 40px;
 }
@@ -731,9 +731,18 @@ body {
   position: absolute;
   left: 114px;
   top: 0;
-  line-height: 92px;
-  font-size: 38px;
+  line-height: 80px;
+  font-size: 36px;
   font-weight: 650;
+}
+
+/* Trennlinie zwischen den Apps des Fernsehers und dem Kino (seit 04.11.2026) */
+#leiste .l-linie {
+  position: absolute;
+  left: 52px;
+  right: 52px;
+  height: 2px;
+  background: rgba(255, 255, 255, .18);
 }
 
 /* ------------------------------------------------------------ Anmelden, Laden, Fehler */

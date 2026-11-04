@@ -69,7 +69,16 @@
     'Familie und Animation': '#3E9BF0', 'Kriegsfilme': '#5E6B2B', 'Historienfilme': '#9C7442', 'Western': '#E9A23B'
   };
 
-  const LEISTE = ['Suche', 'Filme', 'Serien', 'Merkliste', 'Empfohlen', 'Fotos'];
+  // Oben in der Seitenleiste die Apps des Fernsehers (seit 04.11.2026, wie am TCL), dann Suche und die Bereiche.
+  // Öffnen geht über den Webhook an Automation 84 (art=app) – die startet die App am Fernseher dieser Person.
+  const APPS = [
+    { name: 'Prime Video', app: 'prime' },
+    { name: 'Netflix', app: 'netflix' },
+    { name: 'YouTube', app: 'youtube' }
+  ];
+  const LEISTE = APPS.map(function (a) { return a.name; }).concat(['Suche', 'Filme', 'Serien', 'Merkliste', 'Empfohlen', 'Fotos']);
+  // Oberkante des Leisten-Eintrags i (Schritt 90, zwischen Apps und Suche 24 px Luft für die Linie)
+  function leisteTop(i) { return 172 + 90 * i + (i >= APPS.length ? 24 : 0); }
   const BEREICHE = ['filme', 'serien', 'merkliste', 'empfohlen', 'fotos'];
   const TASTEN = [
     ['a', 'b', 'c', 'd', 'e', 'f'], ['g', 'h', 'i', 'j', 'k', 'l'], ['m', 'n', 'o', 'p', 'q', 'r'],
@@ -104,6 +113,7 @@
       + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + inhalt + '</svg>';
   }
 
+  const APP_SYMBOL = '<path d="M14 3.5h6.5V10M20.5 3.5L11.5 12.5"/><path d="M18.5 14v4.5a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2H10"/>';
   const SYMBOLE = [
     '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
     '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9l5 3-5 3z"/>',
@@ -1768,14 +1778,17 @@
 
     // Seitenleiste
     el.lEintraege = LEISTE.map(function (name, i) {
-      const e = div('l-eintrag');
-      e.innerHTML = svg(SYMBOLE[i]) + '<span></span>';
+      const e = div('l-eintrag' + (i < APPS.length ? ' l-app' : ''));
+      e.innerHTML = svg(i < APPS.length ? APP_SYMBOL : SYMBOLE[i - APPS.length]) + '<span></span>';
       e.querySelector('span').textContent = name;
-      e.style.top = (174 + 112 * i) + 'px';
+      e.style.top = leisteTop(i) + 'px';
       e._leiste = i;
       el.leiste.appendChild(e);
       return e;
     });
+    const linie = div('l-linie');
+    linie.style.top = Math.round((leisteTop(APPS.length - 1) + leisteTop(APPS.length)) / 2 + 39) + 'px';
+    el.leiste.appendChild(linie);
 
     // Bildschirmtastatur
     el.tasten = [];
@@ -2867,16 +2880,16 @@
     el.leiste.classList.toggle('auf', leiste);
     el.dunkel.classList.toggle('auf', leiste);
     el.leiste.style.pointerEvents = leiste ? '' : 'none';
-    el.lPille.style.top = (174 + 112 * leistePos) + 'px';
-    let aktiv = ansicht === A.SUCHE ? 0 : BEREICHE.indexOf(bereich) + 1;
+    el.lPille.style.top = leisteTop(leistePos) + 'px';
+    let aktiv = APPS.length + (ansicht === A.SUCHE ? 0 : BEREICHE.indexOf(bereich) + 1);
     el.lEintraege.forEach(function (e, i) { e.classList.toggle('fokus', i === leistePos); });
-    el.lPunkt.style.top = (220 + 112 * aktiv - 7) + 'px';
+    el.lPunkt.style.top = (leisteTop(aktiv) + 40 - 7) + 'px';
   }
 
   function leisteAuf(maus) {
     leiste = true;
     leisteMaus = !!maus;
-    leistePos = ansicht === A.SUCHE ? 0 : BEREICHE.indexOf(bereich) + 1; // ausgewählt ist, wo man gerade ist
+    leistePos = APPS.length + (ansicht === A.SUCHE ? 0 : BEREICHE.indexOf(bereich) + 1); // ausgewählt ist, wo man gerade ist
     zeichnen();
   }
 
@@ -2887,11 +2900,25 @@
   }
 
   function leisteWaehlen(i) {
+    if (i < APPS.length) return appOeffnen(i); // Leiste bleibt offen und steht nach der Rückkehr noch dort
     leiste = false;
     leisteMaus = false;
-    if (i === 0) sucheOeffnen();
-    else bereichOeffnen(BEREICHE[i - 1]);
+    if (i === APPS.length) sucheOeffnen();
+    else bereichOeffnen(BEREICHE[i - APPS.length - 1]);
     zeichnen();
+  }
+
+  // App am Fernseher öffnen (Prime Video, Netflix, YouTube): HA startet sie per LG-Integration (Automation 84, art=app).
+  let appZeit = 0;
+  function appOeffnen(i) {
+    const a = APPS[i];
+    const jetzt = Date.now();
+    if (jetzt - appZeit < 2500) return; // doppeltes OK nicht zweimal schicken
+    appZeit = jetzt;
+    hinweis(a.name + ' wird geöffnet …');
+    merk.senden({ art: 'app', wer: PERSON.ha, app: a.app }).catch(function () {
+      hinweis(a.name + ' ließ sich nicht öffnen');
+    });
   }
 
   // -------------------------------------------------- Suche
@@ -4641,7 +4668,12 @@
     if (!leiste && p.x < 40) leisteAuf(true);
     else if (leiste && leisteMaus && p.x > 520) leisteZu();
     else if (leiste && p.x < 460) {
-      const i = Math.round((p.y - 260) / 112);
+      let i = -1, best = 1e9;
+      for (let k = 0; k < LEISTE.length; k++) {
+        const d = Math.abs(p.y - (40 + leisteTop(k) + 40));
+        if (d < best) { best = d; i = k; }
+      }
+      if (best > 60) i = -1;
       if (i >= 0 && i < LEISTE.length && i !== leistePos) {
         leistePos = i;
         zeichnen();
