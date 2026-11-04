@@ -12,7 +12,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * „Empfohlen“: Filme, die die anderen in der Familie mit 7 bis 10 bewertet haben (am TCL also Jonas, Moni und Uli).
+ * „Empfohlen“: alle Filme, die jemand in der Familie mit 7 bis 10 bewertet hat – seit 04.11.2026 auch die eigenen
+ * Bewertungen und auch schon Gesehenes (Wunsch Jonas/Lukas: Empfohlen dient zugleich als Liste der Lieblingsfilme).
  * Gruppiert nach der besten Note; innerhalb einer Gruppe zuerst, was man selbst noch nicht gesehen/bewertet hat.
  */
 final class Empfohlen {
@@ -71,7 +72,7 @@ final class Empfohlen {
             while (wi.hasNext()) {
                 String n = wi.next();
                 if (ICH.contains(n)) selbst = true;
-                else if (w.optInt(n) >= 7) gut.add(n);
+                if (w.optInt(n) >= 7) gut.add(n); // alle, auch die eigenen
             }
             if (gut.isEmpty()) continue;
             String id = FilmIndex.fuerTitel(f.optString("t"));

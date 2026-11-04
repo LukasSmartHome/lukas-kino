@@ -829,8 +829,9 @@
     } catch (e) { /* ohne Bewertungen weiter */ }
   }
 
-  // ------------------------------------------------------------------ Empfohlen: was die anderen mit 7 bis 10 bewertet haben
-  // Eltern sehen die Bewertungen von Lukas und Jonas, Jonas die von Lukas, Moni und Uli, Lukas die von Jonas, Moni und Uli.
+  // ------------------------------------------------------------------ Empfohlen: alles, was jemand in der Familie mit 7 bis 10 bewertet hat
+  // Seit 04.11.2026 (Wunsch Jonas/Lukas): auch die eigenen Bewertungen und auch schon Gesehenes – so dient Empfohlen
+  // gleichzeitig als Liste der eigenen Lieblingsfilme zum Wiederanschauen.
   // Gruppiert nach der besten Note; innerhalb einer Gruppe zuerst, was man selbst noch nicht gesehen/bewertet hat.
 
   const empfohlen = { sig: null, gruppen: [] };   // gruppen: [{note, eintraege}]
@@ -843,7 +844,7 @@
     const k = {};
     Object.keys(j.bewertungen || {}).forEach(function (pid) {
       const f = j.bewertungen[pid] || {}, w = f.w || {};
-      const gut = Object.keys(w).filter(function (n) { return andere(n) && Number(w[n]) >= 7; });
+      const gut = Object.keys(w).filter(function (n) { return Number(w[n]) >= 7; }); // alle, auch die eigenen
       if (!gut.length) return;
       const id = jfIdFuerTitel(f.t);
       if (!id) return;
@@ -893,9 +894,9 @@
   function empfohlenSeite() {
     const s = neueSeite('Empfohlen');
     empfohlen.gruppen.forEach(function (g) {
-      const l = g.eintraege.filter(function (e) { return !istGesehen(e); });
-      if (l.length) {
-        s.reihen.push(reiheAus('Mit ' + g.note + ' bewertet', l, POSTER));
+      // Gesehenes bleibt drin (Haken auf dem Poster zeigt es an)
+      if (g.eintraege.length) {
+        s.reihen.push(reiheAus('Mit ' + g.note + ' bewertet', g.eintraege, POSTER));
       }
     });
     if (!s.reihen.length) s.leer = empfohlen.sig === null ? 'Bewertungen werden geladen …' : 'Noch nichts mit 7 oder besser bewertet';
@@ -1079,7 +1080,7 @@
 
   // ------------------------------------------------------------------ Gesehen je Profil (ab 80 %)
   // Quelle: Home Assistant (sensor.kino_gesehen, Paket kino_gesehen.yaml) über bewertungen.json → gesehen → Profil.
-  // Gesehene Filme verschwinden bei diesem Profil aus Neu, den Kategorien, Alle Filme und Empfohlen und stehen in der
+  // Gesehene Filme verschwinden bei diesem Profil aus Neu, den Kategorien und Alle Filme (Empfohlen behält sie) und stehen in der
   // Kategorie „Gesehen“ ganz rechts. Weiterschauen, Merkliste und Suche zeigen weiter alles.
 
   const GESEHEN_GRENZE = 0.8;

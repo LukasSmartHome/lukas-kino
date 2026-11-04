@@ -554,8 +554,8 @@ public class FilmeActivity extends Activity {
     private Seite empfohlenSeite() {
         Seite s = new Seite("Empfohlen");
         for (Empfohlen.Gruppe g : Empfohlen.gruppen()) {
-            List<JSONObject> l = new ArrayList<>();
-            for (JSONObject o : g.eintraege) if (!Gesehen.hat(o)) l.add(o);
+            // Gesehenes bleibt drin (Haken auf dem Poster zeigt es an)
+            List<JSONObject> l = new ArrayList<>(g.eintraege);
             if (!l.isEmpty()) s.reihen.add(reiheAus("Mit " + g.note + " bewertet", l, POSTER));
         }
         if (s.reihen.isEmpty())

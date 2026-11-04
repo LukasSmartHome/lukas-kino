@@ -14,7 +14,7 @@ import java.util.Set;
 /**
  * Was dieses Profil schon gesehen hat (ab 80 % der Laufzeit), getrennt nach Profil: TCL = Lukas, LG = Eltern bzw. Jonas.
  * Quelle: Home Assistant (sensor.kino_gesehen, Paket kino_gesehen.yaml) über bewertungen.json → gesehen → Profil.
- * Gesehene Filme verschwinden aus Neu, den Kategorien, Alle Filme und Empfohlen und stehen in der Kategorie
+ * Gesehene Filme verschwinden aus Neu, den Kategorien und Alle Filme (Empfohlen behält sie) und stehen in der Kategorie
  * „Gesehen“ ganz rechts. Weiterschauen, Merkliste und Suche zeigen weiter alles.
  */
 final class Gesehen {
