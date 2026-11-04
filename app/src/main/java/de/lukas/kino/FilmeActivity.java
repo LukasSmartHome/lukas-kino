@@ -182,7 +182,7 @@ public class FilmeActivity extends Activity {
         return e.optString("Name").trim().replaceAll("\\s+", " ");
     }
 
-    enum Bereich { FILME, SERIEN, MERKLISTE, EMPFOHLEN, FOTOS }
+    enum Bereich { FILME, SERIEN, MUSIK, MERKLISTE, EMPFOHLEN, FOTOS } // Reihenfolge = Reihenfolge in der Leiste
 
     enum Ansicht { LADEN, ANMELDEN, FEHLER, LISTE, DETAIL, SUCHE, FOTO }
 
@@ -217,19 +217,21 @@ public class FilmeActivity extends Activity {
     // Seitenleiste
     private boolean leiste;
     private int leistePos;
-    // Ganz oben in der Leiste Streaming-Apps (Wunsch Lukas 03.11.2026): Prime Video ganz oben, dann Netflix,
-    // YouTube direkt über der Suche. Prime und Netflix öffnen die echte App, YouTube vorerst die Webseite
-    // youtube.com/tv (YouTubeWebActivity, YT_ALS_WEB). Zurück aus der App landet wieder hier, Leiste offen.
-    static final int APPS = 3;
+    // Ganz oben in der Leiste Streaming-Apps (Wunsch Lukas 03.11.2026): Prime Video, Netflix, YouTube direkt
+    // über der Suche; seit 04.11.2026 Spotify ganz oben. Alle öffnen die echte App (YouTube früher die Webseite
+    // youtube.com/tv, YouTubeWebActivity, YT_ALS_WEB). Zurück aus der App landet wieder hier, Leiste offen.
+    static final int APPS = 4;
     static final String[][] APP_PAKETE = {
+            {"com.spotify.tv.android"},
             {"com.amazon.amazonvideo.livingroom", "com.amazon.firebat"},
             {"com.netflix.ninja"},
             {"com.google.android.youtube.tv", "com.amazon.firetv.youtube"}};
-    static final int APP_YOUTUBE = 2;
+    static final int APP_YOUTUBE = 3;
     static final boolean YT_ALS_WEB = false; // seit 03.11.2026 abends: YouTube öffnet die echte App (Wunsch Lukas)
-    private static final String[] LEISTE = {"Prime Video", "Netflix", "YouTube",
-            "Suche", "Filme", "Serien", "Merkliste", "Empfohlen", "Fotos"};
-    private static final float LEISTE_SCHRITT = 90;
+    // 04.11.2026 (Wunsch Lukas): Überschrift „Lukas Kino“ raus, dafür Spotify oben und Musik unter Serien
+    private static final String[] LEISTE = {"Spotify", "Prime Video", "Netflix", "YouTube",
+            "Suche", "Filme", "Serien", "Musik", "Merkliste", "Empfohlen", "Fotos"};
+    private static final float LEISTE_SCHRITT = 84;
     private int appZurueck = -1; // nach der Rückkehr aus einer App die Leiste dort wieder öffnen
 
     // Suche
@@ -288,7 +290,7 @@ public class FilmeActivity extends Activity {
             nachDemFilm();
         }
         if (appZurueck >= 0) {
-            // zurück aus Prime, Netflix oder YouTube: Leiste offen, die App von eben ausgewählt
+            // zurück aus Spotify, Prime, Netflix oder YouTube: Leiste offen, die App von eben ausgewählt
             leiste = true;
             leistePos = appZurueck;
             appZurueck = -1;
@@ -418,7 +420,8 @@ public class FilmeActivity extends Activity {
         buehne.invalidate();
         netz.execute(() -> {
             try {
-                Seite s = b == Bereich.SERIEN ? serienSeite() : b == Bereich.FOTOS ? fotosSeite() : filmeSeite();
+                Seite s = b == Bereich.SERIEN ? serienSeite() : b == Bereich.FOTOS ? fotosSeite()
+                        : b == Bereich.MUSIK ? musikSeite() : filmeSeite();
                 h.post(() -> zeigeStart(b, s));
             } catch (Exception e) {
                 fehler("Jellyfin ist nicht erreichbar");
@@ -990,6 +993,14 @@ public class FilmeActivity extends Activity {
             }
             default:
         }
+    }
+
+    /** Musik (Wunsch Lukas 04.11.2026): eigener Reiter unter Serien. In Jellyfin gibt es noch keine Musik-
+     *  Bibliothek, darum vorerst nur ein Platzhalter. */
+    private Seite musikSeite() {
+        Seite s = new Seite("Musik");
+        s.leer = "Musik kommt bald";
+        return s;
     }
 
     private Seite serienSeite() throws Exception {
@@ -2233,7 +2244,7 @@ public class FilmeActivity extends Activity {
         private float fokusZoom = 1f, detailAnim, leisteAnim, leisteFokusY = -1, sucheScroll, bewAnim;
         private JSONObject letzterFokus;
         private final Path[] symbole = new Path[LEISTE.length];
-        private final Bitmap[] appSymbole = new Bitmap[APPS]; // echte App-Symbole (Prime, Netflix, YouTube)
+        private final Bitmap[] appSymbole = new Bitmap[APPS]; // echte App-Symbole (Spotify, Prime, Netflix, YouTube)
 
         Buehne(Context c) {
             super(c);
@@ -2252,9 +2263,10 @@ public class FilmeActivity extends Activity {
             symbole[APPS] = Symbole.SUCHE;
             symbole[APPS + 1] = symbolFilm();
             symbole[APPS + 2] = symbolSerie();
-            symbole[APPS + 3] = symbolMerk();
-            symbole[APPS + 4] = symbolStern();
-            symbole[APPS + 5] = symbolFoto();
+            symbole[APPS + 3] = symbolMusik();
+            symbole[APPS + 4] = symbolMerk();
+            symbole[APPS + 5] = symbolStern();
+            symbole[APPS + 6] = symbolFoto();
             for (int i = 0; i < APPS; i++) {
                 symbole[i] = symbolFilm(); // falls die App fehlt
                 appSymbole[i] = appSymbol(appPaket(i));
@@ -2302,6 +2314,19 @@ public class FilmeActivity extends Activity {
             s.lineTo(15.5f, 3);
             s.moveTo(8, 21);
             s.lineTo(16, 21);
+            return s;
+        }
+
+        private Path symbolMusik() {
+            Path s = new Path();
+            s.moveTo(9, 17.5f);
+            s.lineTo(9, 6);
+            s.lineTo(19.5f, 4);
+            s.lineTo(19.5f, 15.5f);
+            s.moveTo(9, 9.5f);
+            s.lineTo(19.5f, 7.5f);
+            s.addCircle(6.6f, 17.5f, 2.4f, Path.Direction.CW);
+            s.addCircle(17.1f, 15.5f, 2.4f, Path.Direction.CW);
             return s;
         }
 
@@ -2506,9 +2531,10 @@ public class FilmeActivity extends Activity {
 
         // -------------------------------------------------- Seitenleiste
 
-        /** Mitte des Leisten-Eintrags i (9 Einträge, zwischen Apps und Suche etwas Luft für die Linie). */
+        /** Mitte des Leisten-Eintrags i (11 Einträge, zwischen Apps und Suche etwas Luft für die Linie).
+         *  Ohne Überschrift beginnt die Leiste oben; Abstand oben und unten zum Glasrand gleich. */
         private float leisteY(int i) {
-            return 212 + i * LEISTE_SCHRITT + (i >= APPS ? 24 : 0);
+            return 108 + i * LEISTE_SCHRITT + (i >= APPS ? 24 : 0);
         }
 
         private boolean leisteZeichnen(Canvas c, float dt) {
@@ -2524,12 +2550,8 @@ public class FilmeActivity extends Activity {
             RectF f = new RectF(x, 40, x + 420, 1040);
             echtesGlas(c, f, 48, Math.min(1f, a * 1.4f));
 
-            // Ueberschrift
-            klein.setAlpha(Math.round(200 * a));
-            c.drawText("Lukas Kino", f.left + 48, 122, klein);
-            klein.setAlpha(0xB3);
-
-            // Oben die Apps (Prime Video, Netflix, YouTube), dann eine feine Linie, dann Suche und die Bereiche
+            // Oben die Apps (Spotify, Prime Video, Netflix, YouTube), dann eine feine Linie, dann Suche und die
+            // Bereiche. Die Überschrift „Lukas Kino“ ist seit 04.11.2026 raus (Platz für Spotify und Musik).
             float zielY = leisteY(leistePos);
             leisteFokusY = leisteFokusY < 0 ? zielY : naeher(leisteFokusY, zielY, dt, 45);
             if (leisteFokusY != zielY) weiter = true;
