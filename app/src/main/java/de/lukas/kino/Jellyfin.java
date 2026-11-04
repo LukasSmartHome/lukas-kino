@@ -112,6 +112,15 @@ final class Jellyfin {
                 + "&includeItemTypes=Movie&sortBy=PremiereDate,SortName&sortOrder=Descending&fields=" + FELDER);
     }
 
+    static final String FELDER_MUSIK = "Path,Genres,AlbumArtist,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag,RunTimeTicks,"
+            + "DateCreated,ProductionYear,Album,UserData";
+
+    /** Alle Lieder (Bibliothek Musik, seit 04.11.2026). */
+    JSONArray musik() throws Exception {
+        return liste("/Items?userId=" + benutzer + "&includeItemTypes=Audio&recursive=true&sortBy=SortName&fields=" + FELDER_MUSIK
+                + "&enableImageTypes=Primary");
+    }
+
     JSONArray alle() throws Exception {
         return liste("/Items?userId=" + benutzer + "&includeItemTypes=Movie&recursive=true&sortBy=SortName&fields=" + FELDER);
     }

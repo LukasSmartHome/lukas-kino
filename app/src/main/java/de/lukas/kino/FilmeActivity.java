@@ -995,12 +995,80 @@ public class FilmeActivity extends Activity {
         }
     }
 
-    /** Musik (Wunsch Lukas 04.11.2026): eigener Reiter unter Serien. In Jellyfin gibt es noch keine Musik-
-     *  Bibliothek, darum vorerst nur ein Platzhalter. */
-    private Seite musikSeite() {
+    /** Musik (Wunsch Lukas 04.11.2026): Reihe Karaoke ganz oben (immer da, auch ohne Texte – Lukas will sie nicht
+     *  vergessen), dann je Genre-Gruppe eine Reihe mit Liedern, zuletzt Alle Lieder mit „Alles mischen“.
+     *  Abspielen und Karaoke macht MusikActivity (musik.html vom Pi, gleiche Seite wie am LG). */
+    private Seite musikSeite() throws Exception {
         Seite s = new Seite("Musik");
-        s.leer = "Musik kommt bald";
+        JSONArray roh = new JSONArray();
+        try {
+            roh = jf.musik();
+        } catch (Exception ignored) {
+        }
+        JSONObject index = Musik.karaokeIndex();
+        List<JSONObject> lieder = new ArrayList<>(), kar = new ArrayList<>();
+        for (int i = 0; i < roh.length(); i++) {
+            JSONObject o = roh.optJSONObject(i);
+            if (o == null) continue;
+            o.put("_gruppe", Musik.gruppe(o));
+            boolean k = Musik.hatKaraoke(index, o);
+            o.put("_karaoke", k);
+            lieder.add(o);
+            if (k) kar.add(o);
+        }
+        Reihe kr = new Reihe("Karaoke", null, QUER);
+        kr.eintraege.add(musikSonder("Karaoke", "@karaoke", "Karaoke-Modus", kar.size()));
+        for (JSONObject o : kar) kr.eintraege.add(musikKopie(o, "karaoke"));
+        kr.geladen = true;
+        s.reihen.add(kr);
+        if (lieder.isEmpty()) return s;
+        Map<String, List<JSONObject>> gruppen = new HashMap<>();
+        for (JSONObject o : lieder) {
+            String g = o.optString("_gruppe");
+            List<JSONObject> l = gruppen.get(g);
+            if (l == null) gruppen.put(g, l = new ArrayList<>());
+            l.add(o);
+        }
+        List<String> namen = new ArrayList<>(gruppen.keySet());
+        Collections.sort(namen, (a, b) -> Musik.SONSTIGES.equals(a) ? 1 : Musik.SONSTIGES.equals(b) ? -1
+                : gruppen.get(b).size() - gruppen.get(a).size());
+        for (String g : namen) {
+            List<JSONObject> l = new ArrayList<>();
+            for (JSONObject o : gruppen.get(g)) l.add(musikKopie(o, "genre:" + g));
+            s.reihen.add(reiheAus(g, l, QUER));
+        }
+        List<JSONObject> alle = new ArrayList<>();
+        alle.add(musikSonder("MusikMix", "@mix", "Alles mischen", lieder.size()));
+        for (JSONObject o : lieder) alle.add(musikKopie(o, "alle"));
+        s.reihen.add(reiheAus("Alle Lieder", alle, QUER));
         return s;
+    }
+
+    private static JSONObject musikSonder(String typ, String id, String name, int n) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("Type", typ);
+            o.put("Id", id);
+            o.put("Name", name);
+            o.put("ChildCount", n);
+        } catch (Exception ignored) {
+        }
+        return o;
+    }
+
+    private static JSONObject musikKopie(JSONObject o, String quelle) {
+        try {
+            JSONObject k = new JSONObject(o.toString());
+            k.put("_quelle", quelle);
+            return k;
+        } catch (Exception e) {
+            return o;
+        }
+    }
+
+    static boolean istMusik(JSONObject e) {
+        String t = typ(e);
+        return "Audio".equals(t) || "Karaoke".equals(t) || "MusikMix".equals(t);
     }
 
     private Seite serienSeite() throws Exception {
@@ -1318,6 +1386,11 @@ public class FilmeActivity extends Activity {
             setzeHintergrund(null, f != null ? f : 0xFF444444);
             return;
         }
+        if (istMusik(e)) {
+            setzeHintergrund(null, "Karaoke".equals(t) ? 0xFF9A7404 : "MusikMix".equals(t) ? 0xFF3E4A5E
+                    : Musik.farbe(e.optString("_gruppe")));
+            return;
+        }
         final String url = hintergrundUrl(e);
         if (url == null) {
             setzeHintergrund(null, 0xFF1D2027);
@@ -1421,6 +1494,8 @@ public class FilmeActivity extends Activity {
     String kartenUrl(JSONObject e, int form) {
         if (e == null) return null;
         String id = e.optString("Id"), t = typ(e);
+        if ("Audio".equals(t)) return Musik.cover(e, 400);
+        if ("Karaoke".equals(t) || "MusikMix".equals(t)) return null;
         if (form == QUER) {
             if ("Folder".equals(t) || "PhotoAlbum".equals(t)) {
                 String pr = Jellyfin.tag(e, "Primary");
@@ -1752,6 +1827,15 @@ public class FilmeActivity extends Activity {
         switch (t) {
             case "BoxSet":
                 kategorieOeffnen(e);
+                break;
+            case "Karaoke":
+                MusikActivity.starten(this, "karaoke", null, true, true);
+                break;
+            case "MusikMix":
+                MusikActivity.starten(this, "alle", null, false, true);
+                break;
+            case "Audio":
+                MusikActivity.starten(this, e.optString("_quelle", "alle"), e.optString("Id"), false, false);
                 break;
             case "Gesehen":
                 gesehenOeffnen(e);
@@ -2680,6 +2764,7 @@ public class FilmeActivity extends Activity {
             } else if (e != null) {
                 String t = typ(e);
                 if ("BoxSet".equals(t) || "Gesehen".equals(t) || "Qualitaet".equals(t)) kategorieInfo(c, e);
+                else if (istMusik(e)) musikInfo(c, e);
                 else if ("Folder".equals(t) || "PhotoAlbum".equals(t) || "CollectionFolder".equals(t)) ordnerInfo(c, e);
                 else if ("Photo".equals(t) || "Video".equals(t)) fotoInfo(c, e);
                 else filmInfo(c, e, detail);
@@ -3155,6 +3240,16 @@ public class FilmeActivity extends Activity {
                 p.setAlpha(255);
                 return;
             }
+            if ("Karaoke".equals(t) || "MusikMix".equals(t)) {
+                musikSonderKarte(c, e, "Karaoke".equals(t), rad, al, zoom);
+                p.setAlpha(255);
+                return;
+            }
+            if ("Audio".equals(t)) {
+                liedKarte(c, e, rad, al, zoom);
+                p.setAlpha(255);
+                return;
+            }
             String url = kartenUrl(e, form);
             Bitmap b = url != null ? bilder.sofort(url) : null;
             if (b == null && url != null && !bilder.fehlgeschlagen(url)) bilder.laden(url, (u, bm) -> invalidate());
@@ -3620,6 +3715,171 @@ public class FilmeActivity extends Activity {
             }
             p.setAlpha(255);
             return y + 58;
+        }
+
+        // -------------------------------------------------- Musik (04.11.2026)
+
+        private Path mikrofon, mischen;
+
+        private void musikSymbole() {
+            if (mikrofon != null) return;
+            mikrofon = new Path();
+            mikrofon.addRoundRect(new RectF(8.5f, 2.5f, 15.5f, 14.5f), 3.5f, 3.5f, Path.Direction.CW);
+            mikrofon.moveTo(5f, 11.5f);
+            mikrofon.arcTo(new RectF(5f, 4.5f, 19f, 18.5f), 180f, -180f, false);
+            mikrofon.moveTo(12f, 18.5f);
+            mikrofon.lineTo(12f, 21.5f);
+            mikrofon.moveTo(8f, 21.5f);
+            mikrofon.lineTo(16f, 21.5f);
+            mischen = new Path();
+            mischen.moveTo(3f, 7f);
+            mischen.lineTo(6.5f, 7f);
+            mischen.cubicTo(9.5f, 7f, 11.5f, 17f, 14.5f, 17f);
+            mischen.lineTo(21f, 17f);
+            mischen.moveTo(18f, 14f);
+            mischen.lineTo(21f, 17f);
+            mischen.lineTo(18f, 20f);
+            mischen.moveTo(3f, 17f);
+            mischen.lineTo(6.5f, 17f);
+            mischen.cubicTo(7.8f, 17f, 8.8f, 15.3f, 9.8f, 13.3f);
+            mischen.moveTo(14.5f, 7f);
+            mischen.lineTo(21f, 7f);
+            mischen.moveTo(18f, 4f);
+            mischen.lineTo(21f, 7f);
+            mischen.lineTo(18f, 10f);
+        }
+
+        /** Karaoke-Modus (gelb, Mikrofon) bzw. „Alles mischen“ als eigene Kachel. r ist schon gesetzt. */
+        private void musikSonderKarte(Canvas c, JSONObject e, boolean kar, float rad, int al, float zoom) {
+            musikSymbole();
+            p.setShader(new LinearGradient(r.left, r.top, r.right, r.bottom, kar ? 0xFFF2B705 : 0xFF56637A,
+                    kar ? 0xFFB07F00 : 0xFF242B38, Shader.TileMode.CLAMP));
+            p.setAlpha(al);
+            c.drawRoundRect(r, rad, rad, p);
+            p.setShader(null);
+            int farbe = kar ? 0xFF1A1400 : 0xFFFFFFFF;
+            Symbole.malen(c, kar ? mikrofon : mischen, r.left + 28 * zoom, r.top + 28 * zoom, 64 * zoom, 2.2f, farbe, symbolStift);
+            symbolStift.setStyle(Paint.Style.FILL);
+            karte.setColor(farbe);
+            karte.setAlpha(al);
+            karte.setTextSize(32 * zoom);
+            c.drawText(e.optString("Name"), r.left + 30 * zoom, r.top + 140 * zoom, karte);
+            karte.setTextSize(21 * zoom);
+            karte.setAlpha(Math.round(al * 0.75f));
+            int n = e.optInt("ChildCount", 0);
+            c.drawText(kar ? (n > 0 ? n + " Lieder" : "kommt bald") : n + " Lieder", r.left + 30 * zoom, r.top + 174 * zoom, karte);
+            karte.setColor(0xFFFFFFFF);
+            karte.setTextSize(26);
+            karte.setAlpha(255);
+        }
+
+        /** Lied im Querformat: Cover links, Titel (bis 3 Zeilen) und Interpret rechts, gelbes „Karaoke“ unten. */
+        private void liedKarte(Canvas c, JSONObject e, float rad, int al, float zoom) {
+            c.save();
+            Path clip = new Path();
+            clip.addRoundRect(r, rad, rad, Path.Direction.CW);
+            c.clipPath(clip);
+            p.setColor(0xFF1E2128);
+            p.setAlpha(al);
+            c.drawRect(r, p);
+            RectF cv = new RectF(r.left, r.top, r.left + r.height(), r.bottom);
+            String url = Musik.cover(e, 400);
+            Bitmap b = url != null ? bilder.sofort(url) : null;
+            if (b == null && url != null && !bilder.fehlgeschlagen(url)) bilder.laden(url, (u, bm) -> invalidate());
+            if (b != null) {
+                BitmapShader sh = new BitmapShader(b, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                float sk = Math.max(cv.width() / b.getWidth(), cv.height() / b.getHeight());
+                m.setScale(sk, sk);
+                m.postTranslate(cv.left + (cv.width() - b.getWidth() * sk) / 2f, cv.top + (cv.height() - b.getHeight() * sk) / 2f);
+                sh.setLocalMatrix(m);
+                p.setShader(sh);
+                p.setAlpha(al);
+                c.drawRect(cv, p);
+                p.setShader(null);
+            } else {
+                p.setColor(0x14FFFFFF);
+                p.setAlpha(Math.round(0x14 * al / 255f));
+                c.drawRect(cv, p);
+                klein.setTextSize(70 * zoom);
+                klein.setAlpha(Math.round(0x4D * al / 255f));
+                c.drawText("♪", cv.centerX() - klein.measureText("♪") / 2, cv.centerY() + 24 * zoom, klein);
+            }
+            c.restore();
+            float tx = cv.right + 16 * zoom, tb = r.right - tx - 14 * zoom;
+            karte.setTextSize(25 * zoom);
+            karte.setAlpha(al);
+            StaticLayout sl = umbruch(e.optString("Name"), karte, (int) tb, 3);
+            c.save();
+            c.translate(tx, r.top + 18 * zoom);
+            sl.draw(c);
+            c.restore();
+            klein.setTextSize(20 * zoom);
+            klein.setAlpha(Math.round(0xA6 * al / 255f));
+            c.drawText(kuerzen(Musik.interpret(e), klein, tb), tx, r.top + 18 * zoom + sl.getHeight() + 26 * zoom, klein);
+            if (e.optBoolean("_karaoke")) {
+                klein.setTextSize(17 * zoom);
+                float pw = klein.measureText("Karaoke") + 24 * zoom;
+                RectF pill = new RectF(tx, r.bottom - 46 * zoom, tx + pw, r.bottom - 16 * zoom);
+                p.setColor(0x33F2B705);
+                p.setAlpha(Math.round(0x33 * al / 255f));
+                c.drawRoundRect(pill, 15 * zoom, 15 * zoom, p);
+                klein.setColor(GELB);
+                klein.setAlpha(al);
+                c.drawText("Karaoke", tx + 12 * zoom, pill.bottom - 9 * zoom, klein);
+                klein.setColor(0xB3FFFFFF);
+            }
+            klein.setTextSize(26);
+            klein.setAlpha(0xB3);
+            karte.setTextSize(26);
+            karte.setAlpha(255);
+        }
+
+        /** Infos oben links für Lieder, Karaoke-Modus und „Alles mischen“. */
+        private void musikInfo(Canvas c, JSONObject e) {
+            String t = typ(e);
+            String kopf, name, zeile, unter = null;
+            int n = e.optInt("ChildCount", 0);
+            if ("Karaoke".equals(t)) {
+                kopf = "MUSIK";
+                name = "Karaoke-Modus";
+                zeile = n > 0 ? n + " Lieder zum Mitsingen  ·  gemischt" : "Die ersten Texte kommen gerade";
+                unter = "Oben die ganze Zeile zum Mitlesen, unten die Zeitspur: Balken zeigen, wann und wie lange gesungen wird, Lücken sind Pausen, gelbe Punkte zählen ein.";
+            } else if ("MusikMix".equals(t)) {
+                kopf = "MUSIK";
+                name = "Alles mischen";
+                zeile = n + " Lieder";
+            } else {
+                kopf = e.optString("_gruppe", "Musik").toUpperCase(java.util.Locale.GERMAN);
+                name = e.optString("Name");
+                StringBuilder sb = new StringBuilder(Musik.interpret(e));
+                String al = e.optString("Album", "");
+                if (!al.isEmpty()) sb.append(sb.length() > 0 ? "  ·  " : "").append(al);
+                int j = e.optInt("ProductionYear", 0);
+                if (j > 0) sb.append(sb.length() > 0 ? "  ·  " : "").append(j);
+                zeile = sb.toString();
+                if (e.optBoolean("_karaoke")) unter = "Mit Karaoke-Text – im Player ▲ drücken.";
+            }
+            meta.setColor(GELB);
+            c.drawText(kopf, LINKS, 196, meta);
+            meta.setColor(0xE6FFFFFF);
+            gross.setTextSize(name.length() > 22 ? 76 : 100);
+            gross.setShadowLayer(Ani.schatten(30), 0, 4, 0x80000000);
+            StaticLayout sl = umbruch(name, gross, 1300, 2);
+            c.save();
+            c.translate(LINKS - 4, 220);
+            sl.draw(c);
+            c.restore();
+            gross.clearShadowLayer();
+            gross.setTextSize(130);
+            float y = 220 + sl.getHeight() + 44;
+            c.drawText(kuerzen(zeile, meta, 1300), LINKS, y, meta);
+            if (unter != null) {
+                StaticLayout u = umbruch(unter, text, 1000, 3);
+                c.save();
+                c.translate(LINKS, y + 24);
+                u.draw(c);
+                c.restore();
+            }
         }
 
         private void kategorieInfo(Canvas c, JSONObject e) {

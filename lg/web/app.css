@@ -1522,3 +1522,21 @@ body {
   object-fit: contain;
   background: #000;
 }
+
+/* ------------------------------------------------------------ Musik und Karaoke (04.11.2026) */
+/* Lied-Karte im Querformat: Cover links, Titel und Interpret rechts (wie am TCL). */
+.karte.k-lied { background: rgba(255, 255, 255, .1); }
+.kl-cover { position: absolute; left: 0; top: 0; width: 198px; height: 198px; background: rgba(255, 255, 255, .08);
+  color: rgba(255, 255, 255, .3); font-size: 80px; line-height: 198px; text-align: center; overflow: hidden; }
+.kl-cover img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }
+.kl-text { position: absolute; left: 214px; right: 14px; top: 22px; }
+.kl-titel { font-size: 25px; font-weight: 700; line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.kl-in { margin-top: 8px; font-size: 20px; color: rgba(255, 255, 255, .65); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kl-mikro { position: absolute; left: 214px; bottom: 16px; padding: 3px 12px; border-radius: 999px; font-size: 17px; font-weight: 700;
+  background: rgba(242, 183, 5, .2); color: #F2B705; }
+.karte.k-karaoke { background: linear-gradient(135deg, #F2B705, #B07F00); color: #1A1400; }
+.karte.k-mix { background: linear-gradient(135deg, #56637A, #242B38); color: #fff; }
+.karte.k-karaoke svg, .karte.k-mix svg { position: absolute; left: 30px; top: 34px; width: 64px; height: 64px; }
+.km-name { position: absolute; left: 30px; right: 20px; top: 112px; font-size: 32px; font-weight: 800; }
+.km-zahl { position: absolute; left: 30px; top: 152px; font-size: 21px; font-weight: 600; opacity: .75; }

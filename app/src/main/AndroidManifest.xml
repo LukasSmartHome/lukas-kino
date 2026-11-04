@@ -63,6 +63,13 @@
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
 
+        <!-- Musik-Player und Karaoke (musik.html vom Pi in einer WebView, nur solange Musik läuft, 04.11.2026). -->
+        <activity
+            android:name=".MusikActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
+
         <!-- Trailer im Vollbild (YouTube-Player in einer WebView, nur solange der Trailer läuft). -->
         <activity
             android:name=".TrailerActivity"

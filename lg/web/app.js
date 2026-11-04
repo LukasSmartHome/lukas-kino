@@ -1926,7 +1926,6 @@
     stapel.length = 0;
     if (b === 'merkliste') startseiten.merkliste = merklisteSeite();
     if (b === 'empfohlen') startseiten.empfohlen = empfohlenSeite();
-    if (b === 'musik') startseiten.musik = musikSeite();
     if (b === 'merkliste' || b === 'empfohlen') familieLaden(); // frisch aus HA nachziehen
     const fertig = startseiten[b];
     bereich = b;
@@ -1940,7 +1939,8 @@
     ansicht = A.LADEN;
     zeichnen();
     try {
-      const s = b === 'serien' ? await serienSeite() : b === 'fotos' ? await fotosSeite() : await filmeSeite();
+      const s = b === 'serien' ? await serienSeite() : b === 'fotos' ? await fotosSeite()
+        : b === 'musik' ? await musikSeite() : await filmeSeite();
       zeigeStart(b, s);
     } catch (e) {
       fehler('Jellyfin ist nicht erreichbar');
@@ -1979,12 +1979,134 @@
     return s;
   }
 
-  /** Musik (Wunsch Lukas 04.11.2026, wie am TCL): eigener Reiter unter Serien. In Jellyfin gibt es noch keine
-   *  Musik-Bibliothek, darum vorerst nur ein Platzhalter. */
-  function musikSeite() {
+  // -------------------------------------------------- Musik und Karaoke (04.11.2026, Wunsch Lukas)
+  // Player und Karaoke stecken in musik.js (gleiche Datei wie am TCL, dort in einer WebView). Hier nur die Reihen.
+  // Karaoke-Modus steht immer ganz oben – auch wenn es noch keine Lieder mit Text gibt (Wunsch Lukas: nicht vergessen).
+
+  let musikSkript = null;
+
+  function musikModul() {
+    if (window.LukasMusik) return Promise.resolve(window.LukasMusik);
+    if (!musikSkript) {
+      musikSkript = new Promise(function (ok, nein) {
+        const sk = document.createElement('script');
+        sk.src = 'musik.js?t=' + Date.now();
+        sk.onload = function () { ok(window.LukasMusik); };
+        sk.onerror = function () { musikSkript = null; nein(new Error('musik.js fehlt')); };
+        document.body.appendChild(sk);
+      });
+    }
+    return musikSkript;
+  }
+
+  function musikOpts() {
+    return { server: SERVER, token: jf.token, benutzer: jf.benutzer, auth: function () { return jf.auth(); } };
+  }
+
+  function musikKopie(e, quelle) { return Object.assign({}, e, { _quelle: quelle }); }
+
+  async function musikSeite() {
     const s = neueSeite('Musik');
-    s.leer = 'Musik kommt bald';
+    let lieder = [];
+    try {
+      const LM = await musikModul();
+      lieder = (await LM.katalog(musikOpts(), true)).lieder;
+    } catch (e) { /* ohne Musik bleibt wenigstens der Karaoke-Eintrag */ }
+    const kar = lieder.filter(function (e) { return e._karaoke; });
+    s.reihen.push(reiheAus('Karaoke', [{ Type: 'Karaoke', Id: '@karaoke', Name: 'Karaoke-Modus', ChildCount: kar.length }]
+      .concat(kar.map(function (e) { return musikKopie(e, 'karaoke'); })), QUER));
+    if (!lieder.length) return s;
+    const gruppen = {};
+    lieder.forEach(function (e) { (gruppen[e._gruppe] = gruppen[e._gruppe] || []).push(e); });
+    Object.keys(gruppen).sort(function (a, b) {
+      if (a === 'Sonstiges') return 1;
+      if (b === 'Sonstiges') return -1;
+      return gruppen[b].length - gruppen[a].length;
+    }).forEach(function (g) {
+      s.reihen.push(reiheAus(g, gruppen[g].map(function (e) { return musikKopie(e, 'genre:' + g); }), QUER));
+    });
+    s.reihen.push(reiheAus('Alle Lieder', [{ Type: 'MusikMix', Id: '@mix', Name: 'Alles mischen', ChildCount: lieder.length }]
+      .concat(lieder.map(function (e) { return musikKopie(e, 'alle'); })), QUER));
     return s;
+  }
+
+  function musikStarten(o) {
+    musikModul().then(function (LM) {
+      LM.oeffnen(Object.assign(musikOpts(), o, { zu: function () { zeichnen(); } }));
+    }, function () { hinweis('Musik lässt sich gerade nicht laden'); });
+  }
+
+  const MUSIK_TASTEN = {};
+  function musikTaste(k) {
+    if (!MUSIK_TASTEN[TASTE.OK]) {
+      MUSIK_TASTEN[TASTE.OK] = 'ok'; MUSIK_TASTEN[TASTE.LINKS] = 'links'; MUSIK_TASTEN[TASTE.RECHTS] = 'rechts';
+      MUSIK_TASTEN[TASTE.HOCH] = 'hoch'; MUSIK_TASTEN[TASTE.RUNTER] = 'runter'; MUSIK_TASTEN[TASTE.ZURUECK] = 'zurueck';
+      MUSIK_TASTEN[MEDIEN.PLAY] = 'play'; MUSIK_TASTEN[MEDIEN.PAUSE] = 'pause'; MUSIK_TASTEN[MEDIEN.STOP] = 'stop';
+      MUSIK_TASTEN[MEDIEN.VOR] = 'vor'; MUSIK_TASTEN[MEDIEN.RUECK] = 'rueck'; MUSIK_TASTEN[MEDIEN.PLAYPAUSE] = 'playpause';
+    }
+    if (MUSIK_TASTEN[k]) window.LukasMusik.taste(MUSIK_TASTEN[k]);
+  }
+
+  function istMusik(e) { const t = typ(e); return t === 'Audio' || t === 'Karaoke' || t === 'MusikMix'; }
+
+  function musikInfo(box, e) {
+    const LM = window.LukasMusik;
+    const t = typ(e);
+    if (t === 'Karaoke') {
+      box.appendChild(div('i-kopf', 'MUSIK'));
+      box.appendChild(div('i-titel', 'Karaoke-Modus'));
+      box.appendChild(div('i-meta', e.ChildCount ? e.ChildCount + ' Lieder zum Mitsingen · gemischt' : 'Die ersten Texte kommen gerade'));
+      box.appendChild(div('i-text', 'Oben steht die ganze Zeile zum Mitlesen, darunter läuft die Zeitspur: Balken zeigen, '
+        + 'wann und wie lange gesungen wird, Lücken sind Pausen, die gelben Punkte zählen ein.'));
+      return;
+    }
+    if (t === 'MusikMix') {
+      box.appendChild(div('i-kopf', 'MUSIK'));
+      box.appendChild(div('i-titel', 'Alles mischen'));
+      box.appendChild(div('i-meta', e.ChildCount + ' Lieder'));
+      return;
+    }
+    box.appendChild(div('i-kopf', (e._gruppe || 'Musik').toUpperCase()));
+    const ti = div('i-titel');
+    const sp = document.createElement('span');
+    sp.textContent = e.Name || '';
+    ti.appendChild(sp);
+    box.appendChild(ti);
+    const teile = [LM ? LM.interpret(e) : '', e.Album, e.ProductionYear > 0 ? String(e.ProductionYear) : '', dauer(e.RunTimeTicks)];
+    box.appendChild(div('i-meta', teile.filter(Boolean).join('  ·  ')));
+    if (e._karaoke) box.appendChild(div('i-text', 'Mit Karaoke-Text – im Player ▲ drücken.'));
+  }
+
+  function musikKarte(c, e) {
+    const t = typ(e);
+    if (t === 'Karaoke' || t === 'MusikMix') {
+      c.classList.add(t === 'Karaoke' ? 'k-karaoke' : 'k-mix');
+      c.innerHTML = (t === 'Karaoke'
+        ? '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">'
+          + '<rect x="17" y="5" width="14" height="24" rx="7"/><path d="M10 23a14 14 0 0 0 28 0M24 37v7M16 44h16"/></svg>'
+        : '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">'
+          + '<path d="M6 14h7c6 0 10 20 16 20h12M35 28l6 6-6 6M6 34h7c2.5 0 4.6-3.4 6.6-7.4M29 14h12M35 8l6 6-6 6"/></svg>')
+        + '<div class="km-name"></div><div class="km-zahl"></div>';
+      c.querySelector('.km-name').textContent = e.Name;
+      const n = e.ChildCount || 0;
+      c.querySelector('.km-zahl').textContent = t === 'Karaoke' ? (n ? n + ' Lieder' : 'kommt bald') : n + ' Lieder';
+      return c;
+    }
+    c.classList.add('k-lied');
+    const url = window.LukasMusik ? window.LukasMusik.bildUrl(e, 400) : '';
+    c.innerHTML = '<div class="kl-cover">♪</div><div class="kl-text"><div class="kl-titel"></div><div class="kl-in"></div></div>'
+      + (e._karaoke ? '<div class="kl-mikro">Karaoke</div>' : '');
+    c.querySelector('.kl-titel').textContent = e.Name || '';
+    c.querySelector('.kl-in').textContent = window.LukasMusik ? window.LukasMusik.interpret(e) : '';
+    if (url) {
+      const img = document.createElement('img');
+      img.alt = '';
+      img.decoding = 'async';
+      img.onerror = function () { if (img.parentNode) img.parentNode.removeChild(img); };
+      img.src = url;
+      c.querySelector('.kl-cover').appendChild(img);
+    }
+    return c;
   }
 
   async function serienSeite() {
@@ -2145,6 +2267,12 @@
     }
     if (typ(e) === 'BoxSet' || typ(e) === 'Gesehen') {
       hintergrundSetzen(null, typ(e) === 'Gesehen' ? '#3E4A5E' : FARBEN[e.Name] || '#444444');
+      return;
+    }
+    if (istMusik(e)) {
+      const LM = window.LukasMusik;
+      hintergrundSetzen(null, typ(e) === 'Karaoke' ? '#9A7404' : typ(e) === 'MusikMix' ? '#3E4A5E'
+        : (LM ? LM.gruppenFarbe(e._gruppe) : '#3E4A5E'));
       return;
     }
     const url = hintergrundUrl(e);
@@ -2538,6 +2666,7 @@
     const t = typ(e), ordner = istOrdner(e);
     const c = div('karte' + (form === QUER ? ' quer' : '') + (ordner ? ' ordner' : ''));
     if (!e) return c;
+    if (istMusik(e)) return musikKarte(c, e);
     if (t === 'Gesehen') {
       c.classList.add('k-gesehen');
       c.innerHTML = '<svg viewBox="0 0 120 80" fill="none"><path d="M14 40Q60 -4 106 40Q60 84 14 40Z" stroke="#fff" stroke-width="5" '
@@ -2624,6 +2753,7 @@
       else if (e) {
         const t = typ(e);
         if (t === 'BoxSet' || t === 'Gesehen') kategorieInfo(box, e);
+        else if (istMusik(e)) musikInfo(box, e);
         else if (istOrdner(e)) ordnerInfo(box, e);
         else if (t === 'Photo' || t === 'Video') fotoInfo(box, e);
         else filmInfo(box, e);
@@ -3052,6 +3182,9 @@
     if (!e) return;
     const t = typ(e);
     if (t === 'BoxSet') kategorieOeffnen(e);
+    else if (t === 'Karaoke') musikStarten({ quelle: 'karaoke', karaoke: true, zufall: true });
+    else if (t === 'MusikMix') musikStarten({ quelle: 'alle', zufall: true });
+    else if (t === 'Audio') musikStarten({ quelle: e._quelle || 'alle', start: e.Id });
     else if (t === 'Gesehen') gesehenOeffnen(e);
     else if (t === 'Series') serieOeffnen(e);
     else if (istOrdner(e)) ordnerOeffnen(e);
@@ -4324,6 +4457,7 @@
     ev.preventDefault();
     ev.stopPropagation();
 
+    if (window.LukasMusik && window.LukasMusik.offen()) return musikTaste(k);
     if (T.offen) return trailerTaste(k);
     if (P.offen) return playerTaste(k);
     if (B.offen) return bewertenTaste(k);

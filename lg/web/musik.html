@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Lukas Kino Musik</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<style>html,body{margin:0;height:100%;background:#07080B;overflow:hidden}</style>
+</head>
+<body>
+<!--
+  Musik-Player und Karaoke für den TCL (MusikActivity zeigt diese Seite vom Pi in einer WebView).
+  Die Zugangsdaten kommen über die Brücke window.LukasKino.daten() aus der App, nicht über die Adresse
+  (sonst stünde der Jellyfin-Schlüssel im Protokoll des kleinen Webservers). Bedienung: Tasten schickt die App
+  als LukasMusik.taste('ok'|'links'|…). Für Tests im Browser gehen auch Adress-Parameter und die Tastatur.
+-->
+<script>
+(function () {
+  var p = {};
+  location.search.replace(/^\?/, '').split('&').forEach(function (kv) {
+    if (!kv) return;
+    var i = kv.indexOf('=');
+    p[decodeURIComponent(i < 0 ? kv : kv.slice(0, i))] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1));
+  });
+  if (window.LukasKino && window.LukasKino.daten) {
+    try {
+      var d = JSON.parse(window.LukasKino.daten());
+      for (var k in d) p[k] = d[k];
+    } catch (e) { /* nur Parameter */ }
+  }
+  function los() {
+    LukasMusik.oeffnen({
+      server: p.server || 'http://192.168.178.44:8096',
+      token: p.token, benutzer: p.user, geraet: p.geraet, geraetName: p.geraetName || 'TCL',
+      quelle: p.quelle || 'alle', start: p.start || null, karaoke: p.karaoke === '1' || p.karaoke === true,
+      zufall: p.zufall === '1' || p.zufall === true,
+      zu: function () { if (window.LukasKino && window.LukasKino.ende) window.LukasKino.ende(); }
+    });
+    if (window.LukasKino && window.LukasKino.bereit) window.LukasKino.bereit();
+  }
+  var s = document.createElement('script');
+  s.src = 'musik.js?t=' + Date.now();
+  s.onload = los;
+  document.body.appendChild(s);
+  var TASTEN = { 13: 'ok', 32: 'ok', 37: 'links', 38: 'hoch', 39: 'rechts', 40: 'runter', 27: 'zurueck', 8: 'zurueck',
+    179: 'playpause', 415: 'play', 19: 'pause', 417: 'vor', 412: 'rueck', 413: 'stop', 461: 'zurueck' };
+  document.addEventListener('keydown', function (ev) {
+    var n = TASTEN[ev.keyCode];
+    if (n && window.LukasMusik && LukasMusik.taste(n)) ev.preventDefault();
+  });
+})();
+</script>
+</body>
+</html>
