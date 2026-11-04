@@ -51,10 +51,12 @@ final class Intro extends FrameLayout implements TextureView.SurfaceTextureListe
     public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int h) {
         if (weg) return;
         try {
-            AssetFileDescriptor fd = getResources().openRawResourceFd(R.raw.lwm_intro);
             mp = new MediaPlayer();
-            mp.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
-            fd.close();
+            if (!eigenesIntro(mp)) {
+                AssetFileDescriptor fd = getResources().openRawResourceFd(R.raw.lwm_intro);
+                mp.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+                fd.close();
+            }
             surface = new Surface(st);
             mp.setSurface(surface);
             mp.setOnPreparedListener(MediaPlayer::start);
@@ -68,6 +70,29 @@ final class Intro extends FrameLayout implements TextureView.SurfaceTextureListe
         } catch (Exception e) {
             Log.w(TAG, "Intro startet nicht", e);
             ausblenden();
+        }
+    }
+
+    /**
+     * Privates Intro (seit 04.11.2026): liegt nur auf dem Fernseher, nicht im öffentlichen Repo, weil Fotos drin sind.
+     * Pfad: /sdcard/Android/data/de.lukas.kino/files/intro.mp4 (per ADB hingelegt). Fehlt die Datei oder ist sie
+     * nicht lesbar, läuft das eingebaute LWM-Intro.
+     */
+    private boolean eigenesIntro(MediaPlayer m) {
+        try {
+            java.io.File dir = getContext().getExternalFilesDir(null);
+            if (dir == null) return false;
+            java.io.File f = new java.io.File(dir, "intro.mp4");
+            if (!f.isFile() || f.length() == 0) return false;
+            m.setDataSource(f.getAbsolutePath());
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Eigenes Intro nicht lesbar, nehme LWM", e);
+            try {
+                m.reset();
+            } catch (Exception ignored) {
+            }
+            return false;
         }
     }
 
