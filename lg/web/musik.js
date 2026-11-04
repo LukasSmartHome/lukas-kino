@@ -1,5 +1,11 @@
 /*
- * Lukas Kino – Musik-Bereich mit Karaoke (seit 04.11.2026, Wunsch Lukas). Version 3 (04.11.2026 abends).
+ * Lukas Kino – Musik-Bereich mit Karaoke (seit 04.11.2026, Wunsch Lukas). Version 4 (04.11.2026 abends).
+ *
+ * Version 4 (Rückmeldung Lukas 04.11. ca. 17 Uhr): Karaoke ohne Zeitspur – nur noch der Satz oben (als HTML, nicht mehr
+ * im Canvas) und die Wellen unten. Wort-Zeiten je Lied nach dem Gesangstempo geschätzt, die Markierung wartet am
+ * Zeilenende, weiche Uhr zwischen den Zeit-Meldungen des Players. Schneller: Hintergrund-Schlieren als winzige Canvas
+ * (statt drei riesiger animierter Ebenen und CSS-Variablen am Wurzelelement), eine einzige Bild-Schleife, Equalizer und
+ * Ken-Burns nur wenn sichtbar, Reihen per transform, Katalog aus dem Zwischenspeicher, kleine Künstlerbilder, kleine Schrift.
  *
  * Der ganze Musik-Bereich steckt in dieser Datei, für beide Fernseher-Arten gleich:
  *  - LG: app.js lädt die Datei nach und ruft LukasMusik.bereich(...) auf, sobald in der Leiste „Musik“ gewählt wird.
@@ -142,8 +148,9 @@
     leiste: false, leistePos: 0,
     audio: null, liste: [], pos: 0, zufall: false, karaokeModus: false, mischQuelle: null,
     text: null, textFuer: null, textCache: {}, gemeldet: null, gezaehlt: false, fehlerZaehler: 0,
-    knopf: 1, ruheTimer: 0,
-    raf: 0, timer: 0, hinweisTimer: 0, el: null, ctx: null
+    knopf: 1, ruheTimer: 0, tasten: 0, katalogRoh: null, katalogText: '',
+    k: { text: null, zeile: -9, modus: '', ai: -1, woerter: [], staende: [] }, uhr: {},
+    raf: 0, tickLetzt: 0, hinweisTimer: 0, el: null, ctx: null
   };
 
   function basis() { return M.o.karaokeBasis || '/karaoke/'; }
@@ -176,7 +183,8 @@
 
   async function jsonVomPi(pfad) {
     try {
-      const r = await fetch(pfad + '?t=' + Date.now());
+      // no-cache: der Fernseher fragt beim Pi nach, ob sich etwas geändert hat (statt mit ?t= jedes Mal alles neu)
+      const r = await fetch(pfad, { cache: 'no-cache' });
       return r.ok ? await r.json() : {};
     } catch (e) {
       return {};
@@ -184,6 +192,72 @@
   }
 
   const FELDER = 'Path,Genres,AlbumArtist,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag,RunTimeTicks,DateCreated,ProductionYear,Album,UserData';
+  const KATALOG_SPEICHER = 'lm_katalog_v1';
+
+  /** Nur die Felder, die die Seite braucht (für den Zwischenspeicher im Fernseher). */
+  function schlank(e) {
+    const t = e.ImageTags && e.ImageTags.Primary;
+    const u = e.UserData || {};
+    return {
+      Id: e.Id, Name: e.Name, Path: dateiname(e), Genres: e.Genres, AlbumArtist: e.AlbumArtist, Artists: e.Artists,
+      ImageTags: t ? { Primary: t } : {}, AlbumId: e.AlbumId, AlbumPrimaryImageTag: e.AlbumPrimaryImageTag,
+      RunTimeTicks: e.RunTimeTicks, DateCreated: e.DateCreated, ProductionYear: e.ProductionYear, Album: e.Album,
+      UserData: { PlayCount: u.PlayCount || 0, IsFavorite: !!u.IsFavorite }
+    };
+  }
+
+  async function katalogHolen() {
+    const geladen = await Promise.all([
+      jf('GET', '/Items?userId=' + M.o.benutzer + '&includeItemTypes=Audio&recursive=true&sortBy=SortName'
+        + '&fields=' + FELDER + '&enableImageTypes=Primary'),
+      jsonVomPi(basis() + 'index.json'), jsonVomPi(musikBasis() + 'kuenstler.json'), jsonVomPi(musikBasis() + 'beliebt.json')]);
+    const alt = M.katalogRoh || {};
+    const roh = { benutzer: M.o.benutzer, items: (geladen[0].Items || []).map(schlank),
+      index: geladen[1] || {}, kuenstler: geladen[2] || {}, beliebt: geladen[3] || {} };
+    // Pi kurz nicht erreichbar -> lieber die Daten vom letzten Mal behalten als Karaoke und Bilder zu verlieren
+    ['index', 'kuenstler', 'beliebt'].forEach(function (k) {
+      if (!Object.keys(roh[k]).length && alt[k] && Object.keys(alt[k]).length) roh[k] = alt[k];
+    });
+    return roh;
+  }
+
+  function katalogMerken(roh, text) {
+    M.katalogRoh = roh;
+    M.katalogText = text;
+    try { localStorage.setItem(KATALOG_SPEICHER, text); } catch (x) { /* zu groß oder kein Speicher: dann eben ohne */ }
+  }
+
+  function aufbereiten(roh) {
+    M.index = roh.index || {};
+    M.kuenstler = roh.kuenstler || {};
+    M.beliebt = roh.beliebt || {};
+    M.nachId = {};
+    // Doppelte (gleicher Titel und Interpret, z. B. mp3 und m4a) nur einmal – lieber die mit Cover bzw. Text
+    const schluessel = {};
+    const lieder = [];
+    (roh.items || []).forEach(function (e) {
+      const k = M.index[dateiname(e)];
+      e._gruppe = gruppe(e);
+      e._karaoke = !!(k && (k.wort || k.lrc));
+      e._sprache = k && k.sprache;
+      e._kuenstler = hauptKuenstler(e);
+      const b = M.beliebt[dateiname(e)];
+      e._rang = (b && b.rank) || 0;
+      const s = normal(e.Name) + '|' + normal(e._kuenstler);
+      const alt = schluessel[s];
+      if (alt !== undefined) {
+        const vorher = lieder[alt];
+        const besser = (e.ImageTags && e.ImageTags.Primary && !(vorher.ImageTags && vorher.ImageTags.Primary)) || (e._karaoke && !vorher._karaoke);
+        if (besser) lieder[alt] = e;
+        return;
+      }
+      schluessel[s] = lieder.length;
+      lieder.push(e);
+    });
+    lieder.forEach(function (e) { M.nachId[e.Id] = e; });
+    M.katalog = { lieder: lieder };
+    return M.katalog;
+  }
 
   async function katalog(o, frisch) {
     if (o) M.o = Object.assign({}, M.o, o);
@@ -191,44 +265,47 @@
     if (M.katalogLaedt) return M.katalogLaedt;
     M.katalogLaedt = (async function () {
       try {
-        const geladen = await Promise.all([
-          jf('GET', '/Items?userId=' + M.o.benutzer + '&includeItemTypes=Audio&recursive=true&sortBy=SortName'
-            + '&fields=' + FELDER + '&enableImageTypes=Primary'),
-          jsonVomPi(basis() + 'index.json'), jsonVomPi(musikBasis() + 'kuenstler.json'), jsonVomPi(musikBasis() + 'beliebt.json')]);
-        M.index = geladen[1] || {};
-        M.kuenstler = geladen[2] || {};
-        M.beliebt = geladen[3] || {};
-        M.nachId = {};
-        // Doppelte (gleicher Titel und Interpret, z. B. mp3 und m4a) nur einmal – lieber die mit Cover bzw. Text
-        const schluessel = {};
-        const lieder = [];
-        (geladen[0].Items || []).forEach(function (e) {
-          const k = M.index[dateiname(e)];
-          e._gruppe = gruppe(e);
-          e._karaoke = !!(k && (k.wort || k.lrc));
-          e._sprache = k && k.sprache;
-          e._kuenstler = hauptKuenstler(e);
-          const b = M.beliebt[dateiname(e)];
-          e._rang = (b && b.rank) || 0;
-          const s = normal(e.Name) + '|' + normal(e._kuenstler);
-          const alt = schluessel[s];
-          if (alt !== undefined) {
-            const vorher = lieder[alt];
-            const besser = (e.ImageTags && e.ImageTags.Primary && !(vorher.ImageTags && vorher.ImageTags.Primary)) || (e._karaoke && !vorher._karaoke);
-            if (besser) lieder[alt] = e;
-            return;
-          }
-          schluessel[s] = lieder.length;
-          lieder.push(e);
-        });
-        lieder.forEach(function (e) { M.nachId[e.Id] = e; });
-        M.katalog = { lieder: lieder };
-        return M.katalog;
+        const roh = await katalogHolen();
+        katalogMerken(roh, JSON.stringify(roh));
+        return aufbereiten(roh);
       } finally {
         M.katalogLaedt = null;
       }
     })();
     return M.katalogLaedt;
+  }
+
+  /** Katalog vom letzten Mal (localStorage): Die Startseite steht sofort, Jellyfin wird danach im Hintergrund gefragt. */
+  function katalogAusSpeicher() {
+    try {
+      const t = localStorage.getItem(KATALOG_SPEICHER);
+      if (!t) return null;
+      const roh = JSON.parse(t);
+      if (!roh || roh.benutzer !== M.o.benutzer || !roh.items || !roh.items.length) return null;
+      M.katalogRoh = roh;
+      M.katalogText = t;
+      return aufbereiten(roh);
+    } catch (x) {
+      return null;
+    }
+  }
+
+  /** Im Hintergrund frisch holen; nur wenn sich etwas geändert hat, die Startseite neu bauen. */
+  function katalogAuffrischen() {
+    if (M.katalogLaedt) return;
+    M.katalogLaedt = katalogHolen().then(function (roh) {
+      const t = JSON.stringify(roh);
+      if (t === M.katalogText) return M.katalog;
+      katalogMerken(roh, t);
+      aufbereiten(roh);
+      // Hat man schon angefangen zu stöbern, nicht unter den Fingern umbauen – dann beim nächsten Zurück zur Startseite
+      if (M.sichtbar && M.sicht === 'start' && !M.tasten && !M.leiste) startAufbauen().catch(function () {});
+      else M.startVeraltet = true;
+      return M.katalog;
+    }).catch(function () { return M.katalog; }).then(function (k) {
+      M.katalogLaedt = null;
+      return k;
+    });
   }
 
   // Wie oft gehört (dieser Fernseher plus Zähler von Jellyfin für dieses Konto)
@@ -252,9 +329,12 @@
     return '';
   }
 
-  function kuenstlerBild(name) {
+  /** Künstlerbild: klein (250 px) für Raster und Kopf, groß (1000 px) nur für die Ruhe-Ansicht im Player. */
+  function kuenstlerBild(name, gross) {
     const k = M.kuenstler[name];
-    return k && k.bild ? musikBasis() + 'kuenstler/' + encodeURIComponent(k.bild) : '';
+    if (!k || !k.bild) return '';
+    if (!gross && k.klein) return musikBasis() + 'kuenstler_klein/' + encodeURIComponent(k.klein);
+    return musikBasis() + 'kuenstler/' + encodeURIComponent(k.bild);
   }
 
   function streamUrl(e) {
@@ -281,24 +361,19 @@
 
   // ------------------------------------------------------------------ Aussehen
 
+  // Schrift: kleine Teilmenge (40 KB statt 580 KB), am LG ist Inter Tight über app.css meist schon da
+  const SCHRIFT_CSS = '@font-face{font-family:"Inter Tight";src:url("' + (window.LUKAS_MUSIK_FONT || 'fonts/InterTight-musik.woff2')
+    + '") format("woff2"),url("fonts/InterTight.ttf") format("truetype");font-weight:100 900}';
+
   const CSS = ''
-    + '@font-face{font-family:"Inter Tight";src:url("' + (window.LUKAS_MUSIK_FONT || 'fonts/InterTight.ttf') + '") format("truetype");font-weight:100 900}'
     + '.lm-w{position:fixed;left:0;top:0;width:100%;height:100%;background:#07080B;z-index:9000;overflow:hidden;font-family:"Inter Tight",system-ui,sans-serif;'
     + 'color:#fff;-webkit-font-smoothing:antialiased;opacity:0;visibility:hidden;transition:opacity .3s,visibility 0s linear .3s}'
     + '.lm-w.an{opacity:1;visibility:visible;transition:opacity .3s}'
     + '.lm-b{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;overflow:hidden}'
     + '.lm-b *{box-sizing:border-box}'
-    // Schlieren im Hintergrund (nur transform -> leicht für den Fernseher)
-    + '.lm-au{position:absolute;left:0;top:0;width:1920px;height:1080px;overflow:hidden}'
-    + '.lm-au i{position:absolute;width:1300px;height:1300px;border-radius:50%;opacity:.34;will-change:transform;transition:background 1.2s}'
-    + '.lm-au i:nth-child(1){left:620px;top:-520px;background:radial-gradient(circle,var(--lm-a1,#F2B705) 0%,transparent 64%);animation:lmA 23s ease-in-out infinite alternate}'
-    + '.lm-au i:nth-child(2){left:-420px;top:380px;background:radial-gradient(circle,var(--lm-a2,#6A3DE8) 0%,transparent 64%);animation:lmB 29s ease-in-out infinite alternate;opacity:.26}'
-    + '.lm-au i:nth-child(3){left:1100px;top:420px;background:radial-gradient(circle,var(--lm-a3,#E8559A) 0%,transparent 62%);animation:lmC 34s ease-in-out infinite alternate;opacity:.22}'
-    + '@keyframes lmA{0%{transform:translate(0,0) scale(1)}50%{transform:translate(-260px,140px) scale(1.15)}100%{transform:translate(180px,60px) scale(.92)}}'
-    + '@keyframes lmB{0%{transform:translate(0,0) scale(1)}50%{transform:translate(380px,-160px) scale(1.2)}100%{transform:translate(120px,-320px) scale(.95)}}'
-    + '@keyframes lmC{0%{transform:translate(0,0) scale(1.05)}50%{transform:translate(-420px,-120px) scale(.9)}100%{transform:translate(-160px,-380px) scale(1.18)}}'
-    + '.lm-leicht .lm-au i,.lm-leicht .lm-amb .bg{animation:none!important}'
-    + '.lm-dk{position:absolute;left:0;top:0;width:1920px;height:1080px;background:linear-gradient(90deg,rgba(7,8,11,.86) 0%,rgba(7,8,11,.55) 60%,rgba(7,8,11,.4) 100%)}'
+    // Schlieren im Hintergrund: winzige Canvas (240x135), hochskaliert – gleiches Bild, ein Bruchteil der Arbeit
+    + '.lm-au{position:absolute;left:0;top:0;width:1920px;height:1080px}'
+    + '.lm-leicht .lm-amb .bg{animation:none!important}'
     + '.lm-v{position:absolute;left:0;top:0;width:1920px;height:1080px;opacity:0;visibility:hidden;transition:opacity .35s,visibility 0s linear .35s}'
     + '.s-start .lm-vs,.s-raster .lm-vr,.s-suche .lm-vq,.s-player .lm-vp,.s-karaoke .lm-vk{opacity:1;visibility:visible;transition:opacity .35s}'
     + '.lm-cov{position:relative;background:linear-gradient(135deg,var(--lm-f,#56637A),#15171C);background-size:cover;background-position:center;overflow:hidden}'
@@ -321,18 +396,20 @@
     + '.lm-k4.an{color:' + GELB + '}'
     + '.lm-ob .f{background:rgba(255,255,255,.95)!important;color:#15171C!important;transform:scale(1.06)}'
     + '.lm-ob .f p+p{color:rgba(21,23,28,.7)}'
+    // Equalizer nur per transform (height hätte jedes Bild das ganze Layout neu gerechnet) und nur, wenn die Leiste zu sehen ist
     + '.lm-eq{display:inline-flex;gap:3px;align-items:flex-end;height:20px;margin-left:12px;vertical-align:-2px}'
-    + '.lm-eq b{width:4px;background:' + GELB + ';border-radius:2px;animation:lmEq .9s ease-in-out infinite}'
+    + '.lm-eq b{width:4px;height:20px;background:' + GELB + ';border-radius:2px;transform-origin:50% 100%;transform:scaleY(.25)}'
+    + '.s-start .lm-eq b,.s-raster .lm-eq b{animation:lmEq .9s ease-in-out infinite}'
     + '.lm-eq b:nth-child(2){animation-delay:-.3s}.lm-eq b:nth-child(3){animation-delay:-.6s}'
-    + '@keyframes lmEq{0%,100%{height:5px}50%{height:20px}}'
-    + '.lm-ps .lm-eq b{animation:none;height:5px}'
+    + '@keyframes lmEq{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}'
+    + '.lm-ps .lm-eq b,.lm-leiste-auf .lm-eq b{animation:none!important}'
     // Startseite
     + '.lm-in{position:absolute;left:110px;top:170px;width:1250px}'
     + '.lm-in .k,.lm-rk .k{margin:0;font-size:26px;font-weight:700;letter-spacing:.12em;color:' + GELB + '}'
     + '.lm-in h1{margin:10px 0 0;font-size:92px;line-height:1.02;font-weight:800;letter-spacing:-.02em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}'
     + '.lm-in .m{margin:16px 0 0;font-size:30px;font-weight:600;color:rgba(255,255,255,.88);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
     + '.lm-in .t{margin:12px 0 0;font-size:27px;line-height:1.35;color:rgba(255,255,255,.72);max-width:1050px}'
-    + '.lm-rh{position:absolute;left:0;width:1920px;height:300px;transition:top .3s cubic-bezier(.2,.8,.2,1),opacity .3s}'
+    + '.lm-rh{position:absolute;left:0;top:0;width:1920px;height:300px;transition:transform .3s cubic-bezier(.2,.8,.2,1),opacity .3s}'
     + '.lm-rh h3{position:absolute;left:110px;top:-50px;margin:0;font-size:30px;font-weight:650;color:rgba(255,255,255,.9)}'
     + '.lm-st{position:absolute;left:110px;top:0;height:198px;transition:transform .28s cubic-bezier(.2,.8,.2,1)}'
     + '.lm-ka{position:absolute;top:0;width:352px;height:198px;border-radius:18px;overflow:hidden;background:rgba(255,255,255,.1);'
@@ -397,7 +474,7 @@
     + '.lm-pn{position:absolute;left:750px;width:1060px;font-size:40px;font-weight:500;color:rgba(255,255,255,.88);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
     + '.lm-pl{position:absolute;left:750px;width:1060px;font-size:30px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
     + '.lm-pb{position:absolute;left:750px;top:640px;width:1060px;height:10px;border-radius:5px;background:rgba(255,255,255,.18)}'
-    + '.lm-pb i{position:absolute;left:0;top:0;height:10px;border-radius:5px;background:' + GELB + '}'
+    + '.lm-pb i{position:absolute;left:0;top:0;width:1060px;height:10px;border-radius:5px;background:' + GELB + ';transform-origin:0 0;transform:scaleX(0)}'
     + '.lm-pz{position:absolute;top:664px;font-size:28px;color:rgba(255,255,255,.75)}'
     + '.lm-pk{position:absolute;left:750px;top:722px;display:flex;align-items:center;gap:20px}'
     + '.lm-pk div{height:84px;min-width:84px;border-radius:42px;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;'
@@ -416,8 +493,9 @@
     // Ruhe-Ansicht im Player: großes Künstlerbild, langsam heranzoomend
     + '.lm-amb{position:absolute;left:0;top:0;width:1920px;height:1080px;opacity:0;transition:opacity 1s;overflow:hidden}'
     + '.lm-ruhe .lm-amb{opacity:1}'
-    + '.lm-amb .bg{position:absolute;left:-60px;top:-60px;width:2040px;height:1200px;background-size:cover;background-position:center 25%;animation:lmKb 40s ease-in-out infinite alternate}'
-    + '.lm-amb .bg.weich{filter:blur(28px);transform:scale(1.15);animation:none}'
+    + '.lm-amb .bg{position:absolute;left:-60px;top:-60px;width:2040px;height:1200px;background-size:cover;background-position:center 25%}'
+    + '.lm-ruhe .lm-amb .bg{animation:lmKb 40s ease-in-out infinite alternate}'
+    + '.lm-amb .bg.weich{filter:blur(28px);transform:scale(1.15);animation:none!important}'
     + '@keyframes lmKb{0%{transform:scale(1) translate(0,0)}100%{transform:scale(1.14) translate(-40px,-20px)}}'
     + '.lm-amb .sch{position:absolute;left:0;top:0;width:1920px;height:1080px;background:linear-gradient(0deg,rgba(7,8,11,.92) 0%,rgba(7,8,11,.35) 45%,rgba(7,8,11,.1) 70%,rgba(7,8,11,.45) 100%)}'
     + '.lm-amb .lm-cov{position:absolute;left:110px;top:640px;width:300px;height:300px;border-radius:24px;box-shadow:0 24px 70px rgba(0,0,0,.7)}'
@@ -425,7 +503,7 @@
     + 'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-shadow:0 4px 30px rgba(0,0,0,.5)}'
     + '.lm-amb p{position:absolute;left:460px;top:874px;margin:0;font-size:40px;color:rgba(255,255,255,.85);text-shadow:0 2px 16px rgba(0,0,0,.6)}'
     + '.lm-amb .lb{position:absolute;left:110px;top:1000px;width:1700px;height:6px;border-radius:3px;background:rgba(255,255,255,.2)}'
-    + '.lm-amb .lb i{position:absolute;left:0;top:0;height:6px;border-radius:3px;background:' + GELB + '}'
+    + '.lm-amb .lb i{position:absolute;left:0;top:0;width:1700px;height:6px;border-radius:3px;background:' + GELB + ';transform-origin:0 0;transform:scaleX(0)}'
     + '.lm-ht{position:absolute;right:110px;top:66px;font-size:24px;color:rgba(255,255,255,.55);text-align:right}'
     + '.lm-ht b{color:#fff;font-weight:700;padding:2px 10px;border-radius:8px;background:rgba(255,255,255,.12);margin:0 4px}'
     // Karaoke
@@ -433,14 +511,40 @@
     + '.lm-kp .lm-cov{width:96px;height:96px;border-radius:18px;flex:none}'
     + '.lm-kp p{margin:0;white-space:nowrap;max-width:1200px;overflow:hidden;text-overflow:ellipsis}'
     + '.lm-kp p:first-of-type{font-size:40px;font-weight:800}.lm-kp p:last-of-type{font-size:28px;color:rgba(255,255,255,.7)}'
-    + '.lm-cn{position:absolute;left:0;top:0;width:1920px;height:1080px}'
+    // Wellen unten (kleine Canvas nur für den Streifen), Satz oben als HTML: nur das gerade gesungene Wort wird je Bild neu gemalt
+    + '.lm-wl{position:absolute;left:0;top:' + 700 + 'px;width:1920px;height:240px}'
+    + '.lm-ki{position:absolute;left:0;top:196px;width:1920px;height:150px;text-align:center;opacity:0;transition:opacity .25s}'
+    + '.k-warte .lm-ki{opacity:1}'
+    + '.lm-ki p{margin:0;line-height:150px;font-size:34px;font-weight:600;color:rgba(255,255,255,.6)}'
+    + '.lm-ki .z{position:absolute;left:894px;top:9px;width:132px;height:132px;border-radius:66px;background:rgba(242,183,5,.16);display:none}'
+    + '.lm-ki .z b{display:block;line-height:132px;font-size:80px;font-weight:800;color:' + GELB + '}'
+    + '.k-zahl .lm-ki .z{display:block}.k-zahl .lm-ki p{display:none}'
+    + '.lm-ki .z.puls{animation:lmPuls 1s ease-out}'
+    + '@keyframes lmPuls{0%{transform:scale(1.14)}100%{transform:scale(1)}}'
+    + '.lm-kz{position:absolute;left:140px;width:1640px;text-align:center;font-weight:700}'
+    + '.lm-kz.a{top:330px;font-size:72px;line-height:1.22;color:rgba(255,255,255,.95)}'
+    + '.lm-kz.a.warte{color:rgba(255,255,255,.72)}'
+    + '.lm-kz.n{top:460px;font-size:46px;line-height:1.25;color:rgba(255,255,255,.5)}'
+    + '.lm-kz .w{position:relative;display:inline-block;white-space:nowrap}'
+    + '.lm-kz .w i{position:absolute;left:0;top:0;font-style:normal;white-space:nowrap;color:' + GELB + ';'
+    + '-webkit-clip-path:inset(0 100% 0 -4%);clip-path:inset(0 100% 0 -4%)}'
+    + '.lm-kz .w.l i{text-shadow:0 0 18px rgba(242,183,5,.6)}'
+    + '.lm-kz .w.v i{-webkit-clip-path:none;clip-path:none}'
+    + '.lm-kz.neu{animation:lmZe .32s cubic-bezier(.2,.8,.2,1)}'
+    + '@keyframes lmZe{0%{opacity:0;transform:translate3d(0,24px,0)}100%{opacity:1;transform:none}}'
+    + '.lm-kl{position:absolute;left:0;top:400px;width:1920px;text-align:center;font-size:46px;font-weight:600;color:rgba(255,255,255,.75)}'
+    + '.lm-kg{position:absolute;right:110px;top:950px;font-size:22px;font-weight:500;color:rgba(255,255,255,.35);display:none}'
+    + '.k-geschaetzt .lm-kg{display:block}'
+    + '.lm-kf{position:absolute;left:110px;top:1000px;width:1700px;height:8px;border-radius:4px;background:rgba(255,255,255,.16);overflow:hidden}'
+    + '.lm-kf i{position:absolute;left:0;top:0;width:1700px;height:8px;border-radius:4px;background:' + GELB + ';transform-origin:0 0;transform:scaleX(0)}'
+    + '.lm-kt{position:absolute;top:1022px;font-size:26px;font-weight:500;color:rgba(255,255,255,.7)}'
     // eigene Leiste (TCL)
     + '.lm-ld{position:absolute;left:0;top:0;width:1920px;height:1080px;background:#000;opacity:0;transition:opacity .3s;pointer-events:none}'
     + '.lm-leiste-auf .lm-ld{opacity:.45}'
     + '.lm-le{position:absolute;left:40px;top:40px;width:420px;height:1000px;border-radius:48px;background:rgba(36,38,46,.94);'
     + 'box-shadow:0 30px 80px rgba(0,0,0,.5);transform:translate3d(-480px,0,0);opacity:0;transition:transform .38s cubic-bezier(.2,.8,.2,1),opacity .25s}'
     + '.lm-leiste-auf .lm-le{transform:none;opacity:1}'
-    + '.lm-le .pil{position:absolute;left:22px;right:22px;height:80px;border-radius:40px;background:rgba(255,255,255,.95);transition:top .28s cubic-bezier(.2,.8,.2,1)}'
+    + '.lm-le .pil{position:absolute;left:22px;right:22px;top:0;height:80px;border-radius:40px;background:rgba(255,255,255,.95);transition:transform .28s cubic-bezier(.2,.8,.2,1)}'
     + '.lm-le .ein{position:absolute;left:0;right:0;height:80px;color:#fff;transition:color .2s}'
     + '.lm-le .ein.f{color:#15171C}'
     + '.lm-le .ein svg{position:absolute;left:52px;top:20px;width:40px;height:40px}'
@@ -455,12 +559,18 @@
   function bauen() {
     if (M.el) return;
     const st = document.createElement('style');
-    st.textContent = CSS;
+    // Am LG hat app.css die Schrift schon geladen -> nicht noch einmal laden (check() hilft nicht: ohne @font-face sagt es auch „ja“)
+    let schriftDa = false;
+    try {
+      document.fonts.forEach(function (f) { if (/Inter Tight/.test(f.family) && f.status === 'loaded') schriftDa = true; });
+    } catch (x) { /* egal */ }
+    if (window.LUKAS_MUSIK_FONT) schriftDa = false;
+    st.textContent = (schriftDa ? '' : SCHRIFT_CSS) + CSS;
     document.head.appendChild(st);
     const w = document.createElement('div');
     w.className = 'lm-w s-start';
     w.innerHTML = '<div class="lm-b">'
-      + '<div class="lm-au"><i></i><i></i><i></i></div><div class="lm-dk"></div>'
+      + '<canvas class="lm-au" width="' + AURA.w + '" height="' + AURA.h + '"></canvas>'
       + '<div class="lm-v lm-vs"><div class="lm-in"></div><div class="lm-rs"></div></div>'
       + '<div class="lm-v lm-vr"><div class="lm-rk"></div><div class="lm-gi"></div></div>'
       + '<div class="lm-v lm-vq"><div class="lm-sf">' + svg(SYM.lupe) + '<span class="sx"></span></div><div class="lm-ta"></div>'
@@ -470,8 +580,12 @@
       + '<div class="lm-pa"></div><div class="lm-pt"></div><div class="lm-pn"></div><div class="lm-pl"></div>'
       + '<div class="lm-pb"><i></i></div><div class="lm-pz" style="left:750px"></div><div class="lm-pz" style="right:110px"></div>'
       + '<div class="lm-pk"></div><div class="lm-nx"><h3>ALS NÄCHSTES</h3><div class="lm-nr"></div></div></div></div>'
-      + '<div class="lm-v lm-vk"><canvas class="lm-cn" width="1920" height="1080"></canvas>'
-      + '<div class="lm-kp">' + coverHtml() + '<div><p></p><p></p></div></div><div class="lm-ht lm-kh"></div></div>'
+      + '<div class="lm-v lm-vk"><canvas class="lm-wl" width="1920" height="240"></canvas>'
+      + '<div class="lm-kp">' + coverHtml() + '<div><p></p><p></p></div></div><div class="lm-ht lm-kh"></div>'
+      + '<div class="lm-ki"><div class="z"><b></b></div><p></p></div>'
+      + '<div class="lm-kz a"></div><div class="lm-kz n"></div><div class="lm-kl"></div>'
+      + '<div class="lm-kg">Zeiten pro Zeile, Wörter nach dem Gesangstempo geschätzt</div>'
+      + '<div class="lm-kf"><i></i></div><div class="lm-kt" style="left:110px"></div><div class="lm-kt" style="right:110px"></div></div>'
       + '<div class="lm-ob"><div class="lm-lu">' + svg(SYM.lupe) + 'Lieder suchen</div>'
       + '<div class="lm-mi">' + coverHtml() + '<div><p></p><p></p></div></div>'
       + '<div class="lm-kn lm-k1">' + svg(SYM.zurueck) + '</div><div class="lm-kn lm-k2">' + svg(SYM.pause) + '</div>'
@@ -487,11 +601,16 @@
       ambBg: q('.lm-amb .bg'), ambCov: q('.lm-amb .lm-cov'), ambT: q('.lm-amb h2'), ambI: q('.lm-amb p'), ambB: q('.lm-amb .lb i'),
       pc: q('.lm-pc'), pa: q('.lm-pa'), pt: q('.lm-pt'), pn: q('.lm-pn'), pl: q('.lm-pl'), pb: q('.lm-pb i'),
       pz1: w.querySelectorAll('.lm-pz')[0], pz2: w.querySelectorAll('.lm-pz')[1], pk: q('.lm-pk'), nr: q('.lm-nr'),
-      cn: q('.lm-cn'), kpCov: q('.lm-kp .lm-cov'), kpT: q('.lm-kp p'), kpI: w.querySelectorAll('.lm-kp p')[1], kh: q('.lm-kh'),
+      au: q('.lm-au'), wl: q('.lm-wl'), vk: q('.lm-vk'),
+      ki: q('.lm-ki'), kiZ: q('.lm-ki .z'), kiZahl: q('.lm-ki .z b'), kiP: q('.lm-ki p'),
+      kzA: q('.lm-kz.a'), kzN: q('.lm-kz.n'), kl: q('.lm-kl'), kf: q('.lm-kf i'),
+      kt1: w.querySelectorAll('.lm-kt')[0], kt2: w.querySelectorAll('.lm-kt')[1],
+      kpCov: q('.lm-kp .lm-cov'), kpT: q('.lm-kp p'), kpI: w.querySelectorAll('.lm-kp p')[1], kh: q('.lm-kh'),
       lu: q('.lm-lu'), mi: q('.lm-mi'), miCov: q('.lm-mi .lm-cov'), miT: q('.lm-mi p'), miI: w.querySelectorAll('.lm-mi p')[1],
       k1: q('.lm-k1'), k2: q('.lm-k2'), k3: q('.lm-k3'), k4: q('.lm-k4'), le: q('.lm-le'), hw: q('.lm-hw')
     };
-    M.ctx = M.el.cn.getContext('2d');
+    M.ctx = M.el.wl.getContext('2d');
+    AURA.ctx = M.el.au.getContext('2d', { alpha: false });
     tastaturBauen();
     window.addEventListener('resize', passen);
     passen();
@@ -512,12 +631,91 @@
     M.hinweisTimer = setTimeout(function () { M.el.hw.classList.remove('an'); }, ms || 2200);
   }
 
+  // ------------------------------------------------------------------ Schlieren (Aura) im Hintergrund
+  // Früher drei 1300-px-Kreise mit CSS-Animation und CSS-Variablen am Wurzelelement: jede Farbänderung (bei jedem
+  // Tastendruck) hat alle Stile neu berechnet, und drei riesige halbdurchsichtige Ebenen liefen dauernd übereinander.
+  // Jetzt dasselbe Bild in einer 240x135-Canvas, ca. 25 Bilder pro Sekunde, Farben werden in JS übergeblendet.
+
+  function rgb(h) {
+    const n = parseInt(String(h || '#000').replace('#', ''), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function auraFarben(farbe) {
+    farbe = farbe || GELB;
+    return [rgb(farbe), rgb(farbe === GELB ? '#E8559A' : GELB), rgb(farbe === '#6A3DE8' ? '#1592C4' : '#6A3DE8')];
+  }
+
+  // Position und Größe wie die alten Kreise (left, top, Deckkraft, Dauer, Ende des Verlaufs, Wegpunkte [dx, dy, scale])
+  const AURA = {
+    w: 240, h: 135, ctx: null, letzt: 0, ueberblenden: 0, einmal: true,
+    jetzt: auraFarben(GELB), von: auraFarben(GELB), ziel: auraFarben(GELB),
+    kreise: [
+      { x: 620, y: -520, a: 0.34, d: 23, stop: 0.64, weg: [[0, 0, 1], [-260, 140, 1.15], [180, 60, 0.92]] },
+      { x: -420, y: 380, a: 0.26, d: 29, stop: 0.64, weg: [[0, 0, 1], [380, -160, 1.2], [120, -320, 0.95]] },
+      { x: 1100, y: 420, a: 0.22, d: 34, stop: 0.62, weg: [[0, 0, 1.05], [-420, -120, 0.9], [-160, -380, 1.18]] }
+    ]
+  };
+
   function stimmung(farbe) {
-    if (!M.el) return;
-    const s = M.el.w.style;
-    s.setProperty('--lm-a1', farbe || GELB);
-    s.setProperty('--lm-a2', farbe === GELB ? '#E8559A' : GELB);
-    s.setProperty('--lm-a3', farbe === '#6A3DE8' ? '#1592C4' : '#6A3DE8');
+    const z = auraFarben(farbe);
+    if (z.join() === AURA.ziel.join()) return;
+    AURA.von = AURA.jetzt.map(function (c) { return c.slice(); });
+    AURA.ziel = z;
+    AURA.ueberblenden = performance.now();
+    schleife();
+  }
+
+  function weich(u) { return u * u * (3 - 2 * u); }
+
+  function auraZeichnen(ms) {
+    const c = AURA.ctx;
+    if (!c) return;
+    // Farben überblenden (1,2 s wie vorher die CSS-Transition)
+    if (AURA.ueberblenden) {
+      const f = Math.min(1, (ms - AURA.ueberblenden) / 1200);
+      AURA.jetzt = AURA.ziel.map(function (z, i) {
+        return z.map(function (v, k) { return Math.round(AURA.von[i][k] + (v - AURA.von[i][k]) * weich(f)); });
+      });
+      if (f >= 1) AURA.ueberblenden = 0;
+    }
+    const s = ms / 1000;
+    c.setTransform(AURA.w / STAGE_W, 0, 0, AURA.h / STAGE_H, 0, 0);
+    c.globalAlpha = 1;
+    c.fillStyle = '#07080B';
+    c.fillRect(0, 0, STAGE_W, STAGE_H);
+    AURA.kreise.forEach(function (k, i) {
+      // hin und zurück (alternate), je Abschnitt weich wie ease-in-out
+      let p = (M.o.leicht ? 0 : s) / k.d;
+      const runde = Math.floor(p);
+      p -= runde;
+      if (runde % 2) p = 1 - p;
+      const a = p < 0.5 ? k.weg[0] : k.weg[1], b = p < 0.5 ? k.weg[1] : k.weg[2];
+      const u = weich(p < 0.5 ? p * 2 : (p - 0.5) * 2);
+      const dx = a[0] + (b[0] - a[0]) * u, dy = a[1] + (b[1] - a[1]) * u, sc = a[2] + (b[2] - a[2]) * u;
+      const cx = k.x + 650 + dx, cy = k.y + 650 + dy, r = 919 * sc;
+      const f = AURA.jetzt[i];
+      const g = c.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, 'rgba(' + f[0] + ',' + f[1] + ',' + f[2] + ',' + k.a + ')');
+      g.addColorStop(k.stop, 'rgba(' + f[0] + ',' + f[1] + ',' + f[2] + ',0)');
+      c.fillStyle = g;
+      c.fillRect(Math.max(0, cx - r), Math.max(0, cy - r), Math.min(STAGE_W, cx + r) - Math.max(0, cx - r), Math.min(STAGE_H, cy + r) - Math.max(0, cy - r));
+    });
+    // Abdunkeln nach links (früher eigene Ebene .lm-dk)
+    const d = c.createLinearGradient(0, 0, STAGE_W, 0);
+    d.addColorStop(0, 'rgba(7,8,11,.86)');
+    d.addColorStop(0.6, 'rgba(7,8,11,.55)');
+    d.addColorStop(1, 'rgba(7,8,11,.4)');
+    c.fillStyle = d;
+    c.fillRect(0, 0, STAGE_W, STAGE_H);
+  }
+
+  /** Muss die Aura gerade laufen? Nicht hinter der Ruhe-Ansicht (Künstlerbild deckt alles) und im leichten Modus nur beim Farbwechsel. */
+  function auraLaeuft() {
+    if (!AURA.ctx) return false;
+    if (AURA.ueberblenden || AURA.einmal) return true;
+    if (M.o.leicht) return false;
+    return !(M.sicht === 'player' && M.el.w.classList.contains('lm-ruhe'));
   }
 
   function sichtSetzen(s) {
@@ -633,7 +831,11 @@
     }
     M.reihen.forEach(function (r, i) {
       const d = i - M.akt;
-      r.el.style.top = (580 + d * 300) + 'px';
+      const y = (580 + d * 300) + 'px';
+      if (r.el._y !== y) {
+        r.el._y = y;
+        r.el.style.transform = 'translate3d(0,' + y + ',0)';
+      }
       r.el.style.opacity = d < 0 ? '0' : d === 0 ? '1' : d === 1 ? '.55' : '0';
       r.st.style.transform = 'translate3d(' + (-r.fokus * (KW + ABST)) + 'px,0,0)';
       r.karten.forEach(function (k, j) {
@@ -655,7 +857,7 @@
     if (!e) html = '<p class="k">MUSIK</p><h1>Noch keine Musik</h1><p class="m">Lege Lieder in den Ordner musik auf dem Pi.</p>';
     else if (r.sonder) {
       const texte = {
-        karaoke: 'Mitsingen wie im Club: oben die ganze Zeile zum Mitlesen, unten die Zeitspur. Du wählst gleich, was gesungen wird – alles, Hits, Deutsch, Rock …',
+        karaoke: 'Mitsingen wie im Club: die ganze Zeile zum Mitlesen, das gerade gesungene Wort leuchtet gelb, darunter schon die nächste. Du wählst gleich, was gesungen wird – alles, Hits, Deutsch, Rock …',
         fav: 'Alle Lieder, die du mit dem Herz markiert hast – nur für dein Profil.',
         alle: 'Alle Lieder als große Übersicht zum Stöbern.',
         mix: 'Einfach laufen lassen – alles bunt gemischt, ohne Wiederholungen.',
@@ -735,15 +937,20 @@
     if (M.kopf >= M.kopfZiele.length) M.kopf = M.kopfZiele.length - 1;
     [M.el.mi, M.el.k1, M.el.k2, M.el.k3, M.el.k4].forEach(function (x) { x.classList.toggle('da', da); });
     if (da) {
+      // nur anfassen, was sich geändert hat (sonst startet der Equalizer bei jedem Tastendruck neu)
       if (M.el.mi._id !== e.Id) {
         M.el.mi._id = e.Id;
         coverSetzen(M.el.miCov, e, 120);
+        M.el.miT.innerHTML = esc(e.Name) + '<span class="lm-eq"><b></b><b></b><b></b></span>';
+        M.el.miI.textContent = interpret(e);
       }
-      M.el.miT.innerHTML = esc(e.Name) + '<span class="lm-eq"><b></b><b></b><b></b></span>';
-      M.el.miI.textContent = interpret(e);
-      M.el.k2.innerHTML = svg(M.audio.paused ? SYM.play : SYM.pause);
-      M.el.k4.innerHTML = svg(geliked(e) ? SYM.herzVoll : SYM.herz);
-      M.el.k4.classList.toggle('an', geliked(e));
+      const knopfStand = (M.audio.paused ? 'p' : 's') + (geliked(e) ? 'h' : '');
+      if (M.el.k2._stand !== knopfStand) {
+        M.el.k2._stand = knopfStand;
+        M.el.k2.innerHTML = svg(M.audio.paused ? SYM.play : SYM.pause);
+        M.el.k4.innerHTML = svg(geliked(e) ? SYM.herzVoll : SYM.herz);
+        M.el.k4.classList.toggle('an', geliked(e));
+      }
     }
     const ziele = { lupe: M.el.lu, mini: M.el.mi, zurueck: M.el.k1, pause: M.el.k2, vor: M.el.k3, herz: M.el.k4 };
     Object.keys(ziele).forEach(function (k) {
@@ -1192,19 +1399,25 @@
     return 28 + 84 * i + (i >= apps ? 24 : 0);
   }
 
+  /** Leiste einmal bauen, danach nur Pille verschieben (transform) und Markierung umsetzen. */
   function leisteZeichnen() {
-    const namen = M.o.leisteNamen || [];
-    const apps = M.o.apps || 4;
-    const symbole = [SYM.lupe, SYM.film, SYM.serie, SYM.note, SYM.merk, SYM.stern, SYM.foto];
-    let html = '<div class="pil" style="top:' + leisteTop(M.leistePos) + 'px"></div>'
-      + '<div class="lin" style="top:' + (leisteTop(apps) - 13) + 'px"></div>';
-    namen.forEach(function (n, i) {
-      const s = i < apps ? SYM.app : (symbole[i - apps] || SYM.note);
-      html += '<div class="ein' + (i === M.leistePos ? ' f' : '') + '" style="top:' + leisteTop(i) + 'px">' + svg(s)
-        + '<span>' + esc(n) + '</span></div>';
-    });
-    if (M.o.musikPos != null) html += '<div class="pu" style="top:' + (leisteTop(M.o.musikPos) + 33) + 'px"></div>';
-    M.el.le.innerHTML = html;
+    const le = M.el.le;
+    if (!le._pil) {
+      const namen = M.o.leisteNamen || [];
+      const apps = M.o.apps || 4;
+      const symbole = [SYM.lupe, SYM.film, SYM.serie, SYM.note, SYM.merk, SYM.stern, SYM.foto];
+      let html = '<div class="pil"></div><div class="lin" style="top:' + (leisteTop(apps) - 13) + 'px"></div>';
+      namen.forEach(function (n, i) {
+        const s = i < apps ? SYM.app : (symbole[i - apps] || SYM.note);
+        html += '<div class="ein" style="top:' + leisteTop(i) + 'px">' + svg(s) + '<span>' + esc(n) + '</span></div>';
+      });
+      if (M.o.musikPos != null) html += '<div class="pu" style="top:' + (leisteTop(M.o.musikPos) + 33) + 'px"></div>';
+      le.innerHTML = html;
+      le._pil = le.querySelector('.pil');
+      le._ein = le.querySelectorAll('.ein');
+    }
+    le._pil.style.transform = 'translate3d(0,' + leisteTop(M.leistePos) + 'px,0)';
+    Array.prototype.forEach.call(le._ein, function (d, i) { d.classList.toggle('f', i === M.leistePos); });
   }
 
   function leisteTaste(n) {
@@ -1472,7 +1685,7 @@
     M.el.ambT.textContent = e.Name || '';
     M.el.ambI.textContent = interpret(e);
     // Ruhe-Ansicht: Künstlerbild, sonst das Cover ganz unscharf
-    const kb = kuenstlerBild(e._kuenstler);
+    const kb = kuenstlerBild(e._kuenstler, true);
     const bg = M.el.ambBg;
     if (kb) {
       bg.className = 'bg';
@@ -1607,13 +1820,61 @@
 
   // ------------------------------------------------------------------ Texte
 
-  function silben(w) {
-    const m = w.toLowerCase().match(/[aeiouyäöüàáâéèêíìîóòôúùû]+/g);
+  /** Silben grob zählen (Vokalgruppen). Englisch: stummes e und -es/-ed am Ende („make“, „times“, „loved“) nicht mitzählen. */
+  function silben(w, en) {
+    let x = String(w || '').toLowerCase().replace(/[^a-zäöüßàáâéèêíìîóòôúùû]/g, '');
+    if (!x) return 1;
+    if (en && x.length > 3) x = x.replace(/(?:[^laeiouy]es|[^laeiouy]ed|[^laeiouy]e)$/, '').replace(/^y/, '');
+    const m = x.match(/[aeiouyäöüàáâéèêíìîóòôúùû]+/g);
     return Math.max(1, m ? m.length : 1);
   }
 
+  /**
+   * Gesangstempo eines Liedes in Sekunden pro Silbe. Die Zeit bis zur nächsten Zeile enthält fast immer noch Atmen oder
+   * eine Pause – auch in dichten Strophen. Darum zählen nur die dichtesten Zeilen (10-%-Wert), davon 85 %.
+   * Rap landet so bei ca. 0,12, Pop bei 0,2 bis 0,28, Balladen bei höchstens 0,36.
+   */
+  function tempo(zeilen) {
+    const r = [];
+    zeilen.forEach(function (z) {
+      const platz = z.bis - z.s;
+      if (z.sil >= 4 && platz > 0.8 && platz < 12) r.push(platz / z.sil);
+    });
+    if (r.length < 4) return 0.26;
+    r.sort(function (a, b) { return a - b; });
+    return Math.max(0.11, Math.min(0.36, r[Math.floor(r.length * 0.1)] * 0.85));
+  }
+
+  /**
+   * Wörter einer Zeile verteilen: so lange, wie das Lied für so viele Silben braucht – nicht mehr bis zur nächsten Zeile
+   * (genau das hinkte vorher hinterher: halber Satz gelb, obwohl er schon gesungen war). Ist der Platz bis zur nächsten
+   * Zeile kaum größer, wird durchgesungen und der ganze Platz genutzt.
+   */
+  function woerterVerteilen(z, sek) {
+    const platz = Math.max(0.4, z.bis - z.s - 0.12);
+    const schaetzung = z.sil * sek + 0.25;
+    const dauer = platz <= schaetzung * 1.2 ? platz : schaetzung;
+    const gew = z.sils.map(function (s, k) { return s + 0.3 + (k === z.sils.length - 1 ? 0.35 : 0); });
+    const summe = gew.reduce(function (a, b) { return a + b; }, 0);
+    let t = z.s;
+    z.w = z.woerter.map(function (wort, k) {
+      const d = dauer * gew[k] / summe;
+      const w = { s: t, e: t + d * 0.92, t: wort };
+      t += d;
+      return w;
+    });
+  }
+
+  /** Wie lange eine Zeile stehen bleibt: Ist bis zur nächsten kaum Luft, wartet sie fertig gelb; sonst danach Pause/Count-in. */
+  function endenSetzen(Z) {
+    Z.forEach(function (z) {
+      z.e = z.w[z.w.length - 1].e;
+      z.ende = z.bis - z.e <= 4 ? z.bis : z.e + 2.5;
+    });
+  }
+
   /** LRC lesen: [mm:ss.xx]Text, auch mehrere Zeitstempel pro Zeile und <mm:ss.xx>Wort (Enhanced LRC). */
-  function lrcLesen(roh) {
+  function lrcLesen(roh, en) {
     const zeilen = [];
     const zeitRe = /\[(\d+):(\d+(?:\.\d+)?)\]/g;
     roh.split(/\r?\n/).forEach(function (l) {
@@ -1630,45 +1891,52 @@
     let geschaetzt = false;
     for (let i = 0; i < zeilen.length; i++) {
       const z = zeilen[i];
-      const naechste = zeilen[i + 1] ? zeilen[i + 1].s : z.s + 6;
       const text = z.roh.replace(/<\d+:\d+(?:\.\d+)?>/g, '').replace(/\s+/g, ' ').trim();
       if (!text) continue;
+      // bis = nächster Zeitstempel – auch eine leere Zeile, die markiert in LRC das Ende einer Strophe
+      let bis = z.s + 8;
+      for (let j = i + 1; j < zeilen.length; j++) if (zeilen[j].s > z.s + 0.05) { bis = zeilen[j].s; break; }
+      const woerter = text.split(' ');
+      const sils = woerter.map(function (w) { return silben(w, en); });
+      const x = { s: z.s, bis: bis, text: text, woerter: woerter, sils: sils, sil: sils.reduce(function (a, b) { return a + b; }, 0), w: null };
       const enh = z.roh.match(/<(\d+):(\d+(?:\.\d+)?)>\s*([^<]*)/g);
-      const w = [];
       if (enh && enh.length > 1) {
+        const w = [];
         enh.forEach(function (stk) {
           const mm = stk.match(/<(\d+):(\d+(?:\.\d+)?)>\s*([^<]*)/);
           const s = parseInt(mm[1], 10) * 60 + parseFloat(mm[2]);
           mm[3].trim().split(/\s+/).filter(Boolean).forEach(function (wort) { w.push({ s: s, e: 0, t: wort }); });
         });
-        for (let k = 0; k < w.length; k++) w[k].e = k + 1 < w.length ? Math.max(w[k].s + 0.1, w[k + 1].s - 0.05) : Math.min(naechste - 0.15, w[k].s + 0.8);
-      } else {
-        geschaetzt = true;
-        const woerter = text.split(' ');
-        const sil = woerter.map(silben);
-        const summe = sil.reduce(function (a, b) { return a + b; }, 0);
-        const luecke = naechste - z.s;
-        const dauer = luecke <= 6.5 ? Math.max(0.6, luecke - 0.25) : Math.min(luecke - 0.25, summe * 0.36 + 0.9);
-        const gew = sil.map(function (s, k) { return s + (k === sil.length - 1 ? 0.8 : 0.25); });
-        const gsum = gew.reduce(function (a, b) { return a + b; }, 0);
-        let t = z.s;
-        woerter.forEach(function (wort, k) {
-          const d = dauer * gew[k] / gsum;
-          w.push({ s: t, e: t + d * 0.9, t: wort });
-          t += d;
-        });
+        for (let k = 0; k < w.length; k++) w[k].e = k + 1 < w.length ? Math.max(w[k].s + 0.1, w[k + 1].s - 0.05) : Math.min(bis - 0.15, w[k].s + 0.8);
+        if (w.length) {
+          x.w = w;
+          x.s = w[0].s;
+        }
       }
-      aus.push({ s: w[0].s, e: w[w.length - 1].e, text: text, w: w });
+      if (!x.w) geschaetzt = true;
+      aus.push(x);
     }
-    return aus.length ? { zeilen: aus, geschaetzt: geschaetzt } : null;
+    if (!aus.length) return null;
+    const sek = tempo(aus);
+    aus.forEach(function (z) {
+      if (!z.w) woerterVerteilen(z, sek);
+      delete z.woerter;
+      delete z.sils;
+    });
+    endenSetzen(aus);
+    return { zeilen: aus, geschaetzt: geschaetzt, tempo: sek };
   }
 
+  /** Genaue Wort-Zeiten (später vom PC: WhisperX) – Format zeilen:[{s,e,w:[[start,ende,wort]]}]. */
   function wortLesen(j) {
     const aus = (j.zeilen || []).map(function (z) {
       const w = (z.w || []).map(function (x) { return { s: x[0], e: x[1], t: x[2] }; });
-      return { s: w.length ? w[0].s : z.s, e: w.length ? w[w.length - 1].e : z.e, text: w.map(function (x) { return x.t; }).join(' '), w: w };
+      return { s: w.length ? w[0].s : z.s, text: w.map(function (x) { return x.t; }).join(' '), w: w };
     }).filter(function (z) { return z.w.length; });
-    return aus.length ? { zeilen: aus, geschaetzt: false } : null;
+    if (!aus.length) return null;
+    aus.forEach(function (z, i) { z.bis = aus[i + 1] ? aus[i + 1].s : z.w[z.w.length - 1].e + 3; });
+    endenSetzen(aus);
+    return { zeilen: aus, geschaetzt: false };
   }
 
   async function textLaden(e) {
@@ -1683,91 +1951,51 @@
       }
       if (!t && k && k.lrc) {
         const r = await fetch(basis() + 'lrc/' + encodeURIComponent(k.lrc));
-        if (r.ok) t = lrcLesen(await r.text());
+        if (r.ok) t = lrcLesen(await r.text(), k.sprache === 'en');
       }
     } catch (x) { t = null; }
     M.textCache[e.Id] = t;
     return t;
   }
 
-  // ------------------------------------------------------------------ Karaoke zeichnen
+  // ------------------------------------------------------------------ Karaoke (Satz oben als HTML, Wellen unten)
 
-  const SPUR = { links: 80, rechts: 1840, oben: 712, unten: 928, jetzt: 470, pps: 280, balken: 860, schrift: 778 };
-  const SCHRIFT = '"Inter Tight", system-ui, sans-serif';
-
-  function rund(c, x, y, w, h, r) {
-    r = Math.max(0, Math.min(r, w / 2, h / 2));
-    c.beginPath();
-    c.moveTo(x + r, y);
-    c.arcTo(x + w, y, x + w, y + h, r);
-    c.arcTo(x + w, y + h, x, y + h, r);
-    c.arcTo(x, y + h, x, y, r);
-    c.arcTo(x, y, x + w, y, r);
-    c.closePath();
+  /**
+   * Weiche Uhr: Manche Fernseher melden die Abspielzeit nur alle paar hundert Millisekunden – dann springt die Füllung.
+   * Zwischen den Meldungen läuft die Zeit selbst weiter, bei jeder neuen Meldung wird sanft nachgezogen.
+   */
+  function uhr() {
+    const a = M.audio;
+    if (!a) return 0;
+    const roh = a.currentTime || 0;
+    const jetzt = performance.now();
+    const U = M.uhr;
+    if (a.paused || a.seeking || a.readyState < 3 || U.quelle !== a.src) {
+      U.basis = roh;
+      U.pn = jetzt;
+      U.roh = roh;
+      U.quelle = a.src;
+      return roh;
+    }
+    let t = U.basis + (jetzt - U.pn) / 1000 * (a.playbackRate || 1);
+    const diff = roh - t;
+    if (Math.abs(diff) > 0.35) {
+      U.basis = roh;
+      U.pn = jetzt;
+      t = roh;
+    } else if (roh !== U.roh) U.basis += diff * 0.2;
+    U.roh = roh;
+    return Math.max(0, t);
   }
 
-  function satzLayout(c, z, groesse, oben, maxB) {
-    c.font = '700 ' + groesse + 'px ' + SCHRIFT;
-    const leer = c.measureText(' ').width;
-    const reihen = [[]];
-    let breite = 0;
-    z.w.forEach(function (w) {
-      const b = c.measureText(w.t).width;
-      if (breite > 0 && breite + leer + b > maxB) {
-        reihen.push([]);
-        breite = 0;
-      }
-      reihen[reihen.length - 1].push({ w: w, b: b });
-      breite += (breite > 0 ? leer : 0) + b;
-    });
-    const aus = [];
-    const zh = groesse * 1.22;
-    reihen.forEach(function (r, ri) {
-      const gesamt = r.reduce(function (a, x) { return a + x.b; }, 0) + leer * (r.length - 1);
-      let x = (STAGE_W - gesamt) / 2;
-      r.forEach(function (x2) {
-        aus.push({ w: x2.w, x: x, y: oben + ri * zh, b: x2.b });
-        x += x2.b + leer;
-      });
-    });
-    return { teile: aus, hoehe: reihen.length * zh };
-  }
-
-  function satzZeichnen(c, z, t, groesse, oben, alpha, aktiv) {
-    const l = satzLayout(c, z, groesse, oben, 1640);
-    c.textBaseline = 'alphabetic';
-    l.teile.forEach(function (p) {
-      const w = p.w;
-      if (!aktiv || t < w.s) {
-        c.fillStyle = 'rgba(255,255,255,' + alpha + ')';
-        c.fillText(w.t, p.x, p.y);
-      } else if (t >= w.e) {
-        c.fillStyle = GELB;
-        c.fillText(w.t, p.x, p.y);
-      } else {
-        c.fillStyle = '#fff';
-        c.fillText(w.t, p.x, p.y);
-        const f = Math.max(0, Math.min(1, (t - w.s) / Math.max(0.05, w.e - w.s)));
-        c.save();
-        c.beginPath();
-        c.rect(p.x - 2, p.y - groesse, (p.b + 4) * f, groesse * 1.4);
-        c.clip();
-        c.shadowColor = 'rgba(242,183,5,.7)';
-        c.shadowBlur = 22;
-        c.fillStyle = GELB;
-        c.fillText(w.t, p.x, p.y);
-        c.restore();
-      }
-    });
-    return l.hoehe;
-  }
-
-  function wellenZeichnen(c) {
-    const tt = performance.now() / 1000;
+  /** Die Linien unten, die Lukas so mag – jetzt in einem 240 px hohen Streifen statt über den ganzen Bildschirm. */
+  function wellenZeichnen(c, ms) {
+    const tt = ms / 1000;
+    c.clearRect(0, 0, STAGE_W, 240);
     for (let k = 0; k < 3; k++) {
       c.beginPath();
       for (let x = 0; x <= STAGE_W; x += 24) {
-        const y = SPUR.balken - 40 + Math.sin(x * 0.006 + tt * (0.7 + k * 0.25) + k * 2) * (26 + k * 14)
+        const y = 120 + Math.sin(x * 0.006 + tt * (0.7 + k * 0.25) + k * 2) * (26 + k * 14)
           + Math.sin(x * 0.0021 - tt * 0.4 + k) * 18;
         if (x === 0) c.moveTo(x, y);
         else c.lineTo(x, y);
@@ -1778,232 +2006,221 @@
     }
   }
 
-  /**
-   * Schrift-Reihe über den Balken: je Zeile so klein, dass alle Wörter in die Zeit der Zeile passen
-   * (26 px, höchstens runter bis 15 px). Jedes Wort startet an seinem Balken; ist der Platz knapp,
-   * rutscht es ein Stück nach rechts – nie übereinander. Die Schriftgröße je Zeile wird gemerkt.
-   */
-  function zeilenSchrift(c, z) {
-    if (z._schrift) return z._schrift;
-    c.font = '700 26px ' + SCHRIFT;
-    let summe = 0;
-    z.w.forEach(function (w) { summe += c.measureText(w.t).width + 12; });
-    const platz = (z.e - z.s) * SPUR.pps + 40;
-    z._schrift = Math.max(15, Math.min(26, Math.floor(26 * platz / Math.max(1, summe))));
-    return z._schrift;
+  /** Zeile als Wörter: jedes Wort ein Span mit gelber Kopie darüber, die per clip-path von links nach rechts aufgedeckt wird. */
+  function satzBauen(el, z) {
+    el.textContent = '';
+    if (!z) return [];
+    const teile = [];
+    z.w.forEach(function (w, k) {
+      if (k) el.appendChild(document.createTextNode(' '));
+      const sp = document.createElement('span');
+      sp.className = 'w';
+      sp.textContent = w.t;
+      const g = document.createElement('i');
+      g.textContent = w.t;
+      sp.appendChild(g);
+      el.appendChild(sp);
+      teile.push(sp);
+    });
+    return teile;
   }
 
-  function karaokeZeichnen() {
-    const c = M.ctx;
-    c.clearRect(0, 0, STAGE_W, STAGE_H);
-    const e = aktuell();
+  function karaokeLeeren() {
+    const K = M.k;
+    K.zeile = -9;
+    K.modus = '';
+    K.ai = -1;
+    K.woerter = [];
+    K.staende = [];
+    K.zahl = -1;
+    K.hinweis = null;
+    K.pause = null;
+    M.el.kzA.textContent = '';
+    M.el.kzN.textContent = '';
+    M.el.vk.classList.remove('k-warte', 'k-zahl');
+    M.el.vk.classList.toggle('k-geschaetzt', !!(K.text && K.text.geschaetzt));
+  }
+
+  function karaokeHinweis(text) {
+    if (M.k.hinweis === text) return;
+    M.k.hinweis = text;
+    M.el.kl.textContent = text;
+  }
+
+  function zeileZeigen(modus, i) {
+    const K = M.k;
+    if (K.modus === modus && K.zeile === i) return;
+    const Z = K.text.zeilen;
+    const vk = M.el.vk.classList;
+    vk.toggle('k-warte', modus === 'warte');
+    if (modus !== 'warte') vk.remove('k-zahl');
+    karaokeHinweis(modus === 'ende' ? '♪' : '');
+    if (modus === 'ende') {
+      M.el.kzA.textContent = '';
+      M.el.kzN.textContent = '';
+      K.woerter = [];
+    } else {
+      const neu = K.zeile !== i;
+      if (neu) {
+        K.woerter = satzBauen(M.el.kzA, Z[i]);
+        K.staende = K.woerter.map(function () { return 0; });
+        K.aktiv = -1;
+        M.el.kzA.classList.remove('neu');
+        void M.el.kzA.offsetWidth;
+        M.el.kzA.classList.add('neu');
+      }
+      M.el.kzA.classList.toggle('warte', modus === 'warte');
+      // darunter klein die nächste Zeile zum Vorauslesen (beim Warten steht die kommende Zeile schon oben)
+      const n = modus === 'singen' ? Z[i + 1] : null;
+      M.el.kzN.textContent = n ? n.text : '';
+      if (n) M.el.kzN.style.top = (330 + M.el.kzA.offsetHeight + 34) + 'px';
+    }
+    K.modus = modus;
+    K.zeile = i;
+  }
+
+  function woerterSetzen(z, t) {
+    const K = M.k;
+    let aktiv = -1;
+    for (let k = 0; k < z.w.length; k++) {
+      const w = z.w[k];
+      const st = t >= w.e ? 2 : t >= w.s ? 1 : 0;
+      if (st === 1) aktiv = k;
+      if (K.staende[k] !== st) {
+        K.staende[k] = st;
+        const sp = K.woerter[k];
+        sp.className = st === 2 ? 'w v' : st === 1 ? 'w l' : 'w';
+        if (st !== 1) {
+          sp.lastChild.style.clipPath = '';
+          sp.lastChild.style.webkitClipPath = '';
+        }
+      }
+    }
+    if (aktiv < 0) return;
+    const w = z.w[aktiv];
+    const f = Math.max(0, Math.min(1, (t - w.s) / Math.max(0.05, w.e - w.s)));
+    const rest = (100 - f * 100).toFixed(1);
+    if (K.aktiv === aktiv && K.rest === rest) return;
+    K.aktiv = aktiv;
+    K.rest = rest;
+    const clip = 'inset(0 ' + rest + '% 0 -4%)';
+    const g = K.woerter[aktiv].lastChild;
+    g.style.clipPath = clip;
+    g.style.webkitClipPath = clip;
+  }
+
+  function warten(rest, intro) {
+    const K = M.k;
+    const vk = M.el.vk.classList;
+    if (rest <= 3) {
+      const zahl = Math.max(1, Math.min(3, Math.ceil(rest)));
+      vk.add('k-zahl');
+      if (K.zahl !== zahl) {
+        K.zahl = zahl;
+        M.el.kiZahl.textContent = String(zahl);
+        M.el.kiZ.classList.remove('puls');
+        void M.el.kiZ.offsetWidth;
+        M.el.kiZ.classList.add('puls');
+      }
+      return;
+    }
+    vk.remove('k-zahl');
+    K.zahl = -1;
+    const text = (intro ? 'Intro' : 'Pause') + '  ·  noch ' + Math.ceil(rest) + ' s';
+    if (K.pause !== text) {
+      K.pause = text;
+      M.el.kiP.textContent = text;
+    }
+  }
+
+  function fortschritt(t) {
+    const K = M.k;
+    const d = M.audio && isFinite(M.audio.duration) ? M.audio.duration : 0;
+    const q = d > 0 ? Math.round(Math.min(1, t / d) * 1000) : 0;
+    if (K.fq !== q) {
+      K.fq = q;
+      M.el.kf.style.transform = 'scaleX(' + (q / 1000) + ')';
+    }
+    const s = Math.floor(t);
+    if (K.sek !== s || K.dauer !== d) {
+      K.sek = s;
+      K.dauer = d;
+      M.el.kt1.textContent = zeit(t);
+      M.el.kt2.textContent = d ? zeit(d) : '';
+    }
+  }
+
+  function karaokeTick(ms) {
+    const K = M.k;
     const tx = M.text;
-    const t = M.audio ? M.audio.currentTime : 0;
-    wellenZeichnen(c);
+    const t = uhr();
+    wellenZeichnen(M.ctx, ms);
+    fortschritt(t);
+    if (K.text !== tx) {
+      K.text = tx;
+      karaokeLeeren();
+    }
     if (!tx) {
-      c.fillStyle = 'rgba(255,255,255,.75)';
-      c.font = '600 46px ' + SCHRIFT;
-      c.textAlign = 'center';
-      c.fillText(e && e._karaoke ? 'Text wird geladen …' : 'Zu diesem Lied gibt es noch keinen Text', STAGE_W / 2, 480);
-      c.textAlign = 'left';
-      fortschrittZeichnen(c, t);
+      const e = aktuell();
+      karaokeHinweis(e && e._karaoke ? 'Text wird geladen …' : 'Zu diesem Lied gibt es noch keinen Text');
       return;
     }
     const Z = tx.zeilen;
-    let ai = -1;
-    for (let i = 0; i < Z.length; i++) if (Z[i].s <= t + 0.05) ai = i;
-    const akt = ai >= 0 && t <= Z[ai].e + 0.5 ? Z[ai] : null;
-    const naechste = Z[ai + 1] || null;
-
-    // ---- Satz oben
-    if (akt) {
-      const h = satzZeichnen(c, akt, t, 70, 380, 0.95, true);
-      if (naechste) satzZeichnen(c, naechste, t, 44, 380 + h + 40, 0.5, false);
-    } else if (naechste) {
-      const rest = naechste.s - t;
-      c.textAlign = 'center';
-      if (rest <= 3) {
-        const zahl = Math.max(1, Math.min(3, Math.ceil(rest)));
-        const puls = 1 + 0.12 * (1 - (rest - Math.floor(rest)));
-        c.fillStyle = 'rgba(242,183,5,.16)';
-        c.beginPath();
-        c.arc(STAGE_W / 2, 270, 66 * puls, 0, Math.PI * 2);
-        c.fill();
-        c.fillStyle = GELB;
-        c.font = '800 80px ' + SCHRIFT;
-        c.fillText(String(zahl), STAGE_W / 2, 298);
-      } else {
-        c.fillStyle = 'rgba(255,255,255,.6)';
-        c.font = '600 34px ' + SCHRIFT;
-        c.fillText((ai < 0 ? 'Intro' : 'Pause') + '  ·  noch ' + Math.ceil(rest) + ' s', STAGE_W / 2, 290);
-      }
-      c.textAlign = 'left';
-      satzZeichnen(c, naechste, t, 62, 420, 0.72, false);
-    } else {
-      c.fillStyle = 'rgba(255,255,255,.55)';
-      c.font = '600 40px ' + SCHRIFT;
-      c.textAlign = 'center';
-      c.fillText('♪', STAGE_W / 2, 460);
-      c.textAlign = 'left';
-    }
-
-    // ---- Zeitspur unten: oben die Schrift-Reihe, darunter nur Balken
-    const S = SPUR;
-    c.fillStyle = 'rgba(255,255,255,.06)';
-    rund(c, S.links, S.oben, S.rechts - S.links, S.unten - S.oben, 34);
-    c.fill();
-    c.save();
-    rund(c, S.links, S.oben, S.rechts - S.links, S.unten - S.oben, 34);
-    c.clip();
-    const tMin = t - (S.jetzt - S.links) / S.pps, tMax = t + (S.rechts - S.jetzt) / S.pps;
-    const X = function (zp) { return S.jetzt + (zp - t) * S.pps; };
-    let schriftEnde = -1e9;
-    for (let i = 0; i < Z.length; i++) {
-      const z = Z[i];
-      const vorEnde = i > 0 ? Z[i - 1].e : 0;
-      const luecke = z.s - vorEnde;
-      if (z.e < tMin - 3 || z.s - 4 > tMax) continue;
-      if (luecke >= 3) {
-        if (luecke >= 4.5) {
-          c.font = '600 24px ' + SCHRIFT;
-          c.textBaseline = 'middle';
-          c.fillStyle = 'rgba(255,255,255,.42)';
-          c.textAlign = 'center';
-          c.fillText((i === 0 ? 'Intro ' : 'Pause ') + Math.round(luecke) + ' s', (X(vorEnde) + X(z.s - 3)) / 2, S.balken);
-          c.textAlign = 'left';
-        }
-        for (let k = 1; k <= 3; k++) {
-          c.fillStyle = t >= z.s - k ? 'rgba(255,255,255,.18)' : GELB;
-          c.beginPath();
-          c.arc(X(z.s - k), S.balken, 8, 0, Math.PI * 2);
-          c.fill();
-        }
-      }
-      c.fillStyle = 'rgba(255,255,255,.18)';
-      c.fillRect(X(z.s) - 2, S.oben + 18, 3, S.unten - S.oben - 36);
-      const gr = zeilenSchrift(c, z);
-      c.font = '700 ' + gr + 'px ' + SCHRIFT;
-      c.textBaseline = 'middle';
-      z.w.forEach(function (w) {
-        const x1 = X(w.s) + 3, x2 = X(w.e) - 3;
-        const vorbei = t >= w.e, laeuft = t >= w.s && !vorbei;
-        if (x2 >= S.links - 20 && x1 <= S.rechts + 20) {
-          const breite = Math.max(8, x2 - x1);
-          const y = S.balken - 16, h = 32;
-          if (vorbei) {
-            c.fillStyle = 'rgba(255,255,255,.16)';
-            rund(c, x1, y, breite, h, 12);
-            c.fill();
-          } else if (laeuft) {
-            c.fillStyle = 'rgba(242,183,5,.35)';
-            rund(c, x1, y, breite, h, 12);
-            c.fill();
-            c.save();
-            c.beginPath();
-            c.rect(x1, y, breite * Math.min(1, (t - w.s) / Math.max(0.05, w.e - w.s)), h);
-            c.clip();
-            c.shadowColor = 'rgba(242,183,5,.8)';
-            c.shadowBlur = 18;
-            c.fillStyle = GELB;
-            rund(c, x1, y, breite, h, 12);
-            c.fill();
-            c.restore();
-          } else {
-            c.fillStyle = 'rgba(255,255,255,.78)';
-            rund(c, x1, y, breite, h, 12);
-            c.fill();
-          }
-        }
-        // Wort darüber – immer, nie im Balken
-        const tb = c.measureText(w.t).width;
-        const lx = Math.max(x1, schriftEnde + 10);
-        schriftEnde = lx + tb;
-        if (lx > S.rechts + 40 || lx + tb < S.links - 40) return;
-        if (laeuft) {
-          c.save();
-          c.shadowColor = 'rgba(242,183,5,.75)';
-          c.shadowBlur = 16;
-          c.fillStyle = GELB;
-          c.fillText(w.t, lx, S.schrift);
-          c.restore();
-        } else {
-          c.fillStyle = vorbei ? 'rgba(255,255,255,.32)' : 'rgba(255,255,255,.92)';
-          c.fillText(w.t, lx, S.schrift);
-        }
-      });
-    }
-    c.restore();
-    c.textBaseline = 'alphabetic';
-    let singt = false;
-    if (akt) akt.w.forEach(function (w) { if (t >= w.s && t < w.e) singt = true; });
-    c.save();
-    if (singt) {
-      c.shadowColor = 'rgba(242,183,5,.9)';
-      c.shadowBlur = 24;
-    }
-    c.fillStyle = GELB;
-    c.fillRect(S.jetzt - 2, S.oben - 14, 4, S.unten - S.oben + 28);
-    c.beginPath();
-    c.moveTo(S.jetzt - 12, S.oben - 22);
-    c.lineTo(S.jetzt + 12, S.oben - 22);
-    c.lineTo(S.jetzt, S.oben - 8);
-    c.closePath();
-    c.fill();
-    c.restore();
-    if (tx.geschaetzt) {
-      c.fillStyle = 'rgba(255,255,255,.35)';
-      c.font = '500 22px ' + SCHRIFT;
-      c.textAlign = 'right';
-      c.fillText('Zeiten pro Zeile, Wörter geschätzt', S.rechts, S.unten + 40);
-      c.textAlign = 'left';
-    }
-    fortschrittZeichnen(c, t);
-  }
-
-  function fortschrittZeichnen(c, t) {
-    const d = M.audio && isFinite(M.audio.duration) ? M.audio.duration : 0;
-    const x = 110, w = 1700, y = 1000;
-    c.fillStyle = 'rgba(255,255,255,.16)';
-    rund(c, x, y, w, 8, 4);
-    c.fill();
-    if (d > 0) {
-      c.fillStyle = GELB;
-      rund(c, x, y, Math.max(8, w * t / d), 8, 4);
-      c.fill();
-    }
-    c.fillStyle = 'rgba(255,255,255,.7)';
-    c.font = '500 26px ' + SCHRIFT;
-    c.fillText(zeit(t), x, y + 48);
-    c.textAlign = 'right';
-    c.fillText(d ? zeit(d) : '', x + w, y + 48);
-    c.textAlign = 'left';
+    // Zeile suchen: meist dieselbe oder die nächste (nach Zurückspulen von vorne)
+    let ai = K.ai;
+    if (ai >= Z.length || (ai >= 0 && Z[ai].s > t + 0.05)) ai = -1;
+    while (ai + 1 < Z.length && Z[ai + 1].s <= t + 0.05) ai++;
+    K.ai = ai;
+    if (ai >= 0 && t < Z[ai].ende) {
+      zeileZeigen('singen', ai);
+      woerterSetzen(Z[ai], t);
+    } else if (ai + 1 < Z.length) {
+      zeileZeigen('warte', ai + 1);
+      warten(Z[ai + 1].s - t, ai < 0);
+    } else zeileZeigen('ende', -1);
   }
 
   function playerTick() {
     if (!M.audio || !M.el) return;
     const d = M.audio.duration, t = M.audio.currentTime || 0;
-    const p = (isFinite(d) && d > 0 ? Math.min(100, t / d * 100) : 0) + '%';
-    M.el.pb.style.width = p;
-    M.el.ambB.style.width = p;
+    const f = 'scaleX(' + (isFinite(d) && d > 0 ? Math.min(1, t / d) : 0).toFixed(4) + ')';
+    M.el.pb.style.transform = f;
+    M.el.ambB.style.transform = f;
     M.el.pz1.textContent = zeit(t);
     M.el.pz2.textContent = isFinite(d) ? zeit(d) : '';
   }
 
+  // ------------------------------------------------------------------ eine einzige Bild-Schleife
+
+  /** Startet die Schleife, falls sie nicht schon läuft. Sie hält von selbst an, wenn nichts mehr zu tun ist. */
   function schleife() {
-    cancelAnimationFrame(M.raf);
-    clearInterval(M.timer);
-    if (!M.sichtbar) return;
-    if (M.sicht === 'karaoke') {
-      const lauf = function () {
-        if (!M.sichtbar || M.sicht !== 'karaoke') return;
-        karaokeZeichnen();
-        M.raf = requestAnimationFrame(lauf);
-      };
-      M.raf = requestAnimationFrame(lauf);
-    } else if (M.sicht === 'player') {
-      playerTick();
-      M.timer = setInterval(playerTick, 250);
+    if (M.raf || !M.sichtbar || !M.el) return;
+    M.raf = requestAnimationFrame(takt);
+  }
+
+  function takt(ms) {
+    M.raf = 0;
+    if (!M.sichtbar || !M.el) return;
+    let weiter = false;
+    if (auraLaeuft()) {
+      weiter = true;
+      if (AURA.einmal || ms - AURA.letzt >= 40) {
+        AURA.letzt = ms;
+        AURA.einmal = false;
+        auraZeichnen(ms);
+      }
     }
+    if (M.sicht === 'karaoke') {
+      weiter = true;
+      karaokeTick(ms);
+    } else if (M.sicht === 'player') {
+      weiter = true;
+      if (ms - (M.tickLetzt || 0) >= 250) {
+        M.tickLetzt = ms;
+        playerTick();
+      }
+    }
+    if (weiter) M.raf = requestAnimationFrame(takt);
   }
 
   // ------------------------------------------------------------------ Öffnen, Tasten, Schließen
@@ -2015,7 +2232,9 @@
   async function bereich(o) {
     M.o = Object.assign({}, M.o, o || {});
     bauen();
+    M.el.le._pil = null;
     M.el.w.classList.toggle('lm-leicht', !!M.o.leicht);
+    AURA.einmal = true;
     zeigen();
     if (M.aktiv && M.reihen.length) {
       if (M.startVeraltet && M.sicht === 'start') {
@@ -2027,10 +2246,17 @@
     M.aktiv = true;
     M.kopf = -1;
     M.akt = 0;
+    M.tasten = 0;
     sichtSetzen('start');
-    M.el.info.innerHTML = '<p class="k">MUSIK</p><h1>Musik</h1><p class="m">wird geladen …</p>';
     stimmung(GELB);
     try {
+      // Katalog vom letzten Mal (bzw. noch im Speicher am LG): sofort zeigen, frisch holen im Hintergrund
+      if (M.katalog || katalogAusSpeicher()) {
+        await startAufbauen();
+        katalogAuffrischen();
+        return;
+      }
+      M.el.info.innerHTML = '<p class="k">MUSIK</p><h1>Musik</h1><p class="m">wird geladen …</p>';
       await katalog(null, true);
       await startAufbauen();
     } catch (x) {
@@ -2053,7 +2279,8 @@
     M.sichtbar = false;
     M.el.w.classList.remove('an');
     clearTimeout(M.ruheTimer);
-    schleife();
+    if (M.raf) cancelAnimationFrame(M.raf);
+    M.raf = 0;
   }
 
   function beenden() {
@@ -2073,6 +2300,7 @@
 
   function taste(n) {
     if (!M.sichtbar) return false;
+    M.tasten = (M.tasten || 0) + 1;
     if (M.leiste) leisteTaste(n);
     else if (M.sicht === 'start') startTaste(n);
     else if (M.sicht === 'raster') rasterTaste(n);

@@ -54,7 +54,9 @@ public class MusikActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(false);
-        s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        // Zwischenspeicher an (seit 04.11.2026 abends): vorher wurden Schrift, Cover und Künstlerbilder bei jedem Öffnen
+        // neu geladen – darum dauerte Musik so lange. musik.html und musik.js kommen trotzdem immer frisch (?t= in der Adresse).
+        s.setCacheMode(WebSettings.LOAD_DEFAULT);
         web.setWebChromeClient(new WebChromeClient());
         web.addJavascriptInterface(new Bruecke(), "LukasKino");
         wurzel.addView(web, new FrameLayout.LayoutParams(-1, -1));

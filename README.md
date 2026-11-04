@@ -41,3 +41,16 @@ Rückgängig: `pm enable com.google.android.apps.tv.launcherx` und `pm enable co
 Home und Zurück springen immer an den Anfang (erste Kachel).
 
 Reserve: Der Bedienungshilfe-Dienst `StartseitenWaechter` holt Lukas Kino nach vorn, falls die Google-Startseite doch wieder aufgeht (z. B. nach einem Update), und einmal nach dem Hochfahren. Auf TCL braucht er `appops set de.lukas.kino AUTO_START allow`, sonst wird er nicht gestartet.
+
+## Musik und Karaoke (seit 04.11.2026)
+
+Der ganze Musik-Bereich steckt in `lg/web/musik.js` (gleich für LG und TCL). Am TCL zeigt `MusikActivity` die Seite
+`musik.html` vom Pi (Port 8098) in einer WebView, am LG lädt `app.js` die Datei nach.
+
+- Karaoke: oben die ganze Zeile (HTML, das gesungene Wort wird gelb aufgedeckt), darunter die nächste, unten die Wellen.
+  Zeiten pro Zeile aus LRCLIB (`/share/kino/karaoke`), Wörter nach dem Gesangstempo des Liedes geschätzt
+  (dichteste Zeilen = Sekunden pro Silbe); ist bis zur nächsten Zeile Luft, wartet die Zeile fertig gelb.
+  Genaue Wort-Zeiten später aus `/karaoke/wort/*.json` werden automatisch bevorzugt.
+- Schnell auf dem Fernseher: Hintergrund-Schlieren in einer 240x135-Canvas, eine einzige Bild-Schleife, Katalog im
+  localStorage (Startseite sofort, Jellyfin im Hintergrund), kleine Künstlerbilder (`/musik/kuenstler_klein`),
+  Schrift-Teilmenge `fonts/InterTight-musik.woff2` (40 KB), WebView am TCL mit Zwischenspeicher.
