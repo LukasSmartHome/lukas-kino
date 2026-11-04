@@ -260,6 +260,9 @@ public class FilmeActivity extends Activity {
     private boolean diashow, fotoInfo;
     private Reihe fotoReihe;
 
+    // Start-Intro LWM (seit 04.11.2026), nur beim frischen Öffnen des Kino-Bereichs
+    private Intro intro;
+
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -270,6 +273,7 @@ public class FilmeActivity extends Activity {
         buehne = new Buehne(this);
         setContentView(buehne);
         verstecken();
+        if (b == null) intro = Intro.zeigen(this);
         auftrag = new KinoHa.Waechter(this, this::abspielen, this::liveNeu);
         if (jf.angemeldet()) laden();
         else anmelden();
@@ -299,6 +303,10 @@ public class FilmeActivity extends Activity {
     protected void onPause() {
         super.onPause();
         auftrag.aus();
+        if (intro != null) {
+            intro.entfernen();
+            intro = null;
+        }
     }
 
     @Override
@@ -1479,6 +1487,16 @@ public class FilmeActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent ev) {
+        if (intro != null) {
+            int ik = ev.getKeyCode();
+            if (ik == KeyEvent.KEYCODE_VOLUME_UP || ik == KeyEvent.KEYCODE_VOLUME_DOWN || ik == KeyEvent.KEYCODE_VOLUME_MUTE)
+                return super.dispatchKeyEvent(ev);
+            if (intro.laeuft()) {
+                if (ev.getAction() == KeyEvent.ACTION_DOWN) intro.ausblenden();
+                return true;
+            }
+            intro = null;
+        }
         if (ev.getAction() != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(ev);
         int k = ev.getKeyCode();
         boolean zurueck = k == KeyEvent.KEYCODE_BACK || k == KeyEvent.KEYCODE_ESCAPE;
