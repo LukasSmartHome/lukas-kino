@@ -502,8 +502,6 @@
     + '.lm-amb h2{position:absolute;left:460px;bottom:224px;width:1350px;margin:0;font-size:84px;font-weight:800;line-height:1.05;letter-spacing:-.02em;'
     + 'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-shadow:0 4px 30px rgba(0,0,0,.5)}'
     + '.lm-amb p{position:absolute;left:460px;top:874px;margin:0;font-size:40px;color:rgba(255,255,255,.85);text-shadow:0 2px 16px rgba(0,0,0,.6)}'
-    + '.lm-amb .lb{position:absolute;left:110px;top:1000px;width:1700px;height:6px;border-radius:3px;background:rgba(255,255,255,.2)}'
-    + '.lm-amb .lb i{position:absolute;left:0;top:0;width:1700px;height:6px;border-radius:3px;background:' + GELB + ';transform-origin:0 0;transform:scaleX(0)}'
     + '.lm-ht{position:absolute;right:110px;top:66px;font-size:24px;color:rgba(255,255,255,.55);text-align:right}'
     + '.lm-ht b{color:#fff;font-weight:700;padding:2px 10px;border-radius:8px;background:rgba(255,255,255,.12);margin:0 4px}'
     // Karaoke
@@ -575,7 +573,7 @@
       + '<div class="lm-v lm-vr"><div class="lm-rk"></div><div class="lm-gi"></div></div>'
       + '<div class="lm-v lm-vq"><div class="lm-sf">' + svg(SYM.lupe) + '<span class="sx"></span></div><div class="lm-ta"></div>'
       + '<div class="lm-tr"><div class="h"></div><div class="lm-tl"></div></div></div>'
-      + '<div class="lm-v lm-vp"><div class="lm-amb"><div class="bg"></div><div class="sch"></div>' + coverHtml() + '<h2></h2><p></p><div class="lb"><i></i></div></div>'
+      + '<div class="lm-v lm-vp"><div class="lm-amb"><div class="bg"></div><div class="sch"></div>' + coverHtml() + '<h2></h2><p></p></div>'
       + '<div class="lm-pn0">' + coverHtml('lm-pc')
       + '<div class="lm-pa"></div><div class="lm-pt"></div><div class="lm-pn"></div><div class="lm-pl"></div>'
       + '<div class="lm-pb"><i></i></div><div class="lm-pz" style="left:750px"></div><div class="lm-pz" style="right:110px"></div>'
@@ -598,7 +596,7 @@
     M.el = {
       w: w, b: q('.lm-b'), info: q('.lm-in'), reihen: q('.lm-rs'), rk: q('.lm-rk'), gitter: q('.lm-gi'),
       sx: q('.lm-sf .sx'), tasten: q('.lm-ta'), trH: q('.lm-tr .h'), trL: q('.lm-tl'),
-      ambBg: q('.lm-amb .bg'), ambCov: q('.lm-amb .lm-cov'), ambT: q('.lm-amb h2'), ambI: q('.lm-amb p'), ambB: q('.lm-amb .lb i'),
+      ambBg: q('.lm-amb .bg'), ambCov: q('.lm-amb .lm-cov'), ambT: q('.lm-amb h2'), ambI: q('.lm-amb p'),
       pc: q('.lm-pc'), pa: q('.lm-pa'), pt: q('.lm-pt'), pn: q('.lm-pn'), pl: q('.lm-pl'), pb: q('.lm-pb i'),
       pz1: w.querySelectorAll('.lm-pz')[0], pz2: w.querySelectorAll('.lm-pz')[1], pk: q('.lm-pk'), nr: q('.lm-nr'),
       au: q('.lm-au'), wl: q('.lm-wl'), vk: q('.lm-vk'),
@@ -2185,7 +2183,6 @@
     const d = M.audio.duration, t = M.audio.currentTime || 0;
     const f = 'scaleX(' + (isFinite(d) && d > 0 ? Math.min(1, t / d) : 0).toFixed(4) + ')';
     M.el.pb.style.transform = f;
-    M.el.ambB.style.transform = f;
     M.el.pz1.textContent = zeit(t);
     M.el.pz2.textContent = isFinite(d) ? zeit(d) : '';
   }
