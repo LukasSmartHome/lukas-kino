@@ -15,27 +15,26 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.FrameLayout;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Musik-Player und Karaoke (04.11.2026, Wunsch Lukas). Zeigt musik.html vom Pi (gleiche Seite wie am LG) in einer
- * WebView, die nur lebt, solange Musik läuft. Zugangsdaten gibt die App über die Brücke (nicht in der Adresse).
- * Tasten: OK Pause, links/rechts Lied, hoch Karaoke an/aus, runter Zufall, Zurück raus.
+ * Der ganze Musik-Bereich mit Karaoke (seit 04.11.2026, Wunsch Lukas). Zeigt musik.html vom Pi (gleiche Seite und
+ * gleiches musik.js wie am LG) in einer WebView: Startseite mit Karaoke-Modus, Gelikten Songs und Genres, Künstler,
+ * Suche, Player und Karaoke. Links hat die Seite eine eigene Leiste im Aussehen der App; wählt man dort etwas anderes,
+ * endet die Musik und FilmeActivity öffnet das Gewählte (nachMusik). Zugangsdaten gibt die App über die Brücke.
  */
 public class MusikActivity extends Activity {
 
-    static final String EXTRA_QUELLE = "quelle", EXTRA_START = "start", EXTRA_KARAOKE = "karaoke", EXTRA_ZUFALL = "zufall";
+    /** Kleiner Webserver auf dem Pi (App „Lukas Kino Web“, Ordner /share/kino): Musik-Seite und Karaoke-Texte. */
+    static final String WEB = "http://192.168.178.44:8098";
 
     private WebView web;
     private volatile boolean bereit;
 
-    static void starten(Context c, String quelle, String start, boolean karaoke, boolean zufall) {
-        Intent i = new Intent(c, MusikActivity.class);
-        i.putExtra(EXTRA_QUELLE, quelle);
-        i.putExtra(EXTRA_START, start);
-        i.putExtra(EXTRA_KARAOKE, karaoke);
-        i.putExtra(EXTRA_ZUFALL, zufall);
-        c.startActivity(i);
+    static void starten(Context c) {
+        FilmeActivity.nachMusik = -1;
+        c.startActivity(new Intent(c, MusikActivity.class));
     }
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
@@ -61,7 +60,7 @@ public class MusikActivity extends Activity {
         wurzel.addView(web, new FrameLayout.LayoutParams(-1, -1));
         setContentView(wurzel);
         verstecken();
-        web.loadUrl(Musik.WEB + "/web/musik.html?t=" + System.currentTimeMillis());
+        web.loadUrl(WEB + "/web/musik.html?t=" + System.currentTimeMillis());
     }
 
     private void verstecken() {
@@ -96,16 +95,16 @@ public class MusikActivity extends Activity {
                 taste("pause");
                 return true;
             case KeyEvent.KEYCODE_DPAD_LEFT:
-                if (e.getRepeatCount() == 0) taste("links");
-                return true;
-            case KeyEvent.KEYCODE_DPAD_RIGHT:
-                if (e.getRepeatCount() == 0) taste("rechts");
-                return true;
-            case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
                 taste("links");
                 return true;
-            case KeyEvent.KEYCODE_MEDIA_NEXT:
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
                 taste("rechts");
+                return true;
+            case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
+                taste("rueck");
+                return true;
+            case KeyEvent.KEYCODE_MEDIA_NEXT:
+                taste("vor");
                 return true;
             case KeyEvent.KEYCODE_MEDIA_REWIND:
                 taste("rueck");
@@ -121,7 +120,7 @@ public class MusikActivity extends Activity {
                 return true;
             case KeyEvent.KEYCODE_BACK:
             case KeyEvent.KEYCODE_ESCAPE:
-                // Seite noch nicht da (Pi weg?) -> sofort raus, sonst entscheidet die Seite (Karaoke -> Player -> raus)
+                // Seite noch nicht da (Pi weg?) -> sofort raus, sonst entscheidet die Seite (Player -> Stöbern -> Leiste)
                 if (!bereit) finish();
                 else taste("zurueck");
                 return true;
@@ -162,16 +161,16 @@ public class MusikActivity extends Activity {
             JSONObject o = new JSONObject();
             try {
                 Jellyfin jf = Jellyfin.get(MusikActivity.this);
-                Intent i = getIntent();
                 o.put("server", Jellyfin.SERVER);
                 o.put("token", jf.token);
                 o.put("user", jf.benutzer);
                 o.put("geraet", Jellyfin.GERAET_ID);
                 o.put("geraetName", Jellyfin.GERAET);
-                o.put("quelle", i.getStringExtra(EXTRA_QUELLE) != null ? i.getStringExtra(EXTRA_QUELLE) : "alle");
-                if (i.getStringExtra(EXTRA_START) != null) o.put("start", i.getStringExtra(EXTRA_START));
-                o.put("karaoke", i.getBooleanExtra(EXTRA_KARAOKE, false) ? "1" : "0");
-                o.put("zufall", i.getBooleanExtra(EXTRA_ZUFALL, false) ? "1" : "0");
+                JSONArray l = new JSONArray();
+                for (String n : FilmeActivity.LEISTE) l.put(n);
+                o.put("leiste", l);
+                o.put("apps", FilmeActivity.APPS);
+                o.put("musikPos", FilmeActivity.MUSIK_POS);
             } catch (Exception ignored) {
             }
             return o.toString();
@@ -184,6 +183,13 @@ public class MusikActivity extends Activity {
 
         @JavascriptInterface
         public void ende() {
+            runOnUiThread(MusikActivity.this::finish);
+        }
+
+        /** In der Leiste der Musik-Seite etwas anderes gewählt (Musik ist schon aus). */
+        @JavascriptInterface
+        public void verlassen(int pos) {
+            FilmeActivity.nachMusik = pos;
             runOnUiThread(MusikActivity.this::finish);
         }
     }

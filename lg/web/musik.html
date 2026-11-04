@@ -8,10 +8,10 @@
 </head>
 <body>
 <!--
-  Musik-Player und Karaoke für den TCL (MusikActivity zeigt diese Seite vom Pi in einer WebView).
-  Die Zugangsdaten kommen über die Brücke window.LukasKino.daten() aus der App, nicht über die Adresse
-  (sonst stünde der Jellyfin-Schlüssel im Protokoll des kleinen Webservers). Bedienung: Tasten schickt die App
-  als LukasMusik.taste('ok'|'links'|…). Für Tests im Browser gehen auch Adress-Parameter und die Tastatur.
+  Musik-Bereich für den TCL: MusikActivity zeigt diese Seite vom Pi in einer WebView (seit 04.11.2026).
+  Zugangsdaten und die Einträge der Seitenleiste kommen über die Brücke window.LukasKino.daten(), nicht über die
+  Adresse (sonst stünde der Jellyfin-Schlüssel im Protokoll des Webservers). Tasten schickt die App als
+  LukasMusik.taste('ok'|'links'|…). Zum Testen im Browser gehen auch Adress-Parameter und die Tastatur.
 -->
 <script>
 (function () {
@@ -27,13 +27,16 @@
       for (var k in d) p[k] = d[k];
     } catch (e) { /* nur Parameter */ }
   }
+  var leiste = p.leiste ? (typeof p.leiste === 'string' ? p.leiste.split('|') : p.leiste)
+    : ['Spotify', 'Prime Video', 'Netflix', 'YouTube', 'Suche', 'Filme', 'Serien', 'Musik', 'Merkliste', 'Empfohlen', 'Fotos'];
   function los() {
-    LukasMusik.oeffnen({
+    LukasMusik.bereich({
       server: p.server || 'http://192.168.178.44:8096',
       token: p.token, benutzer: p.user, geraet: p.geraet, geraetName: p.geraetName || 'TCL',
-      quelle: p.quelle || 'alle', start: p.start || null, karaoke: p.karaoke === '1' || p.karaoke === true,
-      zufall: p.zufall === '1' || p.zufall === true,
-      zu: function () { if (window.LukasKino && window.LukasKino.ende) window.LukasKino.ende(); }
+      eigeneLeiste: true, leisteNamen: leiste, apps: +(p.apps || 4), musikPos: +(p.musikPos || 7),
+      verlassen: function (pos) {
+        if (window.LukasKino && window.LukasKino.verlassen) window.LukasKino.verlassen(pos);
+      }
     });
     if (window.LukasKino && window.LukasKino.bereit) window.LukasKino.bereit();
   }
@@ -41,11 +44,20 @@
   s.src = 'musik.js?t=' + Date.now();
   s.onload = los;
   document.body.appendChild(s);
-  var TASTEN = { 13: 'ok', 32: 'ok', 37: 'links', 38: 'hoch', 39: 'rechts', 40: 'runter', 27: 'zurueck', 8: 'zurueck',
+  var TASTEN = { 13: 'ok', 37: 'links', 38: 'hoch', 39: 'rechts', 40: 'runter', 27: 'zurueck',
     179: 'playpause', 415: 'play', 19: 'pause', 417: 'vor', 412: 'rueck', 413: 'stop', 461: 'zurueck' };
   document.addEventListener('keydown', function (ev) {
-    var n = TASTEN[ev.keyCode];
-    if (n && window.LukasMusik && LukasMusik.taste(n)) ev.preventDefault();
+    if (!window.LukasMusik) return;
+    if (LukasMusik.sucheOffen()) {
+      if (ev.keyCode === 8) { LukasMusik.tippen('⌫'); ev.preventDefault(); return; }
+      if (ev.key && ev.key.length === 1 && /[a-z0-9äöüß \-.]/i.test(ev.key)) {
+        LukasMusik.tippen(ev.key === ' ' ? '␣' : ev.key.toLowerCase());
+        ev.preventDefault();
+        return;
+      }
+    }
+    var n = TASTEN[ev.keyCode] || (ev.keyCode === 8 ? 'zurueck' : null);
+    if (n && LukasMusik.taste(n)) ev.preventDefault();
   });
 })();
 </script>
