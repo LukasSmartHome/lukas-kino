@@ -679,14 +679,7 @@ body {
   transition: transform .38s cubic-bezier(.2, .8, .2, 1), opacity .25s, visibility 0s;
 }
 
-#leiste .marke {
-  position: absolute;
-  left: 48px;
-  top: 96px;
-  font-size: 26px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, .78);
-}
+/* Überschrift „Lukas Kino“ seit 04.11.2026 raus (wie am TCL) */
 
 #leiste .pille {
   position: absolute;
@@ -1508,3 +1501,24 @@ body {
 .lv-zeit { bottom: 14px; font-size: 22px; color: rgba(255, 255, 255, .9); }
 .live-titel { position: absolute; top: -60px; height: 36px; line-height: 36px; font-size: 30px; font-weight: 650; white-space: nowrap; opacity: .9; }
 .live-titel i { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: #E5484D; margin-right: 12px; vertical-align: 1px; }
+
+/* ------------------------------------------------------------ Start-Intro (seit 04.11.2026) */
+
+#intro {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100000;
+  background: #000;
+  opacity: 1;
+  transition: opacity .35s;
+}
+
+#intro video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}

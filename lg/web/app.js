@@ -71,15 +71,18 @@
 
   // Oben in der Seitenleiste die Apps des Fernsehers (seit 04.11.2026, wie am TCL), dann Suche und die Bereiche.
   // Öffnen geht über den Webhook an Automation 84 (art=app) – die startet die App am Fernseher dieser Person.
+  // Seit 04.11.2026 mittags wie am TCL (1.0.47): Spotify ganz oben, keine Überschrift, Reiter Musik unter Serien.
   const APPS = [
+    { name: 'Spotify', app: 'spotify' },
     { name: 'Prime Video', app: 'prime' },
     { name: 'Netflix', app: 'netflix' },
     { name: 'YouTube', app: 'youtube' }
   ];
-  const LEISTE = APPS.map(function (a) { return a.name; }).concat(['Suche', 'Filme', 'Serien', 'Merkliste', 'Empfohlen', 'Fotos']);
-  // Oberkante des Leisten-Eintrags i (Schritt 90, zwischen Apps und Suche 24 px Luft für die Linie)
-  function leisteTop(i) { return 172 + 90 * i + (i >= APPS.length ? 24 : 0); }
-  const BEREICHE = ['filme', 'serien', 'merkliste', 'empfohlen', 'fotos'];
+  const LEISTE = APPS.map(function (a) { return a.name; }).concat(['Suche', 'Filme', 'Serien', 'Musik', 'Merkliste', 'Empfohlen', 'Fotos']);
+  // Oberkante des Leisten-Eintrags i (11 Einträge, Schritt 84, zwischen Apps und Suche 24 px Luft für die Linie).
+  // Ohne Überschrift beginnt die Leiste oben; Abstand oben und unten zum Glasrand gleich (je 28 px).
+  function leisteTop(i) { return 28 + 84 * i + (i >= APPS.length ? 24 : 0); }
+  const BEREICHE = ['filme', 'serien', 'musik', 'merkliste', 'empfohlen', 'fotos'];
   const TASTEN = [
     ['a', 'b', 'c', 'd', 'e', 'f'], ['g', 'h', 'i', 'j', 'k', 'l'], ['m', 'n', 'o', 'p', 'q', 'r'],
     ['s', 't', 'u', 'v', 'w', 'x'], ['y', 'z', 'ä', 'ö', 'ü', 'ß'], ['1', '2', '3', '4', '5', '6'],
@@ -118,6 +121,7 @@
     '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
     '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9l5 3-5 3z"/>',
     '<rect x="3" y="7" width="18" height="11" rx="2.5"/><path d="M8.5 3L12 7l3.5-4M8 21h8"/>',
+    '<path d="M9 17.5V6l10.5-2v11.5M9 9.5l10.5-2"/><circle cx="6.6" cy="17.5" r="2.4"/><circle cx="17.1" cy="15.5" r="2.4"/>',
     '<path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-1z"/>',
     '<path d="M12 3.2l2.7 5.5 6 .9-4.35 4.2 1 6-5.35-2.8-5.35 2.8 1-6L3.3 9.6l6-.9z"/>',
     '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3.5 17L9 11.5l4 4 2.5-2.5 5 4.5"/><circle cx="16.2" cy="9.2" r="1.6"/>'
@@ -1697,7 +1701,7 @@
       + '<div class="ebene aus" id="foto"><div class="fbild"></div><div class="fbild"></div>'
       + '  <div class="f-video aus"></div><div class="f-pille aus"></div></div>'
       + '<div class="ebene" id="leiste-dunkel"></div>'
-      + '<div class="glas" id="leiste"><div class="marke">Lukas Kino</div><div class="pille"></div><div class="punkt"></div></div>'
+      + '<div class="glas" id="leiste"><div class="pille"></div><div class="punkt"></div></div>'
       + '<div class="ebene aus" id="trailer"><div class="t-box"></div>'
       + '  <div class="ebene p-leiste t-leiste"><div class="p-oben"></div><div class="p-unten"></div>'
       + '    <div class="t-marke">Trailer</div><div class="p-titel t-titel"></div>'
@@ -1922,6 +1926,7 @@
     stapel.length = 0;
     if (b === 'merkliste') startseiten.merkliste = merklisteSeite();
     if (b === 'empfohlen') startseiten.empfohlen = empfohlenSeite();
+    if (b === 'musik') startseiten.musik = musikSeite();
     if (b === 'merkliste' || b === 'empfohlen') familieLaden(); // frisch aus HA nachziehen
     const fertig = startseiten[b];
     bereich = b;
@@ -1971,6 +1976,14 @@
       samml.forEach(function (k) { s.reihen.push(neueReihe(k.Name, 'samml:' + k.Id, POSTER)); });
     }
     s.reihen.push(neueReihe('Alle Filme', '@alle', POSTER));
+    return s;
+  }
+
+  /** Musik (Wunsch Lukas 04.11.2026, wie am TCL): eigener Reiter unter Serien. In Jellyfin gibt es noch keine
+   *  Musik-Bibliothek, darum vorerst nur ein Platzhalter. */
+  function musikSeite() {
+    const s = neueSeite('Musik');
+    s.leer = 'Musik kommt bald';
     return s;
   }
 
@@ -4745,11 +4758,72 @@
     }
   }
 
+  // ------------------------------------------------------------------ Start-Intro (seit 04.11.2026, wie am TCL)
+  // Das private Intro (SOURCE, mit Fotos) liegt nur auf dem Pi unter /share/kino/intro.mp4, nicht im Repo.
+  // Es läuft beim Start im Vollbild über der Oberfläche, die dahinter schon lädt, und blendet am Ende weich aus.
+  // Jede Taste (außer Lautstärke) und jeder Klick überspringt. Fehlt die Datei oder geht Abspielen nicht: ohne Intro.
+  // Lädt die Seite innerhalb einer Minute neu (z. B. Kontowechsel), kommt es nicht noch einmal.
+
+  const intro = { el: null, video: null, weg: true };
+  const LAUTSTAERKE = [173, 174, 175, 447, 448, 449];
+
+  function introZeigen() {
+    try {
+      const vorher = Number(sessionStorage.getItem('lk_intro') || 0);
+      if (Date.now() - vorher < 60000) return;
+      sessionStorage.setItem('lk_intro', String(Date.now()));
+    } catch (e) { /* ohne Speicher eben immer */ }
+    const d = document.createElement('div');
+    d.id = 'intro';
+    const v = document.createElement('video');
+    v.src = '../intro.mp4';
+    v.preload = 'auto';
+    v.setAttribute('playsinline', '');
+    d.appendChild(v);
+    document.body.appendChild(d);
+    intro.el = d;
+    intro.video = v;
+    intro.weg = false;
+    v.addEventListener('ended', introAusblenden);
+    v.addEventListener('error', introAusblenden);
+    d.addEventListener('click', introAusblenden);
+    setTimeout(introAusblenden, 25000); // Notbremse, falls das Video hängt
+    const p = v.play();
+    if (p && p.catch) {
+      p.catch(function () {
+        // Ton ohne Tastendruck nicht erlaubt: dann stumm, sonst ganz ohne Intro
+        v.muted = true;
+        const q = v.play();
+        if (q && q.catch) q.catch(introAusblenden);
+      });
+    }
+  }
+
+  function introAusblenden() {
+    if (intro.weg) return;
+    intro.weg = true;
+    const d = intro.el, v = intro.video;
+    d.style.opacity = '0';
+    setTimeout(function () {
+      try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) { /* egal */ }
+      if (d.parentNode) d.parentNode.removeChild(d);
+    }, 380);
+  }
+
+  // Läuft das Intro, schluckt jede Taste (außer Lautstärke) das Überspringen, bevor die Oberfläche sie sieht.
+  document.addEventListener('keydown', function (ev) {
+    if (intro.weg || LAUTSTAERKE.indexOf(ev.keyCode) >= 0) return;
+    introAusblenden();
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+  }, true);
+
   // ------------------------------------------------------------------ Start
 
   function start() {
     bauen();
     skalieren();
+    introZeigen();
     window.addEventListener('resize', skalieren);
     try {
       document.body.tabIndex = -1;
