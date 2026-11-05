@@ -281,11 +281,14 @@ body {
   box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
 }
 
-/* Kleiner Knopf nur mit Symbol (Schlechte Qualität melden, ganz rechts) */
+/* Runder Knopf nur mit Symbol (Merkliste, Bewerten, Gesehen, Schlechte Qualität – seit 05.11.2026) */
 .knopf.nur-symbol {
   width: 84px;
   padding: 0;
 }
+
+.knopf.nur-symbol .tipp { right: auto; left: 42px; transform: translateX(-50%); }
+.knopf.nur-symbol:last-child .tipp { left: auto; right: 0; transform: none; }
 
 .knopf.nur-symbol span { display: none; }
 
@@ -1345,10 +1348,8 @@ body {
 
 .b-reihe { position: absolute; left: 0; right: 0; top: 170px; height: 430px; display: flex; justify-content: center; }
 .b-reihe > * { flex: none; }
+/* Abstände setzt app.js je Feld (Reihe kann seit 05.11.2026 Mitschauer enthalten) */
 .b-x-platz, .b-x-leer { width: 150px; height: 430px; display: flex; align-items: center; }
-.b-x-platz[data-x="0"] { margin-right: 26px; }
-.b-x-platz[data-x="1"], .b-x-leer { margin-left: 26px; }
-.b-spalte + .b-spalte { margin-left: 40px; }
 
 /* Feld „Keine Bewertung“ */
 .b-x { position: relative; width: 150px; height: 230px; border-radius: 30px; background: rgba(255, 255, 255, .07); color: #fff; opacity: .6; }
@@ -1357,6 +1358,22 @@ body {
 .b-x-symbol { position: absolute; left: 42px; top: 45px; width: 56px; height: 56px; border: 5px solid currentColor; border-radius: 50%; box-sizing: border-box; }
 .b-x-symbol::after { content: ''; position: absolute; left: 21px; top: -4px; width: 5px; height: 54px; border-radius: 3px; background: currentColor; transform: rotate(45deg); }
 .b-x-text { position: absolute; left: 0; right: 0; top: 128px; font-size: 24px; font-weight: 600; line-height: 30px; }
+
+/* Feld „Noch wer dabei?“ (nach dem Film) und Auswahl der Mitschauer */
+.b-plus-symbol { position: absolute; left: 42px; top: 45px; width: 56px; height: 56px; border: 5px solid currentColor; border-radius: 50%; box-sizing: border-box; }
+.b-plus-symbol::before, .b-plus-symbol::after { content: ''; position: absolute; left: 50%; top: 50%; width: 26px; height: 5px;
+  margin: -2.5px 0 0 -13px; border-radius: 3px; background: currentColor; }
+.b-plus-symbol::after { transform: rotate(90deg); }
+.b-wahl { position: absolute; left: 30px; right: 30px; top: 160px; height: 450px; border-radius: 40px; background: rgba(12, 14, 20, .985);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .14); z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.b-wahl.aus { display: none; }
+.b-wahl-titel { font-size: 40px; font-weight: 650; margin-bottom: 44px; }
+.b-wahl-reihe { display: flex; flex-wrap: wrap; justify-content: center; padding: 0; }
+.b-wahl-chip { height: 88px; border-radius: 44px; padding: 0 30px 0 24px; margin: 8px 7px; display: flex; align-items: center; font-size: 30px;
+  font-weight: 650; background: rgba(255, 255, 255, .1); box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .18); color: #fff; white-space: nowrap; }
+.b-wahl-chip i { width: 20px; height: 20px; border-radius: 50%; background: var(--c); margin-right: 14px; }
+.b-wahl-chip.alle i { background: linear-gradient(135deg, #F2B705, #E8559A 40%, #1FA463 70%, #2F6FEB); }
+.b-wahl-chip.aktiv { background: #fff; color: #111317; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
 
 /* Zähler-Kachel */
 .b-spalte { position: relative; width: 380px; height: 430px; border-radius: 38px;
@@ -1456,6 +1473,8 @@ body {
 .b-zus { position: absolute; left: 0; right: 0; top: 396px; display: flex; justify-content: center; font-size: 30px; font-weight: 650; z-index: 2; }
 .b-zus span { margin: 0 30px; }
 .b-film.b-name-unten { top: 452px; z-index: 2; }
+.b-mit { position: absolute; left: 40px; right: 40px; top: 506px; font-size: 26px; font-weight: 500; color: rgba(255, 255, 255, .7); z-index: 2; }
+.bew-offen .knopf .tipp { display: none !important; }
 
 .leicht .b-karte { background: rgba(28, 30, 38, .96); }
 /* Jonas' Fernseher (leichter Modus): ruhigere Effekte, keine 3D-Drehungen, keine weichen Filter */

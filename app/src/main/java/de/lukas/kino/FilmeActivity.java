@@ -259,6 +259,7 @@ public class FilmeActivity extends Activity {
     // Bewerten (nach dem Film ab 80 % oder über den Knopf in den Details)
     private boolean bew;
     private BewertenKarte bewKarte;   // Zustand und Zeichnen des Fensters (seit 03.11.2026)
+    private final List<String> ungesehen = new ArrayList<>(); // in den Details als „nicht gesehen“ markiert (seit 05.11.2026)
 
     // Foto-Vollbild
     private final List<JSONObject> fotos = new ArrayList<>();
@@ -814,6 +815,72 @@ public class FilmeActivity extends Activity {
         fokusGeaendert();
     }
 
+    /** Ein Film ist nicht mehr gesehen: Neu frisch holen, geladene Kategorien und Alle Filme beim nächsten Hinsehen neu laden. */
+    private void ungesehenNachziehen() {
+        final Seite start = startseiten.get(Bereich.FILME);
+        if (start == null) return;
+        for (Reihe r : start.reihen) {
+            if (r.quelle == null || !r.geladen || r.laedt) continue;
+            r.eintraege.clear();
+            r.geladen = false;
+            r.fokus = 0;
+        }
+        netz.execute(() -> {
+            try {
+                final JSONArray neu = jf.neu();
+                h.post(() -> {
+                    for (Reihe r : start.reihen) {
+                        if (r.quelle != null || !"Neu".equals(r.titel)) continue;
+                        r.eintraege.clear();
+                        for (int k = 0; k < neu.length(); k++) {
+                            JSONObject o = neu.optJSONObject(k);
+                            if (o != null && !Gesehen.hat(o)) r.eintraege.add(o);
+                        }
+                        r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.size() - 1));
+                    }
+                    if (seite == start) {
+                        nachladen();
+                        fokusGeaendert();
+                    }
+                    buehne.invalidate();
+                });
+            } catch (Exception ignored) {
+                // dann beim nächsten Öffnen
+            }
+        });
+    }
+
+    /** Beim Verlassen der Details: Filme, die nicht mehr gesehen sind, aus offenen Seiten „Gesehen“ nehmen. */
+    private void gesehenSeitenAufraeumen() {
+        List<String> weg = new ArrayList<>();
+        for (String id : ungesehen) {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("Id", id);
+                o.put("Type", "Movie");
+            } catch (Exception ignored) {
+            }
+            if (!Gesehen.hat(o)) weg.add(id);
+        }
+        ungesehen.clear();
+        if (weg.isEmpty()) return;
+        List<Seite> alle = new ArrayList<>(stapel);
+        alle.add(seite);
+        for (Seite s : alle) {
+            if (s == null || !s.ohneFilter || !"Gesehen".equals(s.titel)) continue;
+            for (Reihe r : s.reihen) {
+                if (r.eintraege.removeIf(o -> weg.contains(o.optString("Id"))))
+                    r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.size() - 1));
+            }
+            s.reihen.removeIf(r -> r.eintraege.isEmpty());
+            if (s.reihen.isEmpty()) {
+                s.akt = 0;
+                s.leer = "Noch nichts gesehen";
+            } else s.akt = Math.min(s.akt, s.reihen.size() - 1);
+            s.anim = s.akt;
+        }
+    }
+
     /** Kategorie „Gesehen“: alle Filme, die dieses Profil schon gesehen hat, zuletzt gesehen zuerst. */
     private void gesehenOeffnen(JSONObject kachel) {
         listeOeffnen(kachel, "Gesehen", Gesehen.liste(), "Noch nichts gesehen");
@@ -858,8 +925,11 @@ public class FilmeActivity extends Activity {
 
     // ------------------------------------------------------------------ Bewerten
 
-    /** Fenster „Lukas, wie hat dir der Film gefallen?“ – Eltern bekommen zwei Zähler (Papa links, Mama rechts). */
-    private void bewertenOeffnen(JSONObject film) {
+    /**
+     * Fenster „Lukas, wie hat dir der Film gefallen?“ – Eltern bekommen zwei Zähler (Papa links, Mama rechts).
+     * nachFilm = true: nach dem Film, dann gibt es rechts „Noch wer dabei?“ für Mitschauer (seit 05.11.2026).
+     */
+    private void bewertenOeffnen(JSONObject film, boolean nachFilm) {
         if (film == null || !"Movie".equals(typ(film))) return;
         String[] namen = Bewerten.namen();
         int[] alt = new int[namen.length];
@@ -868,7 +938,7 @@ public class FilmeActivity extends Activity {
             Integer n = info != null ? info.noten.get(namen[i]) : null;
             alt[i] = n != null && n >= 1 && n <= 10 ? n : 0;
         }
-        bewKarte = new BewertenKarte(this, film, namen, alt);
+        bewKarte = new BewertenKarte(this, film, namen, alt, nachFilm);
         bew = true;
         leiste = false;
         buehne.invalidate();
@@ -890,9 +960,20 @@ public class FilmeActivity extends Activity {
     private void bewSenden() {
         final BewertenKarte karte = bewKarte;
         final List<int[]> l = karte.aenderungen();
+        final List<String> dazu = karte.dazu();
         if (l.isEmpty()) {
             bewSchliessen();
-            hinweis("Nichts geändert");
+            if (dazu.isEmpty()) {
+                hinweis("Nichts geändert");
+                return;
+            }
+            List<String> kurz = new ArrayList<>();
+            for (String n : dazu) kurz.add(Bewerten.kurz(n));
+            hinweis("Gesehen eingetragen für " + TextUtils.join(", ", kurz));
+            netz.execute(() -> {
+                if (!mitschauerGesehen(karte.film, dazu)) h.post(() -> hinweis("Gesehen ließ sich nicht speichern"));
+                h.postDelayed(() -> netz.execute(this::familieLaden), 3000);
+            });
             return;
         }
         karte.danke();
@@ -904,15 +985,34 @@ public class FilmeActivity extends Activity {
             boolean alles = true;
             for (int[] e : l) {
                 try {
-                    Bewerten.senden(karte.film, karte.namen[e[0]], e[1]);
+                    Bewerten.senden(karte.film, karte.namen.get(e[0]), e[1]);
                 } catch (Exception ex) {
                     alles = false;
                 }
             }
+            if (!dazu.isEmpty() && !mitschauerGesehen(karte.film, dazu)) alles = false;
             if (!alles) h.post(() -> hinweis("Bewertung ließ sich nicht speichern"));
             // HA schreibt die Datei sofort neu – kurz danach abholen
             h.postDelayed(() -> netz.execute(this::familieLaden), 3000);
         });
+    }
+
+    /** Mitschauer gelten bei ihrem Profil als gesehen (Papa und Mama = Eltern). Blockiert – nur im Hintergrund. */
+    private static boolean mitschauerGesehen(JSONObject film, List<String> namen) {
+        List<String> profile = new ArrayList<>();
+        for (String n : namen) {
+            String pr = Bewerten.profil(n);
+            if (!pr.equals(Merkliste.WER) && !profile.contains(pr)) profile.add(pr);
+        }
+        boolean ok = true;
+        for (String pr : profile) {
+            try {
+                Gesehen.senden(film, pr, true);
+            } catch (Exception ex) {
+                ok = false;
+            }
+        }
+        return ok;
     }
 
     private void bewSchliessen() {
@@ -941,22 +1041,42 @@ public class FilmeActivity extends Activity {
         }
         if (detailTrailer != null && e.optString("Id").equals(detailTrailerId)) l.add(new String[]{"trailer", "Trailer"});
         if ("Movie".equals(typ(e))) {
-            l.add(merkliste.hat(e.optString("Id")) ? new String[]{"gemerkt", "Gemerkt"} : new String[]{"merken", "Merken"});
-            l.add(new String[]{"bewerten", eigeneNoten(e)});
-            l.add(new String[]{"qualitaet", ""});   // klein, nur Symbol, ganz rechts
+            // runde Knöpfe nur mit Symbol (Wunsch Lukas 05.11.2026): Merkliste, Stern, Gesehen, Fahne
+            l.add(new String[]{merkliste.hat(e.optString("Id")) ? "gemerkt" : "merken", ""});
+            l.add(new String[]{"bewerten", ""});
+            l.add(new String[]{"gesehen", ""});
+            l.add(new String[]{"qualitaet", ""});   // ganz rechts
         }
         return l;
     }
 
-    /** Text des Knopfs „Bewerten“: mit den eigenen Noten, wenn schon bewertet (z. B. „Bewertet · 8“). */
-    private static String eigeneNoten(JSONObject e) {
+    /** Eigene Noten zu einem Film (Eltern: Papa / Mama), z. B. „8“ oder „7 / 9“; leer = noch nicht bewertet. */
+    private static String eigeneNotenText(JSONObject e) {
         Familie.Info info = Familie.fuer(e);
         StringBuilder sb = new StringBuilder();
         for (String n : Bewerten.namen()) {
             Integer w = info != null ? info.noten.get(n) : null;
             if (w != null) sb.append(sb.length() > 0 ? " / " : "").append(w);
         }
-        return sb.length() > 0 ? "Bewertet  ·  " + sb : "Bewerten";
+        return sb.toString();
+    }
+
+    /** Text unter einem runden Knopf, solange er ausgewählt ist. */
+    private String knopfTipp(String art, JSONObject e) {
+        switch (art) {
+            case "merken":
+                return "Auf die Merkliste";
+            case "gemerkt":
+                return "Auf der Merkliste  ·  drücken = entfernen";
+            case "bewerten": {
+                String n = eigeneNotenText(e);
+                return n.isEmpty() ? "Bewerten" : "Bewertet  ·  " + n + "  ·  drücken = ändern";
+            }
+            case "gesehen":
+                return Gesehen.hat(e) ? "Gesehen  ·  drücken = doch nicht gesehen" : "Schon gesehen? Als gesehen markieren";
+            default:
+                return "";
+        }
     }
 
     private void knopfAusfuehren(String art, JSONObject f) {
@@ -972,8 +1092,26 @@ public class FilmeActivity extends Activity {
                 if (detailTrailer != null) TrailerActivity.starten(this, detailTrailer[0], f.optString("Name"));
                 break;
             case "bewerten":
-                bewertenOeffnen(f);
+                bewertenOeffnen(f, false);
                 break;
+            case "gesehen": {
+                final boolean an = !Gesehen.hat(f);
+                Gesehen.lokalSetzen(f, an);
+                if (an) ungesehen.remove(f.optString("Id"));
+                else if (!ungesehen.contains(f.optString("Id"))) ungesehen.add(f.optString("Id"));
+                gesehenGeaendert();
+                if (!an) ungesehenNachziehen();
+                hinweis(an ? "Als gesehen markiert" : "Nicht mehr gesehen – der Film taucht wieder überall auf");
+                netz.execute(() -> {
+                    try {
+                        Gesehen.senden(f, an);
+                        h.postDelayed(() -> netz.execute(this::familieLaden), 2500);
+                    } catch (Exception ex) {
+                        h.post(() -> hinweis("Gesehen ließ sich nicht speichern"));
+                    }
+                });
+                break;
+            }
             case "qualitaet": {
                 final boolean an = Qualitaet.umschalten(f);
                 gesehenGeaendert(); // Kachel „Schlechte Qualität“ nachziehen
@@ -1227,7 +1365,7 @@ public class FilmeActivity extends Activity {
                                 }
                             });
                         }
-                        bewertenOeffnen(frisch);
+                        bewertenOeffnen(frisch, true);
                     }
                     if (frisch != null) {
                         ersetzen(frisch);
@@ -1819,6 +1957,7 @@ public class FilmeActivity extends Activity {
             ansicht = detailZurueck;
             detailEintrag = null;
             detailTrailer = null;
+            if (!ungesehen.isEmpty()) gesehenSeitenAufraeumen();
             fokusGeaendert();
         } else if (k == KeyEvent.KEYCODE_DPAD_LEFT) {
             detailKnopf = Math.max(0, detailKnopf - 1);
@@ -3512,12 +3651,61 @@ public class FilmeActivity extends Activity {
                     p.setAlpha(Math.round(0x33 * a));
                     c.drawRoundRect(r, 42, 42, p);
                 }
-                int farbe = f ? 0xFF111317 : 0xFFFFFFFF;
+                // runde Knöpfe: aktiv (gemerkt, bewertet, gesehen) in Gelb, solange sie nicht ausgewählt sind
+                boolean an = "gemerkt".equals(art) || ("bewerten".equals(art) && !eigeneNotenText(e).isEmpty())
+                        || ("gesehen".equals(art) && Gesehen.hat(e));
+                int farbe = f ? 0xFF111317 : an ? GELB : 0xFFFFFFFF;
                 p.setColor(farbe);
                 p.setAlpha(Math.round(255 * a));
                 float tx = x + 42, ty = y + 42;
                 Path d = new Path();
                 switch (art) {
+                    case "bewerten": {
+                        // Stern: leer = noch nicht bewertet, voll = bewertet
+                        for (int s = 0; s < 10; s++) {
+                            double wi = Math.PI / 2 + s * Math.PI / 5;
+                            float rad = s % 2 == 0 ? 16f : 6.8f;
+                            float sx = tx - (float) Math.cos(wi) * rad, sy = ty + 1.5f - (float) Math.sin(wi) * rad;
+                            if (s == 0) d.moveTo(sx, sy);
+                            else d.lineTo(sx, sy);
+                        }
+                        d.close();
+                        p.setStrokeJoin(Paint.Join.ROUND);
+                        if (an) {
+                            p.setStyle(Paint.Style.FILL_AND_STROKE);
+                            p.setStrokeWidth(1.5f);
+                        } else {
+                            p.setStyle(Paint.Style.STROKE);
+                            p.setStrokeWidth(3f);
+                        }
+                        c.drawPath(d, p);
+                        p.setStyle(Paint.Style.FILL);
+                        break;
+                    }
+                    case "gesehen": {
+                        // Auge; gesehen = Auge mit Haken (wie die Kachel „Gesehen“)
+                        p.setStyle(Paint.Style.STROKE);
+                        p.setStrokeWidth(3f);
+                        p.setStrokeCap(Paint.Cap.ROUND);
+                        p.setStrokeJoin(Paint.Join.ROUND);
+                        d.moveTo(tx - 17, ty);
+                        d.quadTo(tx, ty - 17, tx + 17, ty);
+                        d.quadTo(tx, ty + 17, tx - 17, ty);
+                        d.close();
+                        c.drawPath(d, p);
+                        if (an) {
+                            p.setStrokeWidth(3.4f);
+                            Path hk = new Path();
+                            hk.moveTo(tx - 6.5f, ty + 0.5f);
+                            hk.lineTo(tx - 1.8f, ty + 5f);
+                            hk.lineTo(tx + 7f, ty - 5f);
+                            c.drawPath(hk, p);
+                        } else {
+                            c.drawCircle(tx, ty, 4.6f, p);
+                        }
+                        p.setStyle(Paint.Style.FILL);
+                        break;
+                    }
                     case "vorne":
                         p.setStyle(Paint.Style.STROKE);
                         p.setStrokeWidth(3.5f);
@@ -3583,6 +3771,14 @@ public class FilmeActivity extends Activity {
                 knopf.setAlpha(Math.round(255 * a));
                 if (!text.isEmpty()) c.drawText(text, x + 74, y + 53, knopf);
                 knopf.setColor(0xFFFFFFFF);
+                if (f && text.isEmpty() && !"qualitaet".equals(art) && !bew) {
+                    // Tipp mittig unter dem runden Knopf (die Fahne hat ihren eigenen)
+                    klein.setTextAlign(Paint.Align.CENTER);
+                    klein.setAlpha(Math.round(0xE6 * a));
+                    c.drawText(knopfTipp(art, e), x + w / 2, y + 84 + 44, klein);
+                    klein.setTextAlign(Paint.Align.LEFT);
+                    klein.setAlpha(0xB3);
+                }
                 x += w + 24;
             }
             p.setAlpha(255);

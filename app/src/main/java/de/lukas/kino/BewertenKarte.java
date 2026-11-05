@@ -17,7 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Das Bewerten-Fenster (Wunsch Lukas 03.11.2026): nach dem Film (ab 80 %) und über „Bewerten“ in den Details.
+ * Das Bewerten-Fenster (Wunsch Lukas 03.11.2026): nach dem Film (ab 80 %) und über den Stern in den Details.
  * <ul>
  * <li>Ein Feld ohne Bewertung zeigt „–“. Erst ↑ oder ↓ holt die 5, dann zählt das Feld.</li>
  * <li>„Abgeben“ (OK) schickt nur Felder, die geändert wurden – ändert Papa nur seine Note, bleibt Mama unberührt.</li>
@@ -25,6 +25,8 @@ import java.util.List;
  *     OK darauf nimmt die eigene Bewertung heraus. Lukas und Jonas: geht sofort raus und schließt.</li>
  * <li>Jede Note hat ihren eigenen Look: 1 Gewitter mit Riss, ab 7 grün, 8 funkelt, 9 kräftig grün mit Konfetti,
  *     10 golden mit Konfetti, Luftschlangen und Lichtschein.</li>
+ * <li>Seit 05.11.2026: nach dem Film ganz rechts „Noch wer dabei?“ – dort lassen sich Mitschauer dazunehmen (einzeln oder
+ *     „Alle“). Jeder bekommt seinen Zähler mit seiner alten Note; viele Zähler werden kleiner gezeichnet.</li>
  * </ul>
  * Zeichnet nur den Inhalt; das Glas dahinter malt FilmeActivity (echtesGlas mit {@link #rahmen(float)}).
  */
@@ -47,30 +49,40 @@ final class BewertenKarte {
     private static final int[] GRUEN = {0xFF4ADE80, 0xFF22C55E, 0xFFBBF7D0, 0xFFF2B705, 0xFFFFFFFF};
 
     // Maße (Bühne 1920x1080)
-    private static final float TW = 380, TH = 430, XW = 150, XH = 230, LUECKE = 26, MITTE = 40, H = 660;
+    private static final float TW = 380, TH = 430, XW = 150, XH = 230, LUECKE = 26, MITTE = 40, H = 660, MAX = 1840, RAND_B = 88;
+    private static final int X = 0, Z = 1, PLUS = 2;
 
     final JSONObject film;
-    final String[] namen;
-    final int[] alt;          // alte Note (0 = keine)
-    final int[] wert;         // gezeigte Note (0 = keine)
-    final boolean[] geaendert;
-    private final long[] wechsel;
-    private int fokus;        // Slot: Eltern 0 = X Papa, 1 = Papa, 2 = Mama, 3 = X Mama; sonst 0 = X, 1 = Zähler
+    final List<String> namen = new ArrayList<>();
+    final List<Integer> alt = new ArrayList<>();      // alte Note (0 = keine)
+    final List<Integer> wert = new ArrayList<>();     // gezeigte Note (0 = keine)
+    final List<Boolean> geaendert = new ArrayList<>();
+    private final List<Long> wechsel = new ArrayList<>();
+    final int eigene;          // so viele gehören zu diesem Fernseher (Eltern 2, sonst 1); dahinter die Mitschauer
+    private final boolean nachFilm;
+    private int fokus;        // Index in slots(): Eltern 0 = X Papa, 1 = Papa, 2 = Mama, 3 = X Mama; sonst 0 = X, 1 = Zähler
+    private boolean waehlen;  // Auswahl „Wer hat noch mitgeschaut?“ offen
+    private int wFokus;
     private long danke;
     private boolean nurEntfernt;
 
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final TextPaint zahl, wort, name, titel, frage, klein, xText;
+    private final TextPaint zahl, wort, name, titel, frage, klein, xText, chip;
     private final Path pfad = new Path();
     private final RectF r = new RectF(), kachel = new RectF();
 
-    BewertenKarte(Context c, JSONObject film, String[] namen, int[] alt) {
+    /** nachFilm = true: Fenster nach dem Film (mit „Noch wer dabei?“), sonst über den Stern in den Details. */
+    BewertenKarte(Context c, JSONObject film, String[] namen, int[] alt, boolean nachFilm) {
         this.film = film;
-        this.namen = namen;
-        this.alt = alt;
-        wert = alt.clone();
-        geaendert = new boolean[namen.length];
-        wechsel = new long[namen.length];
+        for (int i = 0; i < namen.length; i++) {
+            this.namen.add(namen[i]);
+            this.alt.add(alt[i]);
+            wert.add(alt[i]);
+            geaendert.add(false);
+            wechsel.add(0L);
+        }
+        eigene = namen.length;
+        this.nachFilm = nachFilm;
         fokus = 1;
         zahl = stift(c, 150, 800);
         wort = stift(c, 30, 650);
@@ -79,6 +91,7 @@ final class BewertenKarte {
         frage = stift(c, 42, 650);
         klein = stift(c, 26, 500);
         xText = stift(c, 24, 600);
+        chip = stift(c, 30, 650);
     }
 
     private static TextPaint stift(Context c, float g, int w) {
@@ -90,21 +103,68 @@ final class BewertenKarte {
         return t;
     }
 
-    boolean eltern() {
-        return namen.length > 1;
+    /** Mehr als ein Zähler (Eltern oder Mitschauer dabei). */
+    boolean mehr() {
+        return namen.size() > 1;
     }
 
-    private int slots() {
-        return eltern() ? 4 : 2;
+    /** Wer noch dazukommen kann. */
+    List<String> kandidaten() {
+        List<String> l = new ArrayList<>();
+        for (String n : Bewerten.ALLE) if (!namen.contains(n)) l.add(n);
+        return l;
     }
 
-    private boolean istX(int slot) {
-        return slot == 0 || (eltern() && slot == 3);
+    /** Auswahl: die Kandidaten, bei mehreren dazu „Alle“ (null). */
+    private List<String> wahl() {
+        List<String> l = kandidaten();
+        if (l.size() > 1) l.add(null);
+        return l;
     }
 
-    private int person(int slot) {
-        if (!eltern()) return 0;
-        return slot <= 1 ? 0 : 1;
+    /** Mitschauer (nach den eigenen). */
+    List<String> dazu() {
+        return new ArrayList<>(namen.subList(eigene, namen.size()));
+    }
+
+    /** Felder der Reihe: {Art, Person}. Art X = Keine Bewertung, Z = Zähler, PLUS = Noch wer dabei? */
+    private List<int[]> slots() {
+        List<int[]> l = new ArrayList<>();
+        l.add(new int[]{X, 0});
+        l.add(new int[]{Z, 0});
+        if (eigene > 1) {
+            l.add(new int[]{Z, 1});
+            l.add(new int[]{X, 1});
+        }
+        for (int i = eigene; i < namen.size(); i++) l.add(new int[]{Z, i});
+        if (nachFilm && !kandidaten().isEmpty()) l.add(new int[]{PLUS, -1});
+        return l;
+    }
+
+    private int[] slot() {
+        List<int[]> l = slots();
+        return l.get(Math.max(0, Math.min(fokus, l.size() - 1)));
+    }
+
+    private int zSlot(int pi) {
+        List<int[]> l = slots();
+        for (int i = 0; i < l.size(); i++) if (l.get(i)[0] == Z && l.get(i)[1] == pi) return i;
+        return 1;
+    }
+
+    private static float breite(int art) {
+        return art == Z ? TW : XW;
+    }
+
+    /** Breite der Reihe ohne Verkleinerung (allein ohne Plus mit leerem Platz rechts, damit der Zähler mittig bleibt). */
+    private float reiheBreite(List<int[]> l) {
+        float b = 0;
+        for (int i = 0; i < l.size(); i++) {
+            if (i > 0) b += l.get(i - 1)[0] == Z && l.get(i)[0] == Z ? MITTE : LUECKE;
+            b += breite(l.get(i)[0]);
+        }
+        if (l.size() == 2) b += LUECKE + XW;
+        return b;
     }
 
     boolean imDanke() {
@@ -118,10 +178,10 @@ final class BewertenKarte {
     /** Was abgeschickt wird: {Person, Note}, Note 0 = Bewertung herausnehmen. Nur geänderte Felder. */
     List<int[]> aenderungen() {
         List<int[]> l = new ArrayList<>();
-        for (int i = 0; i < namen.length; i++) {
-            if (!geaendert[i] || wert[i] == alt[i]) continue;
-            if (wert[i] == 0 && alt[i] == 0) continue;
-            l.add(new int[]{i, wert[i]});
+        for (int i = 0; i < namen.size(); i++) {
+            if (!geaendert.get(i) || wert.get(i).equals(alt.get(i))) continue;
+            if (wert.get(i) == 0 && alt.get(i) == 0) continue;
+            l.add(new int[]{i, wert.get(i)});
         }
         return l;
     }
@@ -131,44 +191,87 @@ final class BewertenKarte {
         return false;
     }
 
+    /** Mitschauer dazunehmen: eigener Zähler mit seiner alten Note (aus der Familie), Fokus auf den ersten neuen. */
+    private void hinzu(List<String> neu) {
+        Familie.Info info = Familie.fuer(film);
+        int erster = -1;
+        for (String n : neu) {
+            if (namen.contains(n)) continue;
+            Integer w = info != null ? info.noten.get(n) : null;
+            int a = w != null && w >= 1 && w <= 10 ? w : 0;
+            namen.add(n);
+            alt.add(a);
+            wert.add(a);
+            geaendert.add(false);
+            wechsel.add(0L);
+            if (erster < 0) erster = namen.size() - 1;
+        }
+        if (erster >= 0) fokus = zSlot(erster);
+    }
+
+    private void setzeWert(int pi, int note) {
+        if (wert.get(pi) == note) return;
+        wert.set(pi, note);
+        geaendert.set(pi, true);
+        wechsel.set(pi, SystemClock.uptimeMillis());
+    }
+
     /** Tasten: WEITER (nur neu zeichnen), ABGEBEN oder SCHLIESSEN. */
     int taste(int k, boolean ok, boolean zurueck, int wdh) {
         if (danke > 0) return (ok || zurueck) ? SCHLIESSEN : WEITER;
+        if (waehlen) {
+            List<String> w = wahl();
+            if (zurueck) waehlen = false;
+            else if (k == KeyEvent.KEYCODE_DPAD_LEFT && wdh == 0) wFokus = Math.max(0, wFokus - 1);
+            else if (k == KeyEvent.KEYCODE_DPAD_RIGHT && wdh == 0) wFokus = Math.min(w.size() - 1, wFokus + 1);
+            else if (ok && wdh == 0 && !w.isEmpty()) {
+                String x = w.get(Math.min(wFokus, w.size() - 1));
+                waehlen = false;
+                List<String> neu = new ArrayList<>();
+                if (x == null) neu.addAll(kandidaten());
+                else neu.add(x);
+                hinzu(neu);
+            }
+            return WEITER;
+        }
         if (zurueck) return SCHLIESSEN;
-        int pi = person(fokus);
+        int[] s = slot();
+        int pi = s[1];
         switch (k) {
             case KeyEvent.KEYCODE_DPAD_UP:
             case KeyEvent.KEYCODE_DPAD_DOWN:
-                if (istX(fokus)) {
-                    fokus = eltern() ? (fokus == 0 ? 1 : 2) : 1;
+                if (s[0] == X) {
+                    fokus = zSlot(pi);
                     return WEITER;
                 }
-                int vorher = wert[pi];
-                if (wert[pi] == 0) wert[pi] = 5;
-                else if (k == KeyEvent.KEYCODE_DPAD_UP) wert[pi] = Math.min(10, wert[pi] + 1);
-                else wert[pi] = Math.max(1, wert[pi] - 1);
-                if (wert[pi] != vorher) {
-                    geaendert[pi] = true;
-                    wechsel[pi] = SystemClock.uptimeMillis();
-                }
+                if (s[0] == PLUS) return WEITER;
+                int vorher = wert.get(pi);
+                if (vorher == 0) setzeWert(pi, 5);
+                else if (k == KeyEvent.KEYCODE_DPAD_UP) setzeWert(pi, Math.min(10, vorher + 1));
+                else setzeWert(pi, Math.max(1, vorher - 1));
                 return WEITER;
             case KeyEvent.KEYCODE_DPAD_LEFT:
                 if (wdh == 0) fokus = Math.max(0, fokus - 1);
                 return WEITER;
             case KeyEvent.KEYCODE_DPAD_RIGHT:
-                if (wdh == 0) fokus = Math.min(slots() - 1, fokus + 1);
+                if (wdh == 0) fokus = Math.min(slots().size() - 1, fokus + 1);
                 return WEITER;
             default:
                 if (!ok || wdh > 0) return WEITER;
-                if (istX(fokus)) {
-                    wert[pi] = 0;
-                    geaendert[pi] = true;
-                    wechsel[pi] = SystemClock.uptimeMillis();
-                    if (!eltern()) {
+                if (s[0] == PLUS) {
+                    waehlen = true;
+                    wFokus = 0;
+                    return WEITER;
+                }
+                if (s[0] == X) {
+                    wert.set(pi, 0);
+                    geaendert.set(pi, true);
+                    wechsel.set(pi, SystemClock.uptimeMillis());
+                    if (!mehr()) {
                         nurEntfernt = true;
                         return aenderungen().isEmpty() ? SCHLIESSEN : ABGEBEN;
                     }
-                    fokus = fokus == 0 ? 1 : 2;   // zurück auf den Zähler dieser Person
+                    fokus = zSlot(pi);   // zurück auf den Zähler dieser Person
                     return WEITER;
                 }
                 nurEntfernt = true;
@@ -179,7 +282,8 @@ final class BewertenKarte {
 
     /** Rahmen der Glas-Karte (für echtesGlas in FilmeActivity). */
     RectF rahmen(float a) {
-        float breite = eltern() ? 2 * XW + 2 * TW + 2 * LUECKE + MITTE + 88 : 2 * XW + TW + 2 * LUECKE + 88;
+        float breite = Math.min(MAX, reiheBreite(slots()) + RAND_B);
+        if (danke > 0) breite = Math.min(MAX, Math.max(breite, 240 + aenderungen().size() * 330));
         float oben = 190 + (1 - a) * 40;
         return new RectF(960 - breite / 2, oben, 960 + breite / 2, oben + H);
     }
@@ -210,32 +314,45 @@ final class BewertenKarte {
         titel.setAlpha(Math.round(0xB3 * a));
         c.drawText(kuerzen(filmName, titel, k.width() - 120), 960, k.top + 70, titel);
         frage.setAlpha(Math.round(255 * a));
-        c.drawText(kuerzen(Bewerten.frage(), frage, k.width() - 80), 960, k.top + 128, frage);
+        c.drawText(kuerzen(Bewerten.frage(namen.size() > eigene), frage, k.width() - 80), 960, k.top + 128, frage);
 
         float oben = k.top + 170;
         boolean weiter = false;
-        if (eltern()) {
-            float x = 960 - (2 * XW + 2 * TW + 2 * LUECKE + MITTE) / 2;
-            xFeld(c, x, oben, 0, 0, a);
-            x += XW + LUECKE;
-            weiter |= zaehler(c, x, oben, 0, 1, a, t, jetzt);
-            x += TW + MITTE;
-            weiter |= zaehler(c, x, oben, 1, 2, a, t, jetzt);
-            x += TW + LUECKE;
-            xFeld(c, x, oben, 1, 3, a);
-        } else {
-            float x = 960 - TW / 2;
-            xFeld(c, x - LUECKE - XW, oben, 0, 0, a);
-            weiter |= zaehler(c, x, oben, 0, 1, a, t, jetzt);
+        List<int[]> l = slots();
+        fokus = Math.min(fokus, l.size() - 1);
+        float rb = reiheBreite(l);
+        float skala = rb + RAND_B > MAX ? (MAX - RAND_B) / rb : 1f;
+        c.save();
+        if (skala < 1f) c.scale(skala, skala, 960, oben);
+        float x = 960 - rb / 2;
+        for (int i = 0; i < l.size(); i++) {
+            int[] s = l.get(i);
+            if (i > 0) x += l.get(i - 1)[0] == Z && s[0] == Z ? MITTE : LUECKE;
+            if (s[0] == X) xFeld(c, x, oben, s[1], i, a);
+            else if (s[0] == PLUS) plusFeld(c, x, oben, i, a);
+            else weiter |= zaehler(c, x, oben, s[1], i, a, t, jetzt);
+            x += breite(s[0]);
         }
+        c.restore();
+        if (waehlen) wahlZeichnen(c, k, a);
 
+        int[] s = slot();
+        boolean elternAllein = eigene == 2 && namen.size() == 2;
+        boolean plus = nachFilm && !kandidaten().isEmpty();
         String hilfe;
-        if (istX(fokus)) {
-            hilfe = eltern() ? "OK  keine Bewertung für " + (fokus == 0 ? "Papa" : "Mama") + "      ← →  wechseln      Zurück  später"
+        if (waehlen) {
+            hilfe = "OK  dazunehmen      ← →  wählen      Zurück  abbrechen";
+        } else if (s[0] == PLUS) {
+            hilfe = "OK  noch jemand hat mitgeschaut      ←  zurück      Zurück  später";
+        } else if (s[0] == X) {
+            hilfe = mehr() ? "OK  keine Bewertung für " + Bewerten.kurz(namen.get(s[1])) + "      ← →  wechseln      Zurück  später"
                     : "OK  keine Bewertung      →  zurück zur Note      Zurück  später";
+        } else if (elternAllein && !plus) {
+            hilfe = "↑ ↓  Note      ← →  Papa / Mama / keine      OK  abgeben      Zurück  später";
+        } else if (mehr()) {
+            hilfe = "↑ ↓  Note      ← →  wechseln      OK  abgeben      Zurück  später";
         } else {
-            hilfe = eltern() ? "↑ ↓  Note      ← →  Papa / Mama / keine      OK  abgeben      Zurück  später"
-                    : "↑ ↓  Note      ←  keine Bewertung      OK  abgeben      Zurück  später";
+            hilfe = "↑ ↓  Note      ←  keine Bewertung" + (plus ? "      →  noch wer dabei?" : "") + "      OK  abgeben      Zurück  später";
         }
         klein.setAlpha(Math.round(0xC8 * a));
         c.drawText(hilfe, 960, k.bottom + 50, klein);
@@ -243,8 +360,8 @@ final class BewertenKarte {
     }
 
     private void xFeld(Canvas c, float x, float oben, int pi, int slot, float a) {
-        boolean aktiv = fokus == slot;
-        boolean entfernt = geaendert[pi] && wert[pi] == 0 && alt[pi] > 0;
+        boolean aktiv = fokus == slot && !waehlen;
+        boolean entfernt = geaendert.get(pi) && wert.get(pi) == 0 && alt.get(pi) > 0;
         float y = oben + (TH - XH) / 2;
         r.set(x, y, x + XW, y + XH);
         farbe(entfernt ? 0x40E5484D : (aktiv ? 0x2EFFFFFF : 0x12FFFFFF), a);
@@ -271,10 +388,120 @@ final class BewertenKarte {
         c.drawText(entfernt ? "entfernt" : "Bewertung", cx, y + 180, xText);
     }
 
+    /** Feld „Noch wer dabei?“ (nur nach dem Film): Kreis mit Plus. */
+    private void plusFeld(Canvas c, float x, float oben, int slot, float a) {
+        boolean aktiv = fokus == slot && !waehlen;
+        float y = oben + (TH - XH) / 2;
+        r.set(x, y, x + XW, y + XH);
+        farbe(aktiv ? 0x2EFFFFFF : 0x12FFFFFF, a);
+        c.drawRoundRect(r, 30, 30, p);
+        if (aktiv) {
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(3);
+            farbe(0xDDFFFFFF, a);
+            c.drawRoundRect(r, 30, 30, p);
+        }
+        float cx = x + XW / 2, cy = y + 78;
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(5);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        farbe(0xFFFFFFFF, a * (aktiv ? 0.95f : 0.55f));
+        c.drawCircle(cx, cy, 28, p);
+        c.drawLine(cx - 13, cy, cx + 13, cy, p);
+        c.drawLine(cx, cy - 13, cx, cy + 13, p);
+        p.setStyle(Paint.Style.FILL);
+        xText.setColor(0xFFFFFFFF);
+        xText.setAlpha(Math.round(255 * a * (aktiv ? 1f : 0.6f)));
+        c.drawText("Noch wer", cx, y + 150, xText);
+        c.drawText("dabei?", cx, y + 180, xText);
+    }
+
+    /** Auswahl „Wer hat noch mitgeschaut?“ über der Reihe: Namen als Pillen in ihrer Farbe, bei mehreren „Alle“. */
+    private void wahlZeichnen(Canvas c, RectF k, float a) {
+        float oben = k.top + 160;
+        r.set(k.left + 30, oben, k.right - 30, oben + 450);
+        farbe(0xFB0C0E14, a);
+        c.drawRoundRect(r, 40, 40, p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(2);
+        farbe(0x24FFFFFF, a);
+        c.drawRoundRect(r, 40, 40, p);
+        p.setStyle(Paint.Style.FILL);
+        frage.setAlpha(Math.round(255 * a));
+        frage.setTextSize(40);
+        c.drawText("Wer hat noch mitgeschaut?", 960, oben + 120, frage);
+        frage.setTextSize(42);
+
+        List<String> w = wahl();
+        wFokus = Math.min(wFokus, Math.max(0, w.size() - 1));
+        float ph = 88, gap = 14, maxB = r.width() - 30;
+        // Pillen messen und auf Zeilen verteilen
+        float[] bw = new float[w.size()];
+        List<List<Integer>> zeilen = new ArrayList<>();
+        List<Integer> zeile = new ArrayList<>();
+        float zb = 0;
+        for (int i = 0; i < w.size(); i++) {
+            String txt = w.get(i) == null ? "Alle" : Bewerten.kurz(w.get(i));
+            bw[i] = chip.measureText(txt) + 86;
+            if (!zeile.isEmpty() && zb + gap + bw[i] > maxB) {
+                zeilen.add(zeile);
+                zeile = new ArrayList<>();
+                zb = 0;
+            }
+            zb += (zeile.isEmpty() ? 0 : gap) + bw[i];
+            zeile.add(i);
+        }
+        if (!zeile.isEmpty()) zeilen.add(zeile);
+        float y = oben + 190 + (zeilen.size() == 1 ? 44 : 0);
+        for (List<Integer> z : zeilen) {
+            float summe = 0;
+            for (int i : z) summe += bw[i];
+            summe += gap * (z.size() - 1);
+            float x = 960 - summe / 2;
+            for (int i : z) {
+                String n = w.get(i);
+                boolean f = i == wFokus;
+                kachel.set(x, y, x + bw[i], y + ph);
+                if (f) {
+                    farbe(0xFFFFFFFF, a);
+                    c.drawRoundRect(kachel, ph / 2, ph / 2, p);
+                } else {
+                    farbe(0x1AFFFFFF, a);
+                    c.drawRoundRect(kachel, ph / 2, ph / 2, p);
+                    p.setStyle(Paint.Style.STROKE);
+                    p.setStrokeWidth(2);
+                    farbe(0x2EFFFFFF, a);
+                    c.drawRoundRect(kachel, ph / 2, ph / 2, p);
+                    p.setStyle(Paint.Style.FILL);
+                }
+                // Farbpunkt der Person (Alle: vier kleine Punkte)
+                float px = x + 36, py = y + ph / 2;
+                if (n == null) {
+                    int[] f4 = {0xFFF2B705, 0xFFE8559A, 0xFF1FA463, 0xFF2F6FEB};
+                    for (int q = 0; q < 4; q++) {
+                        farbe(f4[q], a);
+                        c.drawCircle(px - 6 + (q % 2) * 12, py - 6 + (q / 2) * 12, 5, p);
+                    }
+                } else {
+                    Integer fc = Familie.FARBEN.get(n);
+                    farbe(fc != null ? fc : 0xFFFFFFFF, a);
+                    c.drawCircle(px, py, 11, p);
+                }
+                chip.setColor(f ? 0xFF111317 : 0xFFFFFFFF);
+                chip.setAlpha(Math.round(255 * a));
+                chip.setTextAlign(Paint.Align.LEFT);
+                c.drawText(n == null ? "Alle" : Bewerten.kurz(n), x + 58, y + ph / 2 + 11, chip);
+                chip.setTextAlign(Paint.Align.CENTER);
+                x += bw[i] + gap;
+            }
+            y += ph + gap;
+        }
+    }
+
     private boolean zaehler(Canvas c, float x, float oben, int pi, int slot, float a, float t, long jetzt) {
-        boolean aktiv = fokus == slot || (!eltern() && fokus == 1);
-        int note = wert[pi];
-        float ia = eltern() && !aktiv ? 0.8f : 1f;
+        boolean aktiv = fokus == slot && !waehlen;
+        int note = wert.get(pi);
+        float ia = mehr() && !aktiv ? 0.8f : 1f;
         float cx = x + TW / 2;
         kachel.set(x, oben, x + TW, oben + TH);
         boolean weiter = note == 1 || note == 2 || note >= 8;
@@ -309,8 +536,8 @@ final class BewertenKarte {
             wolke(c, cx + 70, oben + 82, 0.7f, 0xFF6B7280, fx);
         }
         // Platzen beim Wechsel auf 10
-        float seit = (jetzt - wechsel[pi]) / 1000f;
-        if (note == 10 && wechsel[pi] > 0 && seit < 1.4f) explosion(c, cx, oben + 160, seit, fx, pi);
+        float seit = (jetzt - wechsel.get(pi)) / 1000f;
+        if (note == 10 && wechsel.get(pi) > 0 && seit < 1.4f) explosion(c, cx, oben + 160, seit, fx, pi);
         c.restore();
 
         // Rand (Fokus weiß, sonst in der Farbe der Note)
@@ -322,12 +549,12 @@ final class BewertenKarte {
             farbe(RAND[note], a * ia);
             c.drawRoundRect(kachel, 38, 38, p);
             p.clearShadowLayer();
-        } else if (!aktiv || !eltern()) {
+        } else if (!aktiv || !mehr()) {
             p.setStrokeWidth(2);
             farbe(RAND[note], a * ia);
             c.drawRoundRect(kachel, 38, 38, p);
         }
-        if (aktiv && eltern()) {
+        if (aktiv && mehr()) {
             p.setStrokeWidth(3);
             farbe(0xE6FFFFFF, a);
             r.set(kachel.left - 6, kachel.top - 6, kachel.right + 6, kachel.bottom + 6);
@@ -350,11 +577,11 @@ final class BewertenKarte {
         // Zahl (Pop beim Wechsel, Wackeln bei der 1)
         float basis = oben + 222;
         float pop = 1f, wackeln = 0f;
-        if (wechsel[pi] > 0 && seit < 0.28f) {
+        if (wechsel.get(pi) > 0 && seit < 0.28f) {
             pop = 1f + 0.25f * (float) Math.sin(Math.PI * seit / 0.28f);
             weiter = true;
         }
-        if (note == 1 && wechsel[pi] > 0 && seit < 0.6f) wackeln = (float) Math.sin(seit * 55) * 10 * (1 - seit / 0.6f);
+        if (note == 1 && wechsel.get(pi) > 0 && seit < 0.6f) wackeln = (float) Math.sin(seit * 55) * 10 * (1 - seit / 0.6f);
         c.save();
         c.translate(wackeln, 0);
         c.scale(pop, pop, cx, basis - 55);
@@ -376,7 +603,7 @@ final class BewertenKarte {
         c.restore();
 
         // Wort
-        boolean entfernt = geaendert[pi] && note == 0 && alt[pi] > 0;
+        boolean entfernt = geaendert.get(pi) && note == 0 && alt.get(pi) > 0;
         wort.setColor(note == 0 ? (entfernt ? 0xFFFCA5A5 : 0xB3FFFFFF) : (note >= 9 || note <= 2 ? ZAHL[note] : 0xE6FFFFFF));
         wort.setAlpha(Math.round(255 * a * ia * (note == 0 ? 0.8f : 1f)));
         c.drawText(entfernt ? "Wird entfernt" : WORT[note], cx, oben + 268, wort);
@@ -393,10 +620,10 @@ final class BewertenKarte {
         }
 
         // wer
-        Integer fn = Familie.FARBEN.get(namen[pi]);
+        Integer fn = Familie.FARBEN.get(namen.get(pi));
         name.setColor(fn != null ? fn : 0xFFFFFFFF);
         name.setAlpha(Math.round(255 * a * ia));
-        c.drawText(Bewerten.schild(namen[pi]), cx, oben + 402, name);
+        c.drawText(Bewerten.schild(namen.get(pi)), cx, oben + 402, name);
         return weiter;
     }
 
@@ -578,7 +805,7 @@ final class BewertenKarte {
         frage.setColor(0xFFFFFFFF);
         frage.setTextSize(46);
         frage.setAlpha(Math.round(255 * a));
-        String text = nurEntfernt ? "Bewertung entfernt" : Bewerten.danke();
+        String text = nurEntfernt ? "Bewertung entfernt" : Bewerten.danke(mehr());
         c.drawText(text, 960, cy + 160, frage);
         frage.setTextSize(42);
         // wer was: nur die geänderten Felder, in der Farbe der Note
@@ -589,7 +816,7 @@ final class BewertenKarte {
         String[] teile = new String[l.size()];
         for (int i = 0; i < l.size(); i++) {
             int[] e = l.get(i);
-            teile[i] = (eltern() ? Bewerten.schild(namen[e[0]]) + ":  " : "") + (e[1] == 0 ? "entfernt" : e[1] + " von 10");
+            teile[i] = (mehr() ? Bewerten.schild(namen.get(e[0])) + ":  " : "") + (e[1] == 0 ? "entfernt" : e[1] + " von 10");
             breiten[i] = wort.measureText(teile[i]);
             summe += breiten[i] + (i > 0 ? 60 : 0);
         }
@@ -605,6 +832,12 @@ final class BewertenKarte {
         wort.setTextAlign(Paint.Align.CENTER);
         titel.setAlpha(Math.round(0xB3 * a));
         c.drawText(kuerzen(filmName, titel, k.width() - 120), 960, cy + 280, titel);
+        if (namen.size() > eigene) {
+            List<String> kurz = new ArrayList<>();
+            for (String n : dazu()) kurz.add(Bewerten.kurz(n));
+            klein.setAlpha(Math.round(0xB3 * a));
+            c.drawText("Auch als gesehen eingetragen: " + String.join(", ", kurz), 960, cy + 334, klein);
+        }
         return t0 < 1f || zehn;
     }
 

@@ -1110,6 +1110,11 @@
       if (ids.indexOf(id) >= 0 || ges.lokal[id] < Date.now()) delete ges.lokal[id];
       else ids.unshift(id);
     });
+    Object.keys(gesWeg).forEach(function (id) {
+      const i = ids.indexOf(id);
+      if (i < 0 || gesWeg[id] < Date.now()) delete gesWeg[id];
+      else ids.splice(i, 1);
+    });
     gesehenSetzen(ids);
   }
 
@@ -1135,6 +1140,88 @@
           titel: (f.Name || '') + (f.ProductionYear ? ' (' + f.ProductionYear + ')' : ''), an: 'true' });
       } catch (x) { /* Automation 44 trägt es sonst ohnehin ein */ }
     })();
+  }
+
+  // Gesehen-Knopf in den Details (Wunsch Lukas 05.11.2026): wie die Merkliste ein Umschalter. Selbst als gesehen markieren
+  // (auch Filme, die man von früher kennt) oder wieder herausnehmen – dann taucht der Film überall wieder auf.
+  const gesWeg = {};          // gerade als „nicht gesehen“ markiert: Jellyfin-ID -> gilt bis (bis HA es bestätigt)
+  let gesUngesehen = [];      // beim Verlassen der Details aus der Seite „Gesehen“ nehmen
+
+  function gesehenUmschalten(f) {
+    if (!f || typ(f) !== 'Movie') return;
+    const an = !istGesehen(f);
+    if (an) {
+      delete gesWeg[f.Id];
+      ges.lokal[f.Id] = Date.now() + 15 * 60000;
+      gesUngesehen = gesUngesehen.filter(function (id) { return id !== f.Id; });
+      gesehenSetzen([f.Id].concat(ges.ids.filter(function (id) { return id !== f.Id; })));
+    } else {
+      delete ges.lokal[f.Id];
+      gesWeg[f.Id] = Date.now() + 15 * 60000;
+      if (gesUngesehen.indexOf(f.Id) < 0) gesUngesehen.push(f.Id);
+      gesehenSetzen(ges.ids.filter(function (id) { return id !== f.Id; }));
+      ungesehenNachziehen();
+    }
+    knoepfeAktualisieren();
+    hinweis(an ? 'Als gesehen markiert' : 'Nicht mehr gesehen – der Film taucht wieder überall auf');
+    (async function () {
+      try {
+        await merk.plexLaden();
+        await merk.senden({ art: 'gesehen', wer: PERSON.ha, id: merk.plexIdFuer(f) || 'jf:' + f.Id,
+          titel: (f.Name || '') + (f.ProductionYear ? ' (' + f.ProductionYear + ')' : ''), an: String(an) });
+      } catch (x) {
+        hinweis('Gesehen ließ sich nicht speichern');
+      }
+    })();
+  }
+
+  /** Ein Film ist nicht mehr gesehen: Neu frisch holen, geladene Kategorien und Alle Filme beim nächsten Hinsehen neu laden. */
+  function ungesehenNachziehen() {
+    const s = startseiten.filme;
+    if (!s) return;
+    s.reihen.forEach(function (r) {
+      if (!r.quelle || !r.geladen || r.laedt) return;
+      r.geladen = false;
+      r.eintraege = [];
+      r.fokus = 0;
+      r.version++;
+    });
+    jf.neu().then(function (neu) {
+      s.reihen.forEach(function (r) {
+        if (r.titel !== 'Neu' || r.quelle) return;
+        r.eintraege = neu.filter(function (e) { return e && !istGesehen(e); });
+        r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.length - 1));
+        r.version++;
+      });
+      if (seite === s) {
+        nachladen();
+        zeichnen();
+      }
+    }, function () { /* dann beim nächsten Start */ });
+  }
+
+  /** Beim Verlassen der Details: Filme, die nicht mehr gesehen sind, aus der offenen Seite „Gesehen“ nehmen. */
+  function gesehenSeitenAufraeumen() {
+    const weg = gesUngesehen.filter(function (id) { return !ges.menge[id]; });
+    gesUngesehen = [];
+    if (!weg.length) return;
+    stapel.concat([seite]).forEach(function (s) {
+      if (!s || s.titel !== 'Gesehen' || !s.ohneFilter) return;
+      s.reihen.forEach(function (r) {
+        const vorher = r.eintraege.length;
+        r.eintraege = r.eintraege.filter(function (e) { return !e || weg.indexOf(e.Id) < 0; });
+        if (r.eintraege.length === vorher) return;
+        const n = r.eintraege.length;
+        if (/^\d+ Filme?$/.test(r.titel)) r.titel = n === 1 ? '1 Film' : n + ' Filme';
+        r.fokus = Math.min(r.fokus, Math.max(0, n - 1));
+        r.version++;
+      });
+      s.reihen = s.reihen.filter(function (r) { return r.eintraege.length; });
+      if (!s.reihen.length) {
+        s.akt = 0;
+        s.leer = 'Noch nichts gesehen';
+      } else s.akt = Math.min(s.akt, s.reihen.length - 1);
+    });
   }
 
   // ------------------------------------------------------------------ Schlechte Qualität melden (03.11.2026)
@@ -1265,36 +1352,65 @@
   //   10 golden mit Konfetti, Luftschlangen und Lichtschein.
   // Geht über den Webhook von Automation 84 an Skript 00v (Plex bewerten) – dieselben Bewertungen wie im Dashboard.
 
+  // Seit 05.11.2026 (Wunsch Lukas): nach dem Film ganz rechts das Feld „Noch wer dabei?“ – dort lassen sich alle dazunehmen,
+  // die mitgeschaut haben (TCL: Jonas, Papa, Mama; Eltern: Lukas, Jonas; Jonas: Lukas, Papa, Mama; oder „Alle“). Jeder
+  // bekommt seinen eigenen Zähler mit seiner alten Note (bleibt, wenn man sie nicht ändert) und gilt bei seinem Profil als
+  // gesehen. Ohne Dazunehmen fragt das Fenster wie immer nur den, dem der Fernseher gehört.
+
   const B = { offen: false, film: null, namen: [], alt: [], wert: [], geaendert: [], fokus: 1, danke: 0, timer: 0,
-    nurEntfernt: false, stufe: [], dom: null };
+    nurEntfernt: false, stufe: [], dom: null, eigene: 1, nachFilm: false, waehlen: false, wFokus: 0 };
   const PERSONEN_FARBE = { Lukas: '#F2B705', Moni: '#E8559A', Uli: '#1FA463', Jonas: '#2F6FEB' };
+  const ALLE_BEWERTER = ['Lukas', 'Jonas', 'Uli', 'Moni'];
+  const PROFIL_VON = { Lukas: 'Lukas', Jonas: 'Jonas', Uli: 'Eltern', Moni: 'Eltern' };
   const B_WORT = ['Noch keine Note', 'Katastrophe', 'Schlecht', 'Schwach', 'Mäh', 'Geht so', 'Ganz okay', 'Gut', 'Sehr gut',
     'Super!', 'Meisterwerk!'];
   const B_FARBE = ['#FFFFFF', '#E0322F', '#EF4444', '#F26B3A', '#F59E0B', '#F2C94C', '#B5D334', '#6BD48A', '#22C55E', '#39E072', '#FFD54A'];
   const B_BUNT = ['#F2B705', '#E8559A', '#22C55E', '#3E9BF0', '#FF6B35', '#A855F7', '#FFFFFF', '#2DD4BF'];
   const B_GRUEN = ['#4ADE80', '#22C55E', '#BBF7D0', '#F2B705', '#FFFFFF'];
+  const B_MASS = { x: 150, z: 380, plus: 150, luecke: 26, mitte: 40, rand: 88, max: 1840 };
 
   function bewNamen() { return PERSON.schluessel === 'eltern' ? ['Uli', 'Moni'] : [PERSON.ha]; }
   function bewFrage() {
+    if (B.namen.length > B.eigene) return 'Wie hat euch der Film gefallen?';
     return PERSON.schluessel === 'eltern' ? 'Mama und Papa, wie hat euch der Film gefallen?' : PERSON.ha + ', wie hat dir der Film gefallen?';
   }
   function bewSchild(n) { return n === 'Uli' ? 'Papa · Uli' : n === 'Moni' ? 'Mama · Moni' : n; }
+  function bewKurz(n) { return n === 'Uli' ? 'Papa' : n === 'Moni' ? 'Mama' : n; }
   function notenFarbe(n) {
     const st = ['#E5484D', '#F97316', '#F2B705', '#22C55E'];
     const t = begrenzen((n - 1) / 9, 0, 1) * (st.length - 1), i = Math.min(st.length - 2, Math.floor(t));
     return mischen(st[i], st[i + 1], t - i);
   }
 
-  function eigeneNoten(e) {
+  /** Eigene Noten zu einem Film (Eltern: Papa / Mama), z. B. [8] oder [7, 9]. */
+  function eigeneNotenListe(e) {
     const f = familieFuer(e), l = [];
     bewNamen().forEach(function (n) { if (f && f.noten[n]) l.push(f.noten[n]); });
+    return l;
+  }
+
+  function eigeneNoten(e) {
+    const l = eigeneNotenListe(e);
     return l.length ? 'Bewertet  ·  ' + l.join(' / ') : 'Bewerten';
   }
 
-  function bewZwei() { return B.namen.length > 1; }
-  function bewSlots() { return bewZwei() ? 4 : 2; }
-  function bewIstX(s) { return s === 0 || (bewZwei() && s === 3); }
-  function bewPerson(s) { return !bewZwei() ? 0 : (s <= 1 ? 0 : 1); }
+  function bewMehr() { return B.namen.length > 1; }
+  function bewKandidaten() { return ALLE_BEWERTER.filter(function (n) { return B.namen.indexOf(n) < 0; }); }
+  function bewWahl() { const k = bewKandidaten(); return k.length > 1 ? k.concat(['@alle']) : k; }
+
+  /** Reihe des Fensters: x = Keine Bewertung, z = Zähler, plus = Noch wer dabei? (p = Person). */
+  function bewSlotListe() {
+    const l = B.eigene > 1 ? [{ t: 'x', p: 0 }, { t: 'z', p: 0 }, { t: 'z', p: 1 }, { t: 'x', p: 1 }] : [{ t: 'x', p: 0 }, { t: 'z', p: 0 }];
+    for (let i = B.eigene; i < B.namen.length; i++) l.push({ t: 'z', p: i });
+    if (B.nachFilm && bewKandidaten().length) l.push({ t: 'plus', p: -1 });
+    return l;
+  }
+  function bewSlot() { return bewSlotListe()[B.fokus] || { t: 'z', p: 0 }; }
+  function bewZSlot(pi) {
+    const l = bewSlotListe();
+    for (let i = 0; i < l.length; i++) if (l[i].t === 'z' && l[i].p === pi) return i;
+    return 1;
+  }
 
   function bewAenderungen() {
     const l = [];
@@ -1306,15 +1422,22 @@
     return l;
   }
 
-  function bewertenOeffnen(f) {
+  function bewAlteNote(fam, n) {
+    const w = fam && fam.noten[n] ? Number(fam.noten[n]) : 0;
+    return w >= 1 && w <= 10 ? w : 0;
+  }
+
+  /** nachFilm = true: Fenster nach dem Film (dann gibt es „Noch wer dabei?“), sonst über den Stern in den Details. */
+  function bewertenOeffnen(f, nachFilm) {
     if (!f || typ(f) !== 'Movie') return;
     const fam = familieFuer(f);
     B.film = f;
     B.namen = bewNamen();
-    B.alt = B.namen.map(function (n) {
-      const w = fam && fam.noten[n] ? Number(fam.noten[n]) : 0;
-      return w >= 1 && w <= 10 ? w : 0;
-    });
+    B.eigene = B.namen.length;
+    B.nachFilm = !!nachFilm;
+    B.waehlen = false;
+    B.wFokus = 0;
+    B.alt = B.namen.map(function (n) { return bewAlteNote(fam, n); });
     B.wert = B.alt.slice();
     B.geaendert = B.namen.map(function () { return false; });
     B.stufe = B.namen.map(function () { return -1; });
@@ -1327,11 +1450,44 @@
     bewertenZeichnen();
   }
 
+  /** Mitschauer dazunehmen: eigener Zähler mit der alten Note, Fokus auf den ersten neuen. */
+  function bewHinzu(namen) {
+    const fam = familieFuer(B.film);
+    let erster = -1;
+    namen.forEach(function (n) {
+      if (B.namen.indexOf(n) >= 0) return;
+      B.namen.push(n);
+      B.alt.push(bewAlteNote(fam, n));
+      B.wert.push(B.alt[B.alt.length - 1]);
+      B.geaendert.push(false);
+      B.stufe.push(-1);
+      if (erster < 0) erster = B.namen.length - 1;
+    });
+    B.dom = null;
+    if (erster >= 0) B.fokus = bewZSlot(erster);
+    bewertenZeichnen();
+  }
+
   function bewertenSchliessen() {
     B.offen = false;
     B.danke = 0;
+    B.waehlen = false;
     B.dom = null;
     clearTimeout(B.timer);
+    bewertenZeichnen();
+  }
+
+  function bewWahlTaste(k) {
+    const w = bewWahl();
+    if (k === TASTE.ZURUECK) B.waehlen = false;
+    else if (k === TASTE.LINKS && wiederholung === 0) B.wFokus = Math.max(0, B.wFokus - 1);
+    else if (k === TASTE.RECHTS && wiederholung === 0) B.wFokus = Math.min(w.length - 1, B.wFokus + 1);
+    else if (k === TASTE.OK && wiederholung === 0 && w.length) {
+      const x = w[Math.min(B.wFokus, w.length - 1)];
+      B.waehlen = false;
+      bewHinzu(x === '@alle' ? bewKandidaten() : [x]);
+      return;
+    }
     bewertenZeichnen();
   }
 
@@ -1340,12 +1496,13 @@
       if (k === TASTE.ZURUECK || k === TASTE.OK) bewertenSchliessen();
       return;
     }
+    if (B.waehlen) return bewWahlTaste(k);
     if (k === TASTE.ZURUECK) return bewertenSchliessen();
-    const pi = bewPerson(B.fokus);
+    const s = bewSlot(), pi = s.p;
     if (k === TASTE.HOCH || k === TASTE.RUNTER) {
-      if (bewIstX(B.fokus)) {
-        B.fokus = bewZwei() ? (B.fokus === 0 ? 1 : 2) : 1;
-      } else {
+      if (s.t === 'x') {
+        B.fokus = bewZSlot(pi);
+      } else if (s.t === 'z') {
         const vorher = B.wert[pi];
         if (!B.wert[pi]) B.wert[pi] = 5;
         else if (k === TASTE.HOCH) B.wert[pi] = Math.min(10, B.wert[pi] + 1);
@@ -1359,16 +1516,22 @@
     } else if (k === TASTE.LINKS && wiederholung === 0) {
       B.fokus = Math.max(0, B.fokus - 1);
     } else if (k === TASTE.RECHTS && wiederholung === 0) {
-      B.fokus = Math.min(bewSlots() - 1, B.fokus + 1);
+      B.fokus = Math.min(bewSlotListe().length - 1, B.fokus + 1);
     } else if (k === TASTE.OK && wiederholung === 0) {
-      if (bewIstX(B.fokus)) {
+      if (s.t === 'plus') {
+        B.waehlen = true;
+        B.wFokus = 0;
+        bewertenZeichnen();
+        return;
+      }
+      if (s.t === 'x') {
         B.wert[pi] = 0;
         B.geaendert[pi] = true;
-        if (!bewZwei()) {
+        if (!bewMehr()) {
           B.nurEntfernt = true;
           return bewAenderungen().length ? bewertenSenden() : bewertenSchliessen();
         }
-        B.fokus = B.fokus === 0 ? 1 : 2;
+        B.fokus = bewZSlot(pi);
         bewertenZeichnen(pi);
         return;
       }
@@ -1378,11 +1541,31 @@
     bewertenZeichnen();
   }
 
+  /** Mitschauer gelten bei ihrem Profil als gesehen (Papa und Mama = Eltern). Das eigene Profil macht nachDemFilm. */
+  async function bewGesehenFuer(f, namen) {
+    const profile = [];
+    namen.forEach(function (n) {
+      const p = PROFIL_VON[n];
+      if (p && p !== PERSON.ha && profile.indexOf(p) < 0) profile.push(p);
+    });
+    if (!profile.length) return;
+    await merk.plexLaden();
+    const id = merk.plexIdFuer(f) || 'jf:' + f.Id;
+    const titel = (f.Name || '') + (f.ProductionYear ? ' (' + f.ProductionYear + ')' : '');
+    for (let i = 0; i < profile.length; i++) {
+      await merk.senden({ art: 'gesehen', wer: profile[i], id: id, titel: titel, an: 'true' });
+    }
+  }
+
   function bewertenSenden() {
-    const f = B.film, namen = B.namen.slice(), l = bewAenderungen();
+    const f = B.film, namen = B.namen.slice(), l = bewAenderungen(), dazu = B.namen.slice(B.eigene);
     if (!l.length) {
       bewertenSchliessen();
-      hinweis('Nichts geändert');
+      if (dazu.length) {
+        hinweis('Gesehen eingetragen für ' + dazu.map(bewKurz).join(', '));
+        bewGesehenFuer(f, dazu).then(function () { setTimeout(familieLaden, 3000); },
+          function () { hinweis('Gesehen ließ sich nicht speichern'); });
+      } else hinweis('Nichts geändert');
       return;
     }
     B.danke = Date.now();
@@ -1397,6 +1580,7 @@
         for (let i = 0; i < l.length; i++) {
           await merk.senden({ art: 'bewerten', wer: namen[l[i].i], id: id, titel: titel, wertung: String(l[i].note) });
         }
+        if (dazu.length) await bewGesehenFuer(f, dazu);
         setTimeout(familieLaden, 3000);
       } catch (x) {
         hinweis('Bewertung ließ sich nicht speichern');
@@ -1483,42 +1667,86 @@
       + '<div class="b-x-symbol"></div><div class="b-x-text">' + (entfernt ? 'Wird<br>entfernt' : 'Keine<br>Bewertung') + '</div></div>';
   }
 
+  function bewPlusFeld(slot) {
+    return '<div class="b-x b-plus' + (B.fokus === slot ? ' aktiv' : '') + '">'
+      + '<div class="b-plus-symbol"></div><div class="b-x-text">Noch wer<br>dabei?</div></div>';
+  }
+
   function bewertenAufbauen() {
-    const b = el.bewerten, zwei = bewZwei();
-    let h = '<div class="glas b-karte' + (zwei ? ' zwei' : '') + '"><div class="b-film"></div><div class="b-frage"></div><div class="b-reihe">';
-    const spalte = function (pi) {
-      return '<div class="b-spalte" data-p="' + pi + '"><div class="b-fx"></div><div class="b-rand"></div>'
+    const b = el.bewerten, l = bewSlotListe(), mehr = bewMehr();
+    const spalte = function (pi, slot, st) {
+      return '<div class="b-spalte" data-p="' + pi + '" data-s="' + slot + '"' + st + '><div class="b-fx"></div><div class="b-rand"></div>'
         + '<div class="b-pfeil hoch"></div><div class="b-zahl"></div><div class="b-wort"></div><div class="b-pfeil runter"></div>'
         + '<div class="b-punkte">' + '<i></i>'.repeat(10) + '</div><div class="b-wer"></div><div class="b-knall"></div></div>';
     };
-    if (zwei) h += '<div class="b-x-platz" data-x="0"></div>' + spalte(0) + spalte(1) + '<div class="b-x-platz" data-x="1"></div>';
-    else h += '<div class="b-x-platz" data-x="0"></div>' + spalte(0) + '<div class="b-x-leer"></div>';
-    h += '</div></div><div class="b-hilfe"></div>';
-    b.innerHTML = h;
+    let breite = 0, reihe = '';
+    l.forEach(function (s, i) {
+      const vorher = l[i - 1];
+      const abstand = !vorher ? 0 : (vorher.t === 'z' && s.t === 'z' ? B_MASS.mitte : B_MASS.luecke);
+      const st = ' style="margin-left:' + abstand + 'px"';
+      breite += abstand + B_MASS[s.t];
+      if (s.t === 'z') reihe += spalte(s.p, i, st);
+      else reihe += '<div class="b-x-platz" data-s="' + i + '"' + st + '></div>';
+    });
+    // allein und ohne „Noch wer dabei?“: rechts ein leerer Platz, damit der Zähler in der Mitte bleibt (wie bisher)
+    if (l.length === 2) {
+      reihe += '<div class="b-x-leer" style="margin-left:' + B_MASS.luecke + 'px"></div>';
+      breite += B_MASS.luecke + B_MASS.x;
+    }
+    // viele Mitschauer: Reihe verkleinern, damit sie auf den Bildschirm passt
+    let karte = breite + B_MASS.rand, skala = 1;
+    if (karte > B_MASS.max) {
+      skala = (B_MASS.max - B_MASS.rand) / breite;
+      karte = B_MASS.max;
+    }
+    b.innerHTML = '<div class="glas b-karte' + (mehr ? ' zwei' : '') + '" style="width:' + karte + 'px;left:' + Math.round((1920 - karte) / 2)
+      + 'px"><div class="b-film"></div><div class="b-frage"></div><div class="b-reihe"'
+      + (skala < 1 ? ' style="transform:scale(' + skala.toFixed(3) + ');transform-origin:50% 0"' : '') + '>' + reihe + '</div>'
+      + '<div class="b-wahl aus"></div></div><div class="b-hilfe"></div>';
     b.querySelector('.b-film').textContent = B.film ? String(B.film.Name || '') : '';
     b.querySelector('.b-frage').textContent = bewFrage();
     B.dom = { spalten: Array.prototype.slice.call(b.querySelectorAll('.b-spalte')), x: Array.prototype.slice.call(b.querySelectorAll('.b-x-platz')),
-      hilfe: b.querySelector('.b-hilfe') };
-    B.dom.spalten.forEach(function (sp, i) {
-      const n = B.namen[i];
+      hilfe: b.querySelector('.b-hilfe'), wahl: b.querySelector('.b-wahl') };
+    B.dom.spalten.forEach(function (sp) {
+      const n = B.namen[Number(sp.getAttribute('data-p'))];
       const w = sp.querySelector('.b-wer');
       w.textContent = bewSchild(n);
       w.style.color = PERSONEN_FARBE[n] || '#fff';
     });
   }
 
+  function bewWahlZeichnen() {
+    const w = B.dom.wahl;
+    w.classList.toggle('aus', !B.waehlen);
+    if (!B.waehlen) {
+      w.innerHTML = '';
+      return;
+    }
+    const l = bewWahl();
+    B.wFokus = Math.min(B.wFokus, Math.max(0, l.length - 1));
+    let h = '<div class="b-wahl-titel">Wer hat noch mitgeschaut?</div><div class="b-wahl-reihe">';
+    l.forEach(function (n, i) {
+      h += '<div class="b-wahl-chip' + (i === B.wFokus ? ' aktiv' : '') + (n === '@alle' ? ' alle' : '') + '" style="--c:'
+        + (PERSONEN_FARBE[n] || '#fff') + '"><i></i><span>' + (n === '@alle' ? 'Alle' : bewKurz(n)) + '</span></div>';
+    });
+    w.innerHTML = h + '</div>';
+  }
+
   function bewertenZeichnen(geaendertBei) {
     const b = el.bewerten;
     b.classList.toggle('aus', !B.offen);
+    document.documentElement.classList.toggle('bew-offen', B.offen);   // Tipps unter den Knöpfen ausblenden
     if (!B.offen) {
       b.innerHTML = '';
       return;
     }
     if (B.danke) return bewertenDankeZeichnen();
     if (!B.dom) bewertenAufbauen();
-    const zwei = bewZwei();
-    B.dom.spalten.forEach(function (sp, i) {
-      const note = B.wert[i], slot = zwei ? i + 1 : 1;
+    const l = bewSlotListe();
+    B.fokus = Math.min(B.fokus, l.length - 1);
+    B.dom.spalten.forEach(function (sp) {
+      const i = Number(sp.getAttribute('data-p')), slot = Number(sp.getAttribute('data-s'));
+      const note = B.wert[i];
       const entfernt = B.geaendert[i] && note === 0 && B.alt[i] > 0;
       sp.className = 'b-spalte s' + note + (B.fokus === slot ? ' aktiv' : '');
       const z = sp.querySelector('.b-zahl');
@@ -1559,38 +1787,54 @@
       }
     });
     B.dom.x.forEach(function (xp) {
-      const pi = Number(xp.getAttribute('data-x'));
-      const slot = pi === 0 ? 0 : 3;
-      xp.innerHTML = bewXFeld(pi, slot);
+      const slot = Number(xp.getAttribute('data-s')), s = l[slot];
+      if (!s) return;
+      xp.innerHTML = s.t === 'plus' ? bewPlusFeld(slot) : bewXFeld(s.p, slot);
     });
+    bewWahlZeichnen();
+    const s = l[B.fokus] || { t: 'z', p: 0 };
+    const elternAllein = B.eigene === 2 && B.namen.length === 2;
+    const plus = B.nachFilm && bewKandidaten().length > 0;
     let hilfe;
-    if (bewIstX(B.fokus)) {
-      hilfe = zwei ? 'OK  keine Bewertung für ' + (B.fokus === 0 ? 'Papa' : 'Mama') + '      ← →  wechseln      Zurück  später'
+    if (B.waehlen) {
+      hilfe = 'OK  dazunehmen      ← →  wählen      Zurück  abbrechen';
+    } else if (s.t === 'plus') {
+      hilfe = 'OK  noch jemand hat mitgeschaut      ←  zurück      Zurück  später';
+    } else if (s.t === 'x') {
+      hilfe = bewMehr() ? 'OK  keine Bewertung für ' + bewKurz(B.namen[s.p]) + '      ← →  wechseln      Zurück  später'
         : 'OK  keine Bewertung      →  zurück zur Note      Zurück  später';
+    } else if (elternAllein && !plus) {
+      hilfe = '↑ ↓  Note      ← →  Papa / Mama / keine      OK  abgeben      Zurück  später';
+    } else if (bewMehr()) {
+      hilfe = '↑ ↓  Note      ← →  wechseln      OK  abgeben      Zurück  später';
     } else {
-      hilfe = zwei ? '↑ ↓  Note      ← →  Papa / Mama / keine      OK  abgeben      Zurück  später'
-        : '↑ ↓  Note      ←  keine Bewertung      OK  abgeben      Zurück  später';
+      hilfe = '↑ ↓  Note      ←  keine Bewertung' + (plus ? '      →  noch wer dabei?' : '') + '      OK  abgeben      Zurück  später';
     }
     B.dom.hilfe.textContent = hilfe;
   }
 
   function bewertenDankeZeichnen() {
-    const b = el.bewerten, zwei = bewZwei(), l = bewAenderungen();
+    const b = el.bewerten, mehr = bewMehr(), l = bewAenderungen();
     const zehn = l.some(function (a) { return a.note === 10; });
-    let h = '<div class="glas b-karte' + (zwei ? ' zwei' : '') + ' danke">';
+    // Breite wie das Fenster davor, aber mindestens so breit, dass alle Namen nebeneinander passen
+    const karte = Math.min(B_MASS.max, Math.max(mehr ? 1240 : 820, 240 + l.length * 330));
+    let h = '<div class="glas b-karte' + (mehr ? ' zwei' : '') + ' danke" style="width:' + karte + 'px;left:' + Math.round((1920 - karte) / 2) + 'px">';
     if (zehn) h += '<div class="b-fx">' + bewKonfetti(LEICHT ? 12 : 70, B_BUNT, 1.1, 3) + '</div>';
     h += '<div class="b-haken' + (B.nurEntfernt ? ' grau' : '') + '"><svg viewBox="0 0 40 40" fill="none" stroke="#fff" stroke-width="4.5" '
       + 'stroke-linecap="round" stroke-linejoin="round"><path d="M11 21l6 6 13-14"/></svg></div>'
       + '<div class="b-danke"></div><div class="b-zus">';
     l.forEach(function (a) {
       const n = B.namen[a.i];
-      h += '<span style="color:' + (a.note ? B_FARBE[a.note] : '#FCA5A5') + '">' + (zwei ? bewSchild(n) + ':  ' : '')
+      h += '<span style="color:' + (a.note ? B_FARBE[a.note] : '#FCA5A5') + '">' + (mehr ? bewSchild(n) + ':  ' : '')
         + (a.note ? a.note + ' von 10' : 'entfernt') + '</span>';
     });
-    h += '</div><div class="b-film b-name-unten"></div></div>';
+    h += '</div><div class="b-film b-name-unten"></div>';
+    const dazu = B.namen.slice(B.eigene);
+    if (dazu.length) h += '<div class="b-mit">Auch als gesehen eingetragen: ' + dazu.map(bewKurz).join(', ') + '</div>';
+    h += '</div>';
     b.innerHTML = h;
     b.querySelector('.b-danke').textContent = B.nurEntfernt ? 'Bewertung entfernt'
-      : (PERSON.schluessel === 'eltern' ? 'Danke für eure Bewertung!' : 'Danke für deine Bewertung!');
+      : (PERSON.schluessel === 'eltern' || B.namen.length > 1 ? 'Danke für eure Bewertung!' : 'Danke für deine Bewertung!');
     b.querySelector('.b-name-unten').textContent = B.film ? String(B.film.Name || '') : '';
   }
 
@@ -2113,7 +2357,7 @@
     // ab 80 %: bei diesem Profil gesehen, und fragen, wie er gefallen hat
     if (f && typ(f) === 'Movie' && quote >= GESEHEN_GRENZE) {
       gesehenDazu(f);
-      bewertenOeffnen(f);
+      bewertenOeffnen(f, true);
     }
     try {
       const l = await Promise.all([f ? jf.film(f.Id) : Promise.resolve(null),
@@ -2793,7 +3037,13 @@
     gemerkt: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" '
       + 'stroke-linejoin="round"><path d="M5 15.5l6.5 6.5L25 8.5"/></svg>',
     bewerten: '<svg viewBox="0 0 30 30"><path d="M15 3.5l3.4 7 7.6 1-5.5 5.3 1.4 7.6L15 20.8l-6.9 3.6 1.4-7.6L4 11.5l7.6-1z" '
-      + 'fill="currentColor"/></svg>',
+      + 'fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/></svg>',
+    bewertet: '<svg viewBox="0 0 30 30"><path d="M15 3.5l3.4 7 7.6 1-5.5 5.3 1.4 7.6L15 20.8l-6.9 3.6 1.4-7.6L4 11.5l7.6-1z" '
+      + 'fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+    ungesehen: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round">'
+      + '<path d="M2 15s4.8-8.5 13-8.5S28 15 28 15s-4.8 8.5-13 8.5S2 15 2 15z"/><circle cx="15" cy="15" r="4.2"/></svg>',
+    gesehen: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">'
+      + '<path d="M2 15s4.8-8.5 13-8.5S28 15 28 15s-4.8 8.5-13 8.5S2 15 2 15z"/><path d="M10.2 15.3l3.2 3.2 6.4-6.6" stroke-width="3"/></svg>',
     melden: '<svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" '
       + 'stroke-linejoin="round"><path d="M6 2.5v26"/><path d="M6 3.5h18l-5 6 5 6H6z"/></svg>',
     gemeldet: '<svg viewBox="0 0 30 30" fill="currentColor" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" '
@@ -2814,9 +3064,16 @@
     }
     if (detailTrailer && detailTrailer.id === e.Id && detailTrailer.yt) l.push({ art: 'trailer', text: 'Trailer', symbol: 'trailer' });
     if (typ(e) === 'Movie') {
+      // runde Knöpfe nur mit Symbol (Wunsch Lukas 05.11.2026); ausgewählt steht darunter, was er tut
       const drin = merk.hat(e.Id);
-      l.push({ art: 'merken', text: drin ? 'Gemerkt' : 'Merken', symbol: drin ? 'gemerkt' : 'merken' });
-      l.push({ art: 'bewerten', text: eigeneNoten(e), symbol: 'bewerten' });
+      l.push({ art: 'merken', text: '', symbol: drin ? 'gemerkt' : 'merken', an: drin,
+        tipp: drin ? 'Auf der Merkliste  ·  drücken = entfernen' : 'Auf die Merkliste' });
+      const noten = eigeneNotenListe(e);
+      l.push({ art: 'bewerten', text: '', symbol: noten.length ? 'bewertet' : 'bewerten', an: noten.length > 0,
+        tipp: noten.length ? 'Bewertet  ·  ' + noten.join(' / ') + '  ·  drücken = ändern' : 'Bewerten' });
+      const gs = istGesehen(e);
+      l.push({ art: 'gesehen', text: '', symbol: gs ? 'gesehen' : 'ungesehen', an: gs,
+        tipp: gs ? 'Gesehen  ·  drücken = doch nicht gesehen' : 'Schon gesehen? Als gesehen markieren' });
       const qa = qualitaetAn(e);
       l.push({ art: 'qualitaet', text: '', symbol: qa ? 'gemeldet' : 'melden', an: qa,
         tipp: qa ? (PERSON.ha === 'Lukas' ? 'Gemeldet von ' + (qual.wer[e.Id] || []).join(', ') + '  ·  drücken = erledigt'
@@ -2863,6 +3120,7 @@
     else if (x.art === 'trailer' && detailTrailer) trailerAbspielen(detailTrailer, f.Name || '');
     else if (x.art === 'bewerten') bewertenOeffnen(f);
     else if (x.art === 'qualitaet') qualitaetUmschalten(f);
+    else if (x.art === 'gesehen') gesehenUmschalten(f);
     else if (x.art === 'merken') {
       merk.umschalten(f);
       hinweis(merk.hat(f.Id) ? 'Auf der Merkliste' : 'Von der Merkliste entfernt');
@@ -4488,6 +4746,7 @@
       ansicht = detailZurueck;
       detailEintrag = null;
       detailTrailer = null;
+      if (gesUngesehen.length) gesehenSeitenAufraeumen();
       fokusGeaendert();
       return;
     }

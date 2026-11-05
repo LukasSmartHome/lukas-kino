@@ -25,6 +25,7 @@ final class Gesehen {
     private static volatile List<String> ids = new ArrayList<>();   // Jellyfin-IDs, zuletzt gesehen zuerst
     private static volatile Set<String> menge = new HashSet<>();
     private static final Map<String, Long> lokal = new HashMap<>(); // gerade eben gesehen (Jellyfin-ID -> gilt bis)
+    private static final Map<String, Long> weg = new HashMap<>();   // gerade als „nicht gesehen“ markiert (-> gilt bis)
     private static volatile String sig = "";
 
     private Gesehen() {
@@ -57,6 +58,13 @@ final class Gesehen {
                 Map.Entry<String, Long> e = li.next();
                 if (neu.contains(e.getKey()) || e.getValue() < jetzt) li.remove();
                 else neu.add(0, e.getKey());
+            }
+            // gerade als „nicht gesehen“ markiert: draußen lassen, bis HA es bestätigt (oder die Frist abläuft)
+            Iterator<Map.Entry<String, Long>> wi = weg.entrySet().iterator();
+            while (wi.hasNext()) {
+                Map.Entry<String, Long> e = wi.next();
+                if (!neu.contains(e.getKey()) || e.getValue() < jetzt) wi.remove();
+                else neu.remove(e.getKey());
             }
         }
         String s = String.join(",", neu);
@@ -96,10 +104,40 @@ final class Gesehen {
         sig = String.join(",", l);
     }
 
+    /**
+     * Gesehen-Knopf in den Details (Wunsch Lukas 05.11.2026): selbst als gesehen markieren oder wieder herausnehmen.
+     * Gilt sofort, bis Home Assistant es bestätigt.
+     */
+    static void lokalSetzen(JSONObject film, boolean an) {
+        String id = film.optString("Id");
+        long bis = System.currentTimeMillis() + LOKAL_MS;
+        List<String> l = new ArrayList<>(ids);
+        synchronized (lokal) {
+            if (an) {
+                weg.remove(id);
+                lokal.put(id, bis);
+                l.remove(id);
+                l.add(0, id);
+            } else {
+                lokal.remove(id);
+                weg.put(id, bis);
+                l.remove(id);
+            }
+        }
+        ids = l;
+        menge = new HashSet<>(l);
+        sig = String.join(",", l);
+    }
+
     /** An Home Assistant melden (Automation 84 → Ereignis kino_gesehen). Blockiert – nur im Hintergrund. */
     static void senden(JSONObject film, boolean an) throws Exception {
+        senden(film, Merkliste.WER, an);
+    }
+
+    /** Für ein bestimmtes Profil melden (Lukas, Jonas oder Eltern) – z. B. für Mitschauer nach dem Film. */
+    static void senden(JSONObject film, String wer, boolean an) throws Exception {
         String titel = film.optString("Name") + (film.optInt("ProductionYear", 0) > 0 ? " (" + film.optInt("ProductionYear") + ")" : "");
-        Merkliste.webhookSenden("art=gesehen&wer=" + Jellyfin.enc(Merkliste.WER) + "&id=" + Jellyfin.enc(Merkliste.haIdFuer(film))
+        Merkliste.webhookSenden("art=gesehen&wer=" + Jellyfin.enc(wer) + "&id=" + Jellyfin.enc(Merkliste.haIdFuer(film))
                 + "&titel=" + Jellyfin.enc(titel) + "&an=" + an);
     }
 }

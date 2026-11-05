@@ -22,12 +22,36 @@ final class Bewerten {
         return eltern() ? new String[]{"Uli", "Moni"} : new String[]{Merkliste.WER};
     }
 
+    /** Alle, die bewerten können (Mitschauer nach dem Film, seit 05.11.2026). */
+    static final String[] ALLE = {"Lukas", "Jonas", "Uli", "Moni"};
+
     static String frage() {
         return eltern() ? "Mama und Papa, wie hat euch der Film gefallen?" : Merkliste.WER + ", wie hat dir der Film gefallen?";
     }
 
+    /** Frage, wenn Mitschauer dazugenommen wurden. */
+    static String frage(boolean mitschauer) {
+        return mitschauer ? "Wie hat euch der Film gefallen?" : frage();
+    }
+
     static String danke() {
         return eltern() ? "Danke für eure Bewertung!" : "Danke für deine Bewertung!";
+    }
+
+    static String danke(boolean mehrere) {
+        return mehrere ? "Danke für eure Bewertung!" : danke();
+    }
+
+    /** Kurzname für Hinweise: Papa, Mama, Lukas, Jonas. */
+    static String kurz(String name) {
+        if ("Uli".equals(name)) return "Papa";
+        if ("Moni".equals(name)) return "Mama";
+        return name;
+    }
+
+    /** Gesehen-Profil einer Person: Papa und Mama = Eltern. */
+    static String profil(String name) {
+        return "Uli".equals(name) || "Moni".equals(name) ? "Eltern" : name;
     }
 
     /** Beschriftung unter dem Zähler – bei den Eltern klar, wer wer ist. */
