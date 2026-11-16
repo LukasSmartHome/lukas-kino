@@ -83,9 +83,10 @@ public class MainActivity extends Activity {
         }
     }
 
-    private static final App PLAYSTATION = new App("@hdmi2", "PlayStation", false, true, "HDMI 2");
+    // Beide Kacheln haben ein selbst gezeichnetes Bild (KachelKunst) und laufen damit wie App-Banner.
+    private static final App PLAYSTATION = new App("@hdmi2", "PlayStation", true, false, "HDMI 2");
     /** Filmbereich (eigene Oberfläche für die Filme auf dem Jellyfin-Server). */
-    private static final App FILME = new App("@filme", "Filme", false, true, "Lukas Kino");
+    private static final App FILME = new App("@filme", "Filme", true, false, "Lukas Kino");
     /** Fire TV: Die Amazon-Einstellungen haben keine eigene App-Kachel und die Fernbedienung keine Einstellungstaste. */
     private static final App EINSTELLUNGEN = new App("@einstellungen", "Einstellungen", false, false, null);
 
@@ -97,6 +98,8 @@ public class MainActivity extends Activity {
     private boolean menueWahl = false, an = false, langGedrueckt = false;
     private List<String> bilder = new ArrayList<>();
     private int bildIndex = -1;
+    private String gezeigt = null;      // welches Hintergrundbild gerade steht (Name|Datum|Größe), "" = Sonnenuntergang
+    private boolean vorhangOffen = false; // schwarzer Vorhang beim allerersten Start schon weg?
     private int ladeNummer = 0;
 
     // ---------- Ansichten ----------
@@ -113,7 +116,7 @@ public class MainActivity extends Activity {
     private final Random zufall = new Random();
     private BroadcastReceiver bildschirmAn, umzugFertig;
     private SharedPreferences einst;
-    private Runnable t1, t2, toastWeg;
+    private Runnable toastWeg;
     private KinoHa.Waechter auftrag;   // Film vom Dashboard starten (Skript 01g)
 
     @Override
@@ -162,12 +165,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        // Claude am Fernseher: Mikrofon-Dienst starten (geht nur aus dem Vordergrund zuverlässig).
-        if (!Sprache.starten(this) && !Sprache.mikrofonErlaubt(this) && Build.VERSION.SDK_INT >= 23
-                && !einst.getBoolean("sprach_rechte_gefragt", false)) {
-            einst.edit().putBoolean("sprach_rechte_gefragt", true).apply();
-            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 41);
-        }
         vollbild();
         wiederda();
         auftrag.an();
@@ -465,7 +462,8 @@ public class MainActivity extends Activity {
 
     private void bilderHolen(Kachel k, int nummer) {
         final App a = k.app;
-        if (a.spiel || a.pkg.startsWith("@")) {
+        final boolean kunst = a == FILME || a == PLAYSTATION;
+        if (!kunst && (a.spiel || a.pkg.startsWith("@"))) {
             k.bilderDa(null, null);
             return;
         }
@@ -478,8 +476,8 @@ public class MainActivity extends Activity {
             return;
         }
         arbeiter.execute(() -> {
-            Bitmap b = a.banner ? bannerBild(a.pkg) : null;
-            Bitmap s = b == null ? symbolBild(a.pkg) : null;
+            Bitmap b = kunst ? KachelKunst.malen(this, a) : a.banner ? bannerBild(a.pkg) : null;
+            Bitmap s = b == null && !kunst ? symbolBild(a.pkg) : null;
             synchronized (bildCache) {
                 bildCache.put(a.pkg, new Bitmap[]{b, s});
             }
@@ -578,23 +576,24 @@ public class MainActivity extends Activity {
         phaseSetzen("apps", staffeln ? 55 : 0);
     }
 
+    /**
+     * Einschalten: Alles steht sofort an seinem Platz (seit 16.11.2026). Vorher fuhren die Kacheln von unten herein und
+     * das Bild zoomte – genau dann wacht aber der Fernseher auf und hat keine Rechenzeit übrig, das ruckelte.
+     * Nur beim allerersten Start nach dem Hochfahren liegt kurz ein schwarzer Vorhang darüber, bis das Bild geladen ist.
+     */
     private void einschalten() {
-        if (t1 != null) h.removeCallbacks(t1);
-        if (t2 != null) h.removeCallbacks(t2);
-        an = false;
-        for (View v : new View[]{hintergrund, scrim, uhr, ort, schwarz}) {
+        for (View v : new View[]{hintergrund, scrim, uhr, ort, reihe, suche}) {
             v.animate().cancel();
         }
-        hintergrund.setAlpha(0f);
-        hintergrund.setScaleX(1.07f);
-        hintergrund.setScaleY(1.07f);
-        scrim.setAlpha(0f);
-        uhr.setAlpha(0f);
-        uhr.setTranslationY(-16f);
-        ort.setAlpha(0f);
-        ort.setTranslationY(-16f);
-        schwarz.setAlpha(1f);
-        phase = "";
+        hintergrund.setAlpha(1f);
+        hintergrund.setScaleX(1f);
+        hintergrund.setScaleY(1f);
+        scrim.setAlpha(1f);
+        uhr.setAlpha(1f);
+        uhr.setTranslationY(0f);
+        ort.setAlpha(1f);
+        ort.setTranslationY(0f);
+        phase = "apps";
         fokus = 0;
         scroll = 0;
         modus = "";
@@ -603,31 +602,19 @@ public class MainActivity extends Activity {
         suche.setAlpha(0f);
         suche.setTranslationY(40f);
         fokusSetzen(0, true);
+        an = true;
         bilderLaden();
-        if (!bilder.isEmpty()) bildZeigen(zufall.nextInt(bilder.size()));
-        else bildZeigen(-1);
-        t1 = () -> {
-            an = true;
-            hintergrund.animate().scaleX(1f).scaleY(1f).setDuration(2600).setInterpolator(Ani.AUS)
-                    .setUpdateListener(a -> Glas.neuZeichnen()).start();
-            ObjectAnimator.ofFloat(hintergrund, "alpha", 0f, 1f).setDuration(1000).start();
-            scrim.animate().alpha(1f).setDuration(900).setInterpolator(Ani.EASE).start();
-            reinBlenden(uhr, 250);
-            reinBlenden(ort, 400);
-            schwarz.animate().alpha(0f).setDuration(700).setInterpolator(Ani.EASE).start();
-        };
-        t2 = this::appsRein;
-        h.postDelayed(t1, 400);
-        h.postDelayed(t2, 1700);
+        bildZeigen(bilder.isEmpty() ? -1 : zufall.nextInt(bilder.size()));
+        Glas.neuZeichnen();
+        // Notbremse: Der Vorhang geht spätestens nach 1,5 s auf, auch wenn das Bild nicht kommt.
+        h.postDelayed(this::vorhangAuf, 1500);
     }
 
-    private void reinBlenden(View v, long verz) {
-        ObjectAnimator a = ObjectAnimator.ofFloat(v, "alpha", 0f, 1f);
-        a.setDuration(900);
-        a.setInterpolator(Ani.EASE);
-        a.setStartDelay(verz);
-        a.start();
-        v.animate().translationY(0f).setDuration(900).setInterpolator(Ani.AUS).setStartDelay(verz).start();
+    /** Schwarzen Vorhang des ersten Starts weich wegnehmen (einmalig, danach bleibt er weg). */
+    private void vorhangAuf() {
+        if (vorhangOffen) return;
+        vorhangOffen = true;
+        schwarz.animate().alpha(0f).setDuration(300).setInterpolator(Ani.EASE).start();
     }
 
     private void wiederda() {
@@ -667,30 +654,24 @@ public class MainActivity extends Activity {
     private void bildZeigen(int i) {
         if (bilder.isEmpty() || i < 0) {
             ort.setVisibility(View.INVISIBLE);
-            hintergrund.zeigen(null);
-            arbeiter.execute(() -> {
-                Bitmap u = Glas.verwischen(Hintergrund.standardKlein());
-                h.post(() -> {
-                    Glas.unscharf = u;
-                    Glas.neuZeichnen();
+            if (!"".equals(gezeigt)) {
+                gezeigt = "";
+                if (vorhangOffen) hintergrund.zeigen(null);
+                else hintergrund.setzen(null);
+                arbeiter.execute(() -> {
+                    Bitmap u = Glas.verwischen(Hintergrund.standardKlein());
+                    h.post(() -> {
+                        Glas.unscharf = u;
+                        Glas.neuZeichnen();
+                    });
                 });
-            });
+            }
+            vorhangAuf();
             return;
         }
         bildIndex = ((i % bilder.size()) + bilder.size()) % bilder.size();
         final String name = bilder.get(bildIndex);
         final File f = new File(hintergrundOrdner(), name);
-        arbeiter.execute(() -> {
-            Bitmap b = bildLesen(f);
-            if (b == null) return;
-            Bitmap u = Glas.verwischen(b);
-            h.post(() -> {
-                if (bildIndex < 0 || bildIndex >= bilder.size() || !name.equals(bilder.get(bildIndex))) return;
-                hintergrund.zeigen(b);
-                Glas.unscharf = u;
-                Glas.neuZeichnen();
-            });
-        });
         String titel = name.replaceAll("\\.[^.]+$", "").replaceAll("_+", " ").trim();
         if (name.startsWith("_") || titel.isEmpty()) {
             ort.setVisibility(View.INVISIBLE);
@@ -698,6 +679,29 @@ public class MainActivity extends Activity {
             ort.text(titel);
             ort.setVisibility(View.VISIBLE);
         }
+        // Steht genau dieses Bild schon da, wird es nicht neu geladen (spart beim Einschalten viel Rechenzeit).
+        final String marke = name + "|" + f.lastModified() + "|" + f.length();
+        if (marke.equals(gezeigt)) {
+            vorhangAuf();
+            return;
+        }
+        arbeiter.execute(() -> {
+            Bitmap b = bildLesen(f);
+            if (b == null) {
+                h.post(this::vorhangAuf);
+                return;
+            }
+            Bitmap u = Glas.verwischen(b);
+            h.post(() -> {
+                if (bildIndex < 0 || bildIndex >= bilder.size() || !name.equals(bilder.get(bildIndex))) return;
+                if (vorhangOffen) hintergrund.zeigen(b);
+                else hintergrund.setzen(b);
+                gezeigt = marke;
+                Glas.unscharf = u;
+                Glas.neuZeichnen();
+                vorhangAuf();
+            });
+        });
     }
 
     /** Bild laden, auf ca. Bühnengröße verkleinert (spart Speicher, 4K-Bild wird 1920 breit). */

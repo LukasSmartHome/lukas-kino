@@ -53,6 +53,16 @@ final class Hintergrund extends View {
         blende.start();
     }
 
+    /** Bild ohne Überblendung setzen (allererster Start hinter dem schwarzen Vorhang). */
+    void setzen(Bitmap neu) {
+        if (blende != null) blende.cancel();
+        vorher = null;
+        vorherStandard = false;
+        aktuell = neu;
+        anteil = 1f;
+        invalidate();
+    }
+
     @Override
     protected void onDraw(Canvas c) {
         if (anteil < 1f) {

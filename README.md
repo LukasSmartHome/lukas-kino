@@ -6,12 +6,15 @@ Eigene, werbefreie Startseite für Lukas' TCL-Fernseher (Google TV, Android 14).
 - Unten die App-Kacheln mit den echten Bannern der Apps; gedrückt halten = verschieben (OK legt ab), nochmal halten = „Deinstallieren“ darüber (hoch, dann OK).
 - Hoch: nur das Bild. Runter: Kacheln zurück. Nochmal runter: Suche nach Apps und Spielen. Home oder Zurück: an den Anfang.
 - PlayStation-Kachel wechselt auf HDMI 2.
+- Beim Einschalten steht alles sofort da (seit 16.11.2026 kein Einflug der Kacheln und kein Zoom mehr – das ruckelte, weil der Fernseher genau dann aufwacht). Das Hintergrundbild wird nur neu geladen, wenn es ein anderes ist.
+- Kein Start-Intro mehr und kein Sprach-Teil („Claude am Fernseher“): Mikrofon-Dienst und Mikrofon-Rechte sind seit 16.11.2026 aus (`Sprache.AN = false`, Dienst im Manifest `enabled="false"`).
 
 ## Aufbau
 
 - Ganz normale Android-Oberfläche ohne WebView (seit 1.0.11, vorher eine Webseite in einer WebView – brauchte über 250 MB).
 - `MainActivity.java` – Bühne 1920x1080 (wird auf den Bildschirm skaliert), Zustände, Tasten, Apps, Hintergründe.
 - `Kachel.java` – eine App-Kachel mit Schatten, Banner oder Glas, Verschiebe-Pfeilen und „Deinstallieren“.
+- `KachelKunst.java` – selbst gezeichnete Bilder für „Filme“ (Projektor-Licht, gelbe Abspiel-Scheibe) und den HDMI-Eingang der PlayStation (blau, Schild „HDMI 2“). Eigene Formen, keine Marken-Logos. Einmal gezeichnet, dann wie ein App-Banner.
 - `Glas.java` – Milchglas: kleine verwischte Kopie des Hintergrunds, jedes Glas-Element zeichnet seinen Ausschnitt.
 - `Hintergrund.java` – Hintergrundbild mit Überblendung, sonst der gezeichnete Sonnenuntergang.
 - `Beschriftung.java` (Uhr, Bildname), `Pille.java` (Suchfeld, Meldung), `Symbole.java`, `SvgPfad.java`, `Ani.java`, `Schriften.java`.

@@ -15,7 +15,8 @@ import android.view.View;
 
 /**
  * Eine App-Kachel (300x170, Ecken 26) mit Schatten, Banner oder Glas, Verschiebe-Pfeilen
- * und dem „Deinstallieren“-Knopf darüber. Die View ist größer als die Kachel, damit Schatten
+ * und dem „Deinstallieren“-Knopf darüber. „Filme“ und „PlayStation“ bekommen ihr Bild aus KachelKunst
+ * (wie ein Banner); das Glas für die beiden unten ist nur noch der Notbehelf, falls das Bild fehlt. Die View ist größer als die Kachel, damit Schatten
  * und Knopf Platz haben.
  */
 final class Kachel extends View {
@@ -200,7 +201,7 @@ final class Kachel extends View {
             d.close();
             p.setColor(0xFF1A1426);
             c.drawPath(d, p);
-        } else if (app.spiel) {
+        } else if (app.spiel || app.pkg.equals("@hdmi2")) {
             p.setStyle(Paint.Style.FILL);
             p.setColor(Ani.farbe(0x426EFF, 0.85f));
             c.drawRoundRect(new RectF(x, y, x + 58, y + 58), 17, 17, p);

@@ -77,6 +77,13 @@ public class Sprache extends Service {
     private static final int WACH = 3;       // Wachwort erkannt, Laptop hört zu
     private static final int BESCHAEFTIGT = 4; // denkt oder spricht, kein Audio raus
 
+    /**
+     * Claude am Fernseher ist seit 07.11.2026 gestrichen (Wunsch Lukas: komplett aus). Seit 16.11.2026 startet der
+     * Mikrofon-Dienst deshalb nicht mehr und die Sprach-Taste geht wieder ganz normal an den Fernseher.
+     * Der Code bleibt nur als Rückweg stehen (AN = true, Dienst und Mikrofon-Rechte im Manifest wieder eintragen).
+     */
+    static final boolean AN = false;
+
     static volatile Sprache instanz;
 
     private final Handler haupt = new Handler(Looper.getMainLooper());
@@ -146,6 +153,7 @@ public class Sprache extends Service {
 
     /** Startet den Dienst, falls er nicht läuft. Gibt false zurück, wenn es nicht ging. */
     static boolean starten(Context c) {
+        if (!AN) return false;
         if (instanz != null) return true;
         if (!mikrofonErlaubt(c)) {
             Log.w(TAG, "Mikrofon-Berechtigung fehlt (pm grant de.lukas.kino android.permission.RECORD_AUDIO)");
@@ -166,6 +174,7 @@ public class Sprache extends Service {
     private static volatile int[] tasten = {KeyEvent.KEYCODE_SEARCH, KeyEvent.KEYCODE_VOICE_ASSIST, KeyEvent.KEYCODE_ASSIST};
 
     static boolean istSprachTaste(int k) {
+        if (!AN) return false;
         for (int t : tasten) if (t == k) return true;
         return false;
     }
