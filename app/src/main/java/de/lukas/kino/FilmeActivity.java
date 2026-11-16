@@ -3368,7 +3368,7 @@ public class FilmeActivity extends Activity {
                     else rasterKachel(c, rh.eintraege.get(j), x, y, s.kw, s.kh, 1f, Math.round(235 * a), false);
                 }
             }
-            if (fe != null && s.poster) posterKachel(c, fe, fx, fy, zoom, 255, true);
+            if (fe != null && s.poster) posterKachel(c, fe, fx, fy, fokusZoom, 255, true);
             else if (fe != null) rasterKachel(c, fe, fx, fy, s.kw, s.kh, zoom, 255, true);
             c.restore();
             return weiter;
@@ -3381,6 +3381,17 @@ public class FilmeActivity extends Activity {
             c.translate(x, y);
             c.scale(f, f);
             karteZeichnen(c, e, POSTER, 0, 0, zoom, al, fokus);
+            if (fokus) {
+                // weißer Rahmen: bei so vielen Postern sieht man sofort, wo man gerade ist
+                float w = PW * zoom, hh = PH * zoom;
+                r.set(PW / 2f - w / 2 + 2.5f, PH / 2f - hh / 2 + 2.5f, PW / 2f + w / 2 - 2.5f, PH / 2f + hh / 2 - 2.5f);
+                p.setShader(null);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(5f);
+                p.setColor(0xF2FFFFFF);
+                c.drawRoundRect(r, 18 * zoom - 2.5f, 18 * zoom - 2.5f, p);
+                p.setStyle(Paint.Style.FILL);
+            }
             c.restore();
         }
 
