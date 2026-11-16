@@ -12,6 +12,7 @@ Läuft auf dem Pi (File editor oder Home Assistant). Jellyfin-Schlüssel nur aus
 Aufruf:
   python3 genre_bilder_hochladen.py BILDER [--los]      BILDER = Ordner mit kachel/ und breit/ oder die .tar-Datei
   python3 genre_bilder_hochladen.py BILDER --zurueck    alte Kachel-Bilder aus der Sicherung zurück, Hintergründe weg
+  … --umbenennen "Alter Name=Neuer Name"                 Sammlung vorher umbenennen (z. B. „Familie & Animation=Kindheit“)
 
 Ohne --los wird nur angezeigt, was passieren würde. Vor dem ersten Einspielen werden die bisherigen Kachel-Bilder
 nach <config>/kino_werkzeuge/genre_bilder_sicherung/ gesichert (einmalig, wird nie überschrieben).
@@ -35,7 +36,9 @@ BILDER = {
     "Action": "action", "Komödien": "komoedien", "Horror": "horror", "Thriller": "thriller",
     "Science-Fiction": "science-fiction", "Krimi": "krimi", "Drama": "drama", "Abenteuer": "abenteuer",
     "Fantasy": "fantasy", "Mystery": "mystery", "Liebesfilme": "liebesfilme",
-    "Familie & Animation": "familie-animation", "Familie und Animation": "familie-animation",
+    "Kindheit": "kindheit",
+    # alte Namen dieser Kategorie (bis 16.11.2026) – falls sie noch so heißt, bekommt sie trotzdem das neue Bild
+    "Familie & Animation": "kindheit", "Familie und Animation": "kindheit",
     "Kriegsfilme": "kriegsfilme", "Historienfilme": "historienfilme", "Western": "western",
 }
 
@@ -81,12 +84,34 @@ def main():
     admin = [u for u in nutzer if (u.get("Policy") or {}).get("IsAdministrator")]
     user = (admin or nutzer)[0]["Id"]
     samml = anfrage("/Items?userId={}&includeItemTypes=BoxSet&recursive=true&sortBy=SortName".format(user), key).get("Items") or []
+    # Sammlung umbenennen (Name wird gesperrt, damit ihn kein Bibliotheks-Scan zurückdreht)
+    for a in sys.argv[1:]:
+        if not a.startswith("--umbenennen="):
+            continue
+        alt, _, neu = a[len("--umbenennen="):].partition("=")
+        treffer = [x for x in samml if x.get("Name") == alt]
+        if not treffer or not neu:
+            print("umbenennen: nicht gefunden:", alt)
+            continue
+        if not los:
+            print("würde umbenennen:", alt, "->", neu)
+            continue
+        voll = anfrage("/Users/{}/Items/{}".format(user, treffer[0]["Id"]), key)
+        voll["Name"] = neu
+        voll["ForcedSortName"] = neu
+        gesperrt = voll.get("LockedFields") or []
+        if "Name" not in gesperrt:
+            gesperrt.append("Name")
+        voll["LockedFields"] = gesperrt
+        anfrage("/Items/{}".format(treffer[0]["Id"]), key, "POST", json.dumps(voll).encode("utf-8"), "application/json")
+        treffer[0]["Name"] = neu
+        print("umbenannt:", alt, "->", neu)
     os.makedirs(SICHERUNG, exist_ok=True)
     fertig, fehlt = 0, []
     for name, datei in BILDER.items():
         s = [x for x in samml if x.get("Name") == name]
         if not s:
-            if name != "Familie und Animation":
+            if name not in ("Familie und Animation", "Familie & Animation", "Kindheit"):
                 fehlt.append(name)
             continue
         sid = s[0]["Id"]

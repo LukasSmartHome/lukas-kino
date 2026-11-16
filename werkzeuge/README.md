@@ -134,5 +134,7 @@ Stil (flache Scherenschnitt-Plakate in der Farbe der Kategorie, Name unten).
   Ohne `--los` nur Vorschau; die alten Kachel-Bilder werden vorher gesichert, `--zurueck` holt sie wieder.
 
 Die TCL-App (`GenreEffekt.java`) und die LG-Oberfläche (`FX` in `app.js`) lassen über dem Hintergrund etwas Passendes
-laufen (Funken, Konfetti, Fledermäuse, Regen, Herzen …). Wer das Motiv verschiebt, muss dort die Lage nachziehen
+laufen (Funken, Konfetti, Fledermäuse, Regen, Herzen …). Die Bilder bekommen ein feines Korn, und die Oberflächen laden sie in
+bester Qualität (`quality=96`, am TCL in voller Farbtiefe) – sonst sieht man in den Farbverläufen Streifen.
+Die Kategorie „Familie & Animation“ heißt seit 16.11.2026 „Kindheit“ (`--umbenennen` im Hochlade-Skript). Wer das Motiv verschiebt, muss dort die Lage nachziehen
 (Motiv im Bild: x = 1160 + 0,75 * Kern-x, y = -120 + 0,75 * Kern-y).

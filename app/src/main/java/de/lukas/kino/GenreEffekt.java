@@ -7,7 +7,7 @@ import android.graphics.Path;
 /**
  * Ein bisschen Leben in den Genre-Szenen (Wunsch Lukas 16.11.2026): über dem Hintergrundbild einer Kategorie
  * bewegt sich etwas Passendes – Funken bei Action, Konfetti bei Komödien, Fledermäuse bei Horror, Regen bei
- * Thriller, Herzen bei Liebesfilmen …
+ * Thriller, Herzen bei Liebesfilmen, Glühwürmchen bei Kindheit …
  *
  * Bewusst sparsam: wenige kleine Teile, nur oben rechts (dort steht das Motiv), alles wird aus der Uhrzeit
  * berechnet – kein Speicher, keine Objekte pro Bild. Die Bühne zeichnet dafür nur ca. 25-mal pro Sekunde neu.
@@ -20,7 +20,6 @@ final class GenreEffekt {
     private static final float X0 = 1000, X1 = 1930, HORIZONT = 480;
     private static final Path pfad = new Path();
     private static final int[] BUNT = {0xE3261B, 0x1592C4, 0x2E8B3F, 0xFFFFFF, 0xE8508D, 0x6A3DE8};
-    private static final int[] BALLONS = {0xF2545B, 0xFFD93B, 0x4CC96B, 0xFFFFFF, 0x8E6BE8};
 
     private GenreEffekt() {
     }
@@ -44,6 +43,7 @@ final class GenreEffekt {
             case "Fantasy": return 9;
             case "Mystery": return 10;
             case "Liebesfilme": return 11;
+            case "Kindheit":
             case "Familie & Animation":
             case "Familie und Animation": return 12;
             case "Kriegsfilme": return 13;
@@ -54,27 +54,28 @@ final class GenreEffekt {
     }
 
     /**
-     * So weit rutscht die Szene in der geöffneten Kategorie nach oben (Bühnen-Pixel): über den Postern ist nur ein
-     * schmaler Streifen frei, darin soll der wichtigste Teil des Motivs stehen.
+     * So weit rutscht die Szene in der geöffneten Kategorie nach oben (Bühnen-Pixel).
+     * gross = erste Zeile: das obere Drittel gehört dem Bild, fast das ganze Motiv ist zu sehen.
+     * Sonst (weiter unten in der Liste) ist oben nur ein schmaler Streifen frei – darin steht der wichtigste Teil.
      */
-    static float wandHub(String genre) {
+    static float wandHub(String genre, boolean gross) {
         switch (art(genre)) {
-            case 1: return 170;   // Action: Hubschrauber, Feuerball
-            case 2: return 150;   // Komödien: Gesicht der Maske
-            case 3: return 150;   // Horror: Spukhaus vor dem Mond
-            case 4: return 120;   // Thriller: Klinge vor der roten Scheibe
-            case 5: return 140;   // Science-Fiction: Rakete und Ringplanet
-            case 6: return 165;   // Krimi: Laterne, Hut und Mantel
-            case 7: return 260;   // Drama: Gestalt im Licht
-            case 8: return 220;   // Abenteuer: Pyramide und Palmen
-            case 9: return 60;    // Fantasy: Schloss und Drache
-            case 10: return 250;  // Mystery: leuchtendes Tor
-            case 11: return 225;  // Liebesfilme: Paar vor der Sonne
-            case 12: return 200;  // Familie & Animation: Familie, Regenbogen, Ballon
-            case 13: return 290;  // Kriegsfilme: Panzer und Soldaten
-            case 14: return 230;  // Historienfilme: Tempel und Arena
-            case 15: return 250;  // Western: Felsen, Kakteen, Sonne
-            default: return 220;
+            case 1: return gross ? 90 : 200;    // Action: Hubschrauber, Feuerball
+            case 2: return gross ? 90 : 180;    // Komödien: Gesicht der Maske
+            case 3: return gross ? 60 : 180;    // Horror: Spukhaus vor dem Mond
+            case 4: return gross ? 60 : 150;    // Thriller: Klinge vor der roten Scheibe
+            case 5: return gross ? 60 : 170;    // Science-Fiction: Rakete und Ringplanet
+            case 6: return gross ? 140 : 200;   // Krimi: Laterne, Hut und Mantel
+            case 7: return gross ? 150 : 290;   // Drama: Gestalt im Licht
+            case 8: return gross ? 110 : 250;   // Abenteuer: Pyramide und Palmen
+            case 9: return gross ? 30 : 200;    // Fantasy: Drache, Schloss auf der Insel
+            case 10: return gross ? 130 : 280;  // Mystery: leuchtendes Tor
+            case 11: return gross ? 90 : 255;   // Liebesfilme: Paar vor der Sonne
+            case 12: return gross ? 40 : 170;   // Kindheit: Baum mit Schaukel
+            case 13: return gross ? 140 : 320;  // Kriegsfilme: Panzer und Soldaten
+            case 14: return gross ? 110 : 260;  // Historienfilme: Tempel und Arena
+            case 15: return gross ? 130 : 280;  // Western: Felsen, Kakteen, Sonne
+            default: return gross ? 100 : 250;
         }
     }
 
@@ -140,19 +141,33 @@ final class GenreEffekt {
                 break;
             }
             case 3: { // Horror: Fledermäuse ziehen vorbei
+                // Flügel als feste Fläche (Vorderkante Schulter → Spitze, gezackte Hinterkante): beim Schlagen hebt und senkt
+                // sich nur die Spitze, die Fläche verschwindet nie (vorher klappte die Form in sich zusammen – Meldung Lukas).
                 p.setColor(farbe(0x0B0312, alpha));
-                for (int i = 0; i < 6; i++) {
-                    float t = lauf(s, i, 9f, 16f);
-                    float x = X1 + 40 - t * (X1 - X0 + 240);
-                    float y = 70 + z(i, 1) * 250 + sin(t * 14 + i) * 22;
-                    float g = 9 + 7 * z(i, 2);
-                    float schlag = sin(s * (9 + 3 * z(i, 3)) + i);       // Flügelschlag
+                for (int i = 0; i < 11; i++) {
+                    float t = lauf(s, i, 8f, 15f);
+                    float x = X1 + 60 - t * (X1 - X0 + 320);
+                    float y = 50 + z(i, 1) * 300 + sin(t * 12 + i) * 18;
+                    float g = 8 + 8 * z(i, 2);
+                    float schlag = sin(s * (7 + 3 * z(i, 3)) + i * 1.3);  // -1 (Flügel unten) … 1 (Flügel oben)
+                    float spitze = -g * (0.15f + 0.75f * schlag);         // Höhe der Flügelspitze
                     pfad.reset();
-                    pfad.moveTo(x, y);
-                    pfad.quadTo(x - g * 1.1f, y - g * (0.5f + schlag), x - g * 2.2f, y - g * 0.2f * schlag);
-                    pfad.quadTo(x - g * 1.2f, y + g * 0.1f, x, y + g * 0.6f);
-                    pfad.quadTo(x + g * 1.2f, y + g * 0.1f, x + g * 2.2f, y - g * 0.2f * schlag);
-                    pfad.quadTo(x + g * 1.1f, y - g * (0.5f + schlag), x, y);
+                    pfad.moveTo(x, y - g * 0.35f);                                  // Kopf
+                    pfad.lineTo(x + g * 0.22f, y - g * 0.75f);                      // Ohr rechts
+                    pfad.lineTo(x + g * 0.38f, y - g * 0.3f);
+                    pfad.lineTo(x + g * 1.3f, y - g * 0.25f + spitze * 0.75f);      // Vorderkante
+                    pfad.lineTo(x + g * 2.3f, y + spitze);                          // Flügelspitze
+                    pfad.quadTo(x + g * 1.95f, y + g * 0.25f + spitze * 0.7f, x + g * 1.55f, y + g * 0.55f + spitze * 0.5f);
+                    pfad.quadTo(x + g * 1.2f, y + g * 0.2f + spitze * 0.35f, x + g * 0.85f, y + g * 0.6f + spitze * 0.25f);
+                    pfad.quadTo(x + g * 0.55f, y + g * 0.3f, x + g * 0.3f, y + g * 0.55f);
+                    pfad.lineTo(x, y + g * 0.85f);                                  // Körper unten
+                    pfad.lineTo(x - g * 0.3f, y + g * 0.55f);
+                    pfad.quadTo(x - g * 0.55f, y + g * 0.3f, x - g * 0.85f, y + g * 0.6f + spitze * 0.25f);
+                    pfad.quadTo(x - g * 1.2f, y + g * 0.2f + spitze * 0.35f, x - g * 1.55f, y + g * 0.55f + spitze * 0.5f);
+                    pfad.quadTo(x - g * 1.95f, y + g * 0.25f + spitze * 0.7f, x - g * 2.3f, y + spitze);
+                    pfad.lineTo(x - g * 1.3f, y - g * 0.25f + spitze * 0.75f);
+                    pfad.lineTo(x - g * 0.38f, y - g * 0.3f);
+                    pfad.lineTo(x - g * 0.22f, y - g * 0.75f);                      // Ohr links
                     pfad.close();
                     c.drawPath(pfad, p);
                 }
@@ -269,20 +284,17 @@ final class GenreEffekt {
                 }
                 break;
             }
-            case 12: { // Familie & Animation: Luftballons steigen
-                for (int i = 0; i < 9; i++) {
-                    float t = lauf(s, i, 10f, 17f);
-                    float x = X0 + 30 + z(i, 1) * (X1 - X0 - 60) + sin(t * 6 + i) * 30;
-                    float y = HORIZONT + 30 - t * 600;
-                    float g = 11 + 7 * z(i, 2);
-                    float da = alpha * Math.min(1f, t * 6f);
-                    p.setStyle(Paint.Style.STROKE);
-                    p.setStrokeWidth(1.6f);
-                    p.setColor(farbe(0x0C2A60, da * 0.7f));
-                    c.drawLine(x, y + g * 1.2f, x + sin(s * 2 + i) * 4, y + g * 3.4f, p);
-                    p.setStyle(Paint.Style.FILL);
-                    p.setColor(farbe(BALLONS[i % BALLONS.length], da));
-                    c.drawOval(x - g, y - g * 1.25f, x + g, y + g * 1.25f, p);
+            case 12: { // Kindheit: Glühwürmchen schweben am Sommerabend
+                for (int i = 0; i < 20; i++) {
+                    float t = lauf(s, i, 7f, 13f);
+                    float x = X0 + z(i, 1) * (X1 - X0) + sin(s * 0.45 + i * 1.9) * 34;
+                    float y = 250 + z(i, 2) * 230 + sin(s * 0.6 + i * 0.7) * 22 - t * 30;
+                    float f = sin(Math.PI * t) * (0.35f + 0.65f * Math.abs(sin(s * 1.3 + i * 2.1)));
+                    float rr = 1.8f + 1.8f * z(i, 3);
+                    p.setColor(farbe(0xFFE9A0, alpha * f * 0.28f));
+                    c.drawCircle(x, y, rr * 3.4f, p);
+                    p.setColor(farbe(0xFFF6CC, alpha * f));
+                    c.drawCircle(x, y, rr, p);
                 }
                 break;
             }

@@ -21,6 +21,7 @@ import random
 import subprocess
 import sys
 
+import numpy
 from PIL import Image, ImageDraw, ImageFont
 
 HIER = os.path.dirname(os.path.abspath(__file__))
@@ -275,7 +276,8 @@ def horror(s):
     for x, y, g, d in ((330, 250, 15, -12), (420, 330, 10, 8), (800, 470, 13, 10), (250, 420, 9, -6), (-300, 300, 14, 5), (-700, 380, 11, -8)):
         s.fledermaus(x, y, g, "#0B0312", d)
     s.band([(-1900, 770), (-1200, 740), (-600, 772), (-100, 750), (150, 742), (380, 660), (520, 612), (680, 618), (840, 700), (1000, 748), (1400, 760)], "#200A30")
-    # Spukhaus auf dem Hügel
+    # Spukhaus auf dem Hügel – mit Sockel aus Hügel, damit es wirklich aufsitzt und nicht schwebt
+    s.pfad("M330,720 C352,668 372,634 398,624 L672,624 C700,634 730,668 780,720 Z", "#200A30")
     f = "#0A0310"
     s.rechteck(440, 470, 170, 160, f)
     s.form([(424, 474), (525, 380), (626, 474)], f)
@@ -376,20 +378,41 @@ def krimi(s):
 
 
 def fantasy(s):
-    s.himmel([(-600, "#12083A"), (120, "#3B1FA8"), (480, "#6A3DE8"), (700, "#B985FF"), (800, "#F2B9EA")])
-    s.sterne(150, 12, "#FFFFFF", y1=430, gross=2.6)
-    s.scheibe(700, 300, 120, "#FFF4D6", "#FFD9F5", 0.5)
-    s.scheibe(880, 190, 40, "#D9C6FF", "#D9C6FF", 0.4)
-    # Funkelsterne
-    for x, y, g in ((330, 200, 16), (520, 120, 11), (860, 420, 13), (180, 380, 10), (-300, 180, 14), (-800, 300, 12)):
+    # Bewusst ganz anders als Horror (Rückmeldung Lukas 16.11.2026): heller goldener Morgen statt Nacht,
+    # schwebende Inseln mit Wasserfall, Schloss auf der Insel, großer Drache
+    s.himmel([(-600, "#2A1466"), (120, "#6A3DE8"), (460, "#C866D6"), (700, "#FF9E8A"), (800, "#FFD08A")])
+    s.sterne(90, 12, "#FFFFFF", y1=260, gross=2.4)
+    s.scheibe(560, 610, 175, "#FFF1C4", "#FFD08A", 0.75)
+    s.wolke(200, 640, 1.5, "#FFD6E8", 0.55)
+    s.wolke(880, 600, 1.3, "#FFD6E8", 0.5)
+    s.wolke(-420, 620, 1.7, "#FFD6E8", 0.45)
+    for x, y, g in ((360, 150, 15), (840, 120, 12), (900, 400, 12), (150, 470, 10), (-300, 180, 14), (-800, 300, 12)):
         s.pfad("M%d,%d l%.1f,%.1f l%.1f,%.1f l%.1f,%.1f l%.1f,%.1f l%.1f,%.1f l%.1f,%.1f l%.1f,%.1f Z" % (
             x, y - g, g * .22, g * .78, g * .78, g * .22, -g * .78, g * .22, -g * .22, g * .78, -g * .22, -g * .78, -g * .78, -g * .22, g * .78, -g * .22), "#FFFFFF", 0.9)
-    s.band([(-1900, 760), (-1500, 640), (-1300, 730), (-1000, 600), (-760, 740), (-500, 660), (-250, 760), (0, 700), (160, 640),
-            (330, 740), (560, 690), (760, 620), (900, 700), (1060, 640), (1300, 760)], "#5630C4", weich=False)
-    s.band([(-1900, 790), (-1300, 740), (-900, 780), (-500, 730), (-100, 790), (200, 760), (500, 800), (900, 760), (1300, 790)], "#3A1D96")
-    # Felsnadel mit Schloss
+    s.band([(-1900, 770), (-1500, 650), (-1300, 740), (-1000, 610), (-760, 750), (-500, 670), (-250, 770), (0, 710), (160, 660),
+            (330, 750), (560, 720), (760, 650), (900, 720), (1060, 660), (1300, 770)], "#9A55D8", weich=False)
+    s.band([(-1900, 800), (-1300, 750), (-900, 790), (-500, 740), (-100, 800), (200, 770), (500, 806), (900, 770), (1300, 800)], "#6230B8")
+
+    def insel(x, y, w, fels="#24105C", gras="#3FC48E"):
+        s.pfad("M%.0f,%.0f L%.0f,%.0f L%.0f,%.0f L%.0f,%.0f L%.0f,%.0f L%.0f,%.0f L%.0f,%.0f L%.0f,%.0f L%.0f,%.0f L%.0f,%.0f Z" % (
+            x - w, y, x + w, y, x + w * .82, y + w * .2, x + w * .56, y + w * .5, x + w * .34, y + w * .62, x + w * .14, y + w * 1.05,
+            x - w * .08, y + w * .78, x - w * .34, y + w * .68, x - w * .6, y + w * .4, x - w * .86, y + w * .2), fels)
+        s.pfad("M%.0f,%.0f Q%.0f,%.0f %.0f,%.0f L%.0f,%.0f Q%.0f,%.0f %.0f,%.0f Z" % (
+            x - w, y, x, y - w * .12, x + w, y, x + w * .9, y + w * .08, x, y + w * .02, x - w * .9, y + w * .08), gras)
+
+    # Wasserfall von der großen Insel
+    i = s.nid("w")
+    s.defs.append('<linearGradient id="%s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E8FBFF" stop-opacity=".95"/>'
+                  '<stop offset="1" stop-color="#E8FBFF" stop-opacity="0"/></linearGradient>' % i)
+    s.roh('<path d="M760,474 L790,474 L800,760 L748,760 Z" fill="url(#%s)"/>' % i)
+    insel(640, 470, 190)
+    insel(250, 590, 92)
+    insel(900, 330, 58)
+    insel(-380, 500, 120)
+    insel(-1000, 420, 90)
+    # Schloss auf der großen Insel
     f = "#170B3C"
-    s.form([(330, 830), (392, 700), (410, 560), (440, 520), (640, 520), (668, 560), (690, 700), (760, 830)], f)
+    s.roh('<g transform="translate(316 152) scale(0.6)">')
     s.rechteck(440, 420, 200, 110, f)
     for x in range(440, 640, 30):
         s.rechteck(x, 404, 18, 20, f)
@@ -401,17 +424,22 @@ def fantasy(s):
     for x, y in ((440, 372), (628, 350), (535, 312), (535, 372), (480, 462), (590, 462)):
         s.pfad("M%d,%d v-16 a7,7 0 0 1 14,0 v16 Z" % (x, y), "#FFD98A")
     s.pfad("M520,530 v-40 a20,20 0 0 1 40,0 v40 Z", "#0B0522")
-    # Drache
-    d = "#120830"
-    s.roh('<g transform="translate(250 330) scale(1.15) rotate(-8)">')
+    s.roh('</g>')
+    # Bäume auf den kleinen Inseln
+    s.tanne(230, 582, 70, "#170B3C")
+    s.tanne(282, 584, 50, "#170B3C")
+    s.tanne(900, 324, 44, "#170B3C")
+    # großer Drache
+    d = "#160A3A"
+    s.roh('<g transform="translate(318 292) scale(1.6) rotate(-10)">')
     s.pfad("M-90,20 C-50,-6 -10,-4 30,8 C60,16 84,6 104,-14 L120,-30 L114,-6 L136,-4 L112,10 C92,34 50,40 10,34 C-30,28 -62,36 -100,66 "
            "C-76,40 -84,30 -120,34 C-104,22 -98,22 -90,20 Z", d)
     s.pfad("M10,10 C-4,-50 -50,-84 -110,-92 C-84,-70 -78,-56 -84,-36 C-60,-44 -44,-36 -40,-16 C-24,-22 -10,-14 0,8 Z", d)
     s.pfad("M30,10 C40,-44 80,-78 140,-96 C122,-70 122,-54 132,-38 C108,-42 94,-32 92,-14 C76,-18 64,-10 56,10 Z", d)
     s.roh('</g>')
-    s.band([(-1900, 860), (-900, 836), (-200, 858), (300, 842), (700, 862), (1200, 846)], "#0C0526")
-    for x, h in ((120, 150), (60, 110), (880, 140), (950, 100), (-360, 130), (-420, 96), (-1100, 140)):
-        s.tanne(x, 852, h, "#0C0526")
+    s.band([(-1900, 860), (-900, 836), (-200, 858), (300, 842), (700, 862), (1200, 846)], "#1F0E52")
+    for x, h in ((120, 130), (60, 96), (880, 120), (950, 90), (-360, 120), (-420, 90), (-1100, 130)):
+        s.tanne(x, 852, h, "#1F0E52")
 
 
 def scifi(s):
@@ -731,55 +759,57 @@ def liebesfilme(s):
         s.herz(x, y, 9, "#FF8FB6")
 
 
-def familie(s):
-    s.himmel([(-600, "#1557C0"), (150, "#2C82E6"), (520, "#5FB2F7"), (800, "#CDEBFF")])
-    s.scheibe(180, 240, 76, "#FFE680", "#FFF3B0", 0.7)
-    # Regenbogen
-    for k, f in enumerate(("#F2545B", "#FF9F43", "#FFD93B", "#4CC96B", "#3E9BF0", "#8E6BE8")):
-        s.roh('<path d="M%d,800 A%d,%d 0 0 1 %d,800" fill="none" stroke="%s" stroke-width="20" opacity=".9"/>' % (150 + k * 20, 400 - k * 20, 400 - k * 20, 950 - k * 20, f))
-    for x, y, g in ((330, 330, 1.2), (800, 200, 1.5), (560, 110, 1.0), (-300, 260, 1.6), (-800, 380, 1.3), (60, 480, 0.9), (940, 470, 1.0)):
-        s.wolke(x, y, g, "#FFFFFF", 0.96)
-    # Heißluftballon
-    s.roh('<g transform="translate(690 400)">')
-    s.pfad("M0,-150 C96,-150 124,-70 110,-10 C98,40 50,76 28,100 L-28,100 C-50,76 -98,40 -110,-10 C-124,-70 -96,-150 0,-150 Z", "#F2545B")
-    s.pfad("M0,-150 C40,-150 56,-70 50,-10 C44,40 22,76 14,100 L-14,100 C-22,76 -44,40 -50,-10 C-56,-70 -40,-150 0,-150 Z", "#FFD93B")
-    s.pfad("M0,-150 C10,-150 12,-70 10,-10 C8,40 4,76 2,100 L-2,100 C-4,76 -8,40 -10,-10 C-12,-70 -10,-150 0,-150 Z", "#F2545B")
-    s.linie("M-26,102 L-16,140 M26,102 L16,140", "#0C2A60", 3)
-    s.rechteck(-20, 138, 40, 30, "#8A5A2B", 6)
-    s.roh('</g>')
-    # Drachen (Papierdrachen)
-    s.form([(330, 160), (372, 214), (330, 290), (288, 214)], "#FFD93B")
-    s.form([(330, 160), (372, 214), (330, 214)], "#FF9F43")
-    s.form([(330, 214), (330, 290), (288, 214)], "#FF9F43")
-    s.linie("M330,290 C340,340 300,380 330,430 C352,470 410,560 452,640", "#0C2A60", 2.5)
-    for x, y in ((328, 330), (318, 372), (334, 414)):
-        s.form([(x - 12, y - 6), (x + 12, y + 6), (x + 12, y - 6), (x - 12, y + 6)], "#F2545B")
-    # Hügel
-    s.band([(-1900, 760), (-1400, 700), (-900, 750), (-400, 690), (0, 740), (300, 700), (700, 750), (1100, 700), (1400, 750)], "#3B8DE8")
-    s.band([(-1900, 800), (-1000, 770), (-400, 800), (100, 760), (420, 700), (600, 690), (800, 730), (1100, 790), (1400, 780)], "#2166C8")
-    # Häuschen
-    s.rechteck(820, 700, 84, 62, "#FFFFFF")
-    s.form([(808, 704), (862, 654), (916, 704)], "#F2545B")
-    s.rechteck(852, 726, 20, 36, "#F2545B")
-    s.rechteck(828, 716, 16, 16, "#5FB2F7")
-    # Familie Hand in Hand auf dem Hügel, Hund
-    f = "#0C2A60"
-    s.mensch(430, 706, 150, f)
-    s.mensch(500, 696, 96, f, art="kind")
-    s.mensch(566, 694, 84, f, art="kind")
-    s.mensch(640, 700, 140, f, art="frau")
-    s.linie("M452,630 L484,640 M516,640 L552,646 M580,646 L618,632", f, 6)
-    s.pfad("M690,712 c2,-16 16,-18 44,-18 l10,-14 l8,10 l12,2 l-8,10 l0,26 l-9,0 l0,-16 l-36,0 l0,16 l-9,0 l-2,-20 l-12,-10 Z", f)
-    # Luftballon in Kinderhand
-    s.linie("M586,640 C600,600 580,570 596,530", f, 2.5)
-    s.ellipse(598, 500, 24, 30, "#F2545B")
-    s.band([(-1900, 860), (-900, 838), (-200, 858), (400, 842), (900, 860), (1300, 846)], "#123E8C")
-    z = random.Random(4)
-    for _ in range(40):
+def kindheit(s):
+    # „Kindheit“ (früher „Familie & Animation“). Lukas 16.11.2026: keine Rubrik, die nach Familie oder Kinderprogramm
+    # klingt, und das Bild soll erwachsen aussehen – wie eine Erinnerung an eine Zeit, in der alles einfach war,
+    # warm, aber nicht traurig und nicht kindisch. Motiv: Sommerabend, großer Baum mit Schaukel auf dem Hügel,
+    # ein Fahrrad am Stamm, ein Papierflieger, erste Sterne und Glühwürmchen.
+    s.himmel([(-600, "#132A66"), (100, "#2A5AB4"), (430, "#6A9DE6"), (660, "#F6C6A2"), (800, "#FFE3B4")])
+    s.sterne(70, 31, "#FFFFFF", y1=220, gross=2.2)
+    s.scheibe(690, 760, 128, "#FFF3D0", "#FFCF94", 0.8)
+    for x, y, g, o in ((820, 520, 1.4, .6), (250, 560, 1.2, .5), (-380, 520, 1.6, .5), (-900, 560, 1.3, .45), (960, 640, 1.0, .5)):
+        s.wolke(x, y, g, "#FFD9C2", o)
+    for x, y, g in ((300, 250, 13), (360, 290, 10), (-300, 300, 12)):
+        s.vogel(x, y, g, "#132A66", 2.8)
+    s.band([(-1900, 760), (-1400, 700), (-900, 752), (-400, 706), (0, 750), (300, 716), (700, 760), (1100, 712), (1400, 756)], "#4A7CD0")
+    s.band([(-1900, 792), (-1300, 760), (-800, 790), (-300, 770), (60, 790), (700, 800), (1100, 772), (1400, 794)], "#2B529F")
+    # kleines Haus in der Ferne, ein Fenster leuchtet
+    f2 = "#1B3A80"
+    s.rechteck(-60, 728, 86, 52, f2)
+    s.form([(-72, 732), (-17, 690), (38, 732)], f2)
+    s.rechteck(-22, 744, 16, 16, "#FFD98A")
+    s.rechteck(880, 742, 70, 44, f2)
+    s.form([(870, 746), (915, 712), (960, 746)], f2)
+    s.rechteck(906, 756, 14, 14, "#FFD98A")
+    # Hügel mit dem großen Baum
+    f = "#0C1F52"
+    s.band([(-1900, 840), (-1200, 812), (-600, 836), (-100, 790), (200, 700), (420, 652), (640, 668), (820, 740), (1040, 800), (1400, 826)], f)
+    s.pfad("M398,668 C410,600 404,540 392,470 C420,500 440,500 470,474 C462,540 462,600 478,664 Z", f)          # Stamm
+    for cx, cy, r in ((430, 330, 150), (310, 400, 96), (560, 392, 104), (390, 240, 96), (500, 250, 92), (250, 330, 70), (620, 310, 72)):
+        s.kreis(cx, cy, r, f)
+    s.linie("M450,470 C540,440 620,452 716,430", f, 16)                                                         # langer Ast für die Schaukel
+    # Schaukel, leicht in Bewegung
+    s.linie("M606,446 L632,636 M664,438 L690,628", f, 4)
+    s.roh('<rect x="620" y="628" width="82" height="11" rx="4" fill="%s" transform="rotate(-8 661 633)"/>' % f)
+    # Fahrrad am Stamm
+    s.roh('<g fill="none" stroke="%s" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" transform="translate(262 640) rotate(-12)">'
+          '<circle cx="0" cy="0" r="36"/><circle cx="104" cy="0" r="36"/>'
+          '<path d="M0,0 L36,-52 L86,-52 L104,0 M36,-52 L56,0 L0,0 M56,0 L86,-52 M30,-66 L46,-66 M36,-52 L33,-66 M86,-52 L80,-78 L96,-82"/></g>' % f)
+    # Papierflieger mit Flugbahn
+    s.linie("M716,520 C736,420 770,300 836,224", "#FFFFFF", 3.5, 0.65, 'stroke-dasharray="3 15"')
+    s.roh('<g transform="translate(852 214) rotate(-18)"><path d="M-44,10 L44,-14 L-8,22 Z" fill="#FFFFFF"/>'
+          '<path d="M-44,10 L44,-14 L-22,-4 Z" fill="#DCE9FF"/><path d="M-8,22 L-14,40 L6,14 Z" fill="#BFD4F7"/></g>')
+    # Glühwürmchen
+    z = random.Random(21)
+    for _ in range(26):
+        x, y = z.uniform(-1500, 1300), z.uniform(600, 800)
+        s.schein(x, y, 12, "#FFE9A0", 0.5)
+        s.kreis(x, y, 2.6, "#FFF6CC", 0.95)
+    s.band([(-1900, 864), (-900, 842), (-200, 862), (400, 846), (900, 864), (1300, 850)], "#081640")
+    z = random.Random(5)
+    for _ in range(70):
         x = z.uniform(-1900, 1500)
-        f2 = z.choice(("#FFD93B", "#FFFFFF", "#F2545B"))
-        s.linie("M%.0f,852 v-18" % x, "#0C2A60", 3)
-        s.kreis(x, 830, 7, f2)
+        s.linie("M%.0f,860 q%.0f,-20 %.0f,-%.0f" % (x, z.uniform(-6, 6), z.uniform(-10, 10), z.uniform(20, 40)), "#081640", 4)
 
 
 def krieg(s):
@@ -901,11 +931,19 @@ SZENEN = [
     ("Fantasy", "fantasy", fantasy, ["Fantasy"]),
     ("Mystery", "mystery", mystery, ["Mystery"]),
     ("Liebesfilme", "liebesfilme", liebesfilme, ["Liebesfilme"]),
-    ("Familie & Animation", "familie-animation", familie, ["Familie &", "Animation"]),
+    ("Kindheit", "kindheit", kindheit, ["Kindheit"]),
     ("Kriegsfilme", "kriegsfilme", krieg, ["Kriegsfilme"]),
     ("Historienfilme", "historienfilme", historie, ["Historienfilme"]),
     ("Western", "western", western, ["Western"]),
 ]
+
+
+def korn(bild, staerke=2.0, saat=1):
+    """Feines, gleichmäßiges Korn. Weiche Farbverläufe haben nur wenige Helligkeitsstufen – auf einem großen Fernseher
+    sieht man sie als Streifen (Meldung Lukas 16.11.2026). Das Korn löst die Stufen auf."""
+    a = numpy.asarray(bild, dtype=numpy.float32)
+    z = numpy.random.default_rng(saat).normal(0.0, staerke, a.shape[:2])[..., None]
+    return Image.fromarray(numpy.clip(a + z, 0, 255).astype(numpy.uint8), "RGB")
 
 
 def rendern(svg, ziel_png):
@@ -952,7 +990,7 @@ def kachel(name, datei, zeichner, zeilen, ordner):
         d.text(((1000 - w) / 2, y), z, font=f, fill=(255, 255, 255))
         y += zh
     ziel = os.path.join(ordner, "kachel", datei + ".jpg")
-    b.save(ziel, "JPEG", quality=90, optimize=True)
+    korn(b, 2.0, 7).save(ziel, "JPEG", quality=94, optimize=True, subsampling=0)
     os.remove(png)
     return ziel
 
@@ -966,7 +1004,7 @@ def breit(name, datei, zeichner, ordner):
     rendern(svg, png)
     b = Image.open(png).convert("RGB")
     ziel = os.path.join(ordner, "breit", datei + ".jpg")
-    b.save(ziel, "JPEG", quality=88, optimize=True)
+    korn(b, 2.2, 11).save(ziel, "JPEG", quality=92, optimize=True, subsampling=0)
     os.remove(png)
     return ziel
 

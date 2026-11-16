@@ -118,8 +118,11 @@ final class Bilder {
             in.close();
             byte[] daten = out.toByteArray();
             BitmapFactory.Options o = new BitmapFactory.Options();
-            // Logos brauchen Transparenz, alles andere spart mit RGB_565 die Haelfte
-            o.inPreferredConfig = url.contains("/Images/Logo") ? Bitmap.Config.ARGB_8888 : Bitmap.Config.RGB_565;
+            // Logos brauchen Transparenz, alles andere spart mit RGB_565 die Haelfte.
+            // Ausnahme: die gezeichneten Genre-Bilder (in der Adresse an quality=96 zu erkennen). Ihre weichen Farbverlaeufe
+            // zeigen mit RGB_565 deutliche waagerechte Streifen (Meldung Lukas 16.11.2026) – sie brauchen die volle Farbtiefe.
+            boolean fein = url.contains("/Images/Logo") || url.contains(Jellyfin.FEIN);
+            o.inPreferredConfig = fein ? Bitmap.Config.ARGB_8888 : Bitmap.Config.RGB_565;
             return BitmapFactory.decodeByteArray(daten, 0, daten.length, o);
         } catch (Throwable t) {
             return null;

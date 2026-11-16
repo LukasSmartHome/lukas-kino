@@ -66,7 +66,7 @@
     'Action': '#E3261B', 'Komödien': '#FFC61A', 'Horror': '#4A0F5E', 'Thriller': '#3B414B',
     'Science-Fiction': '#1592C4', 'Krimi': '#1D438F', 'Drama': '#8E2345', 'Abenteuer': '#2E8B3F',
     'Fantasy': '#6A3DE8', 'Mystery': '#2F6E73', 'Liebesfilme': '#E8508D', 'Familie & Animation': '#3E9BF0',
-    'Familie und Animation': '#3E9BF0', 'Kriegsfilme': '#5E6B2B', 'Historienfilme': '#9C7442', 'Western': '#E9A23B'
+    'Kindheit': '#3E9BF0', 'Familie und Animation': '#3E9BF0', 'Kriegsfilme': '#5E6B2B', 'Historienfilme': '#9C7442', 'Western': '#E9A23B'
   };
 
   // Oben in der Seitenleiste die Apps des Fernsehers (seit 04.11.2026, wie am TCL), dann Suche und die Bereiche.
@@ -359,6 +359,12 @@
   function posterUrl(id, tag, h) { return SERVER + '/Items/' + id + '/Images/Primary?fillHeight=' + h + '&quality=90' + mitTag(tag); }
   function hintergrundBild(id, tag) {
     return SERVER + '/Items/' + id + '/Images/Backdrop/0?fillWidth=' + (LEICHT ? 1280 : 1920) + '&quality=' + (LEICHT ? 80 : 85) + mitTag(tag);
+  }
+  // Gezeichnete Genre-Bilder (Kachel und Hintergrund einer Kategorie): beste Qualität, damit die weichen Farbverläufe
+  // keine Streifen zeigen (Meldung Lukas 16.11.2026)
+  function genreKachel(id, tag) { return SERVER + '/Items/' + id + '/Images/Primary?fillHeight=588&quality=96' + mitTag(tag); }
+  function genreHintergrund(id, tag) {
+    return SERVER + '/Items/' + id + '/Images/Backdrop/0?fillWidth=' + (LEICHT ? 1280 : 1920) + '&quality=96' + mitTag(tag);
   }
   function logoBild(id, tag) { return SERVER + '/Items/' + id + '/Images/Logo?fillHeight=220&quality=90' + mitTag(tag); }
   function querUrl(id, tag, b) { return SERVER + '/Items/' + id + '/Images/Primary?fillWidth=' + b + '&quality=85' + mitTag(tag); }
@@ -2533,7 +2539,7 @@
       hintergrundSetzen(null, typ(e) === 'Gesehen' ? '#3E4A5E' : typ(e) === 'Sammlungen' ? '#3A3380' : FARBEN[e.Name] || '#444444');
       return;
     }
-    const url = hintergrundUrl(e);
+    const url = genre ? genreHintergrund(e.Id, hintergrundTag(e)) : hintergrundUrl(e);
     if (!url) hintergrundSetzen(null, '#1D2027');
     else hintergrundSetzen(url, null, genre);
   }
@@ -2544,23 +2550,25 @@
   // die Grafikkarte), im leichten Modus (Jonas) gar nichts. In der geöffneten Kategorie rutscht das Bild nach oben
   // (hub = so viele Pixel), damit der wichtigste Teil des Motivs im schmalen Streifen über den Postern steht.
   const FX = {
-    'Action':              { hub: 170, art: 'action',  n: 14, feld: [1350, 300, 520, 120], dx: [-60, 60],  dy: [-420, -280], t: [3, 6.5] },
-    'Komödien':            { hub: 150, art: 'konfetti', n: 16, feld: [1000, -30, 900, 10], dx: [-40, 40],  dy: [540, 580],   t: [5, 9], dreh: 720 },
-    'Horror':              { hub: 150, art: 'fleder',  n: 5,  feld: [1960, 60, 10, 260],  dx: [-1200, -1100], dy: [-40, 40], t: [9, 16] },
-    'Thriller':            { hub: 120, art: 'regen',   n: 26, feld: [980, -60, 990, 10],  dx: [-46, -46],  dy: [600, 600],   t: [0.8, 1.5] },
-    'Science-Fiction':     { hub: 140, art: 'sterne',  n: 20, feld: [900, 0, 1010, 300],  t: [1.6, 4], funkeln: true },
-    'Krimi':               { hub: 165, art: 'staub',   n: 12, feld: [1300, 190, 300, 290], dx: [-20, 20],  dy: [-46, -20],   t: [7, 13] },
-    'Drama':               { hub: 260, art: 'staub',   n: 12, feld: [1450, 0, 210, 470],  dx: [-16, 16],   dy: [20, 46],     t: [7, 13] },
-    'Abenteuer':           { hub: 220, art: 'blatt',   n: 11, feld: [1000, -30, 900, 10], dx: [-70, 70],   dy: [540, 580],   t: [7, 12], dreh: 300 },
-    'Fantasy':             { hub: 60, art: 'funken',  n: 14, feld: [980, 10, 920, 400],  t: [2.2, 4.5], funkeln: true },
-    'Mystery':             { hub: 250, art: 'irrlicht', n: 11, feld: [1000, 380, 900, 90], dx: [-40, 40],  dy: [-360, -200], t: [8, 14] },
-    'Liebesfilme':         { hub: 225, art: 'herz',    n: 10, feld: [1040, 440, 840, 40], dx: [-40, 40],   dy: [-520, -420], t: [7, 12] },
-    'Familie & Animation': { hub: 200, art: 'ballon',  n: 7,  feld: [1030, 500, 860, 20], dx: [-50, 50],   dy: [-620, -560], t: [10, 17] },
-    'Kriegsfilme':         { hub: 290, art: 'asche',   n: 16, feld: [1500, 0, 440, 470],  dx: [-700, -300], dy: [-70, -30],  t: [6, 11] },
-    'Historienfilme':      { hub: 230, art: 'gold',    n: 16, feld: [1500, 0, 440, 470],  dx: [-700, -300], dy: [30, 70],    t: [6, 11] },
-    'Western':             { hub: 250, art: 'sand',    n: 14, feld: [940, 290, 300, 190], dx: [700, 1000], dy: [-10, 10],    t: [2.4, 5] }
+    // hub = so weit rutscht das Bild in der geöffneten Kategorie nach oben: [erste Zeile (oberes Drittel frei), weiter unten (schmaler Streifen)]
+    'Action':          { hub: [90, 200],  art: 'action',   n: 14, feld: [1350, 300, 520, 120], dx: [-60, 60],  dy: [-420, -280], t: [3, 6.5] },
+    'Komödien':        { hub: [90, 180],  art: 'konfetti', n: 16, feld: [1000, -30, 900, 10],  dx: [-40, 40],  dy: [540, 580],   t: [5, 9], dreh: 720 },
+    'Horror':          { hub: [60, 180],  art: 'fleder',   n: 9,  feld: [1960, 50, 10, 300],   dx: [-1250, -1150], dy: [-40, 40], t: [8, 15], innen: true },
+    'Thriller':        { hub: [60, 150],  art: 'regen',    n: 26, feld: [980, -60, 990, 10],   dx: [-46, -46], dy: [600, 600],   t: [0.8, 1.5] },
+    'Science-Fiction': { hub: [60, 170],  art: 'sterne',   n: 20, feld: [900, 0, 1010, 300],   t: [1.6, 4], funkeln: true },
+    'Krimi':           { hub: [140, 200], art: 'staub',    n: 12, feld: [1300, 190, 300, 290], dx: [-20, 20],  dy: [-46, -20],   t: [7, 13] },
+    'Drama':           { hub: [150, 290], art: 'staub',    n: 12, feld: [1450, 0, 210, 470],   dx: [-16, 16],  dy: [20, 46],     t: [7, 13] },
+    'Abenteuer':       { hub: [110, 250], art: 'blatt',    n: 11, feld: [1000, -30, 900, 10],  dx: [-70, 70],  dy: [540, 580],   t: [7, 12], dreh: 300 },
+    'Fantasy':         { hub: [30, 200],  art: 'funken',   n: 14, feld: [980, 10, 920, 400],   t: [2.2, 4.5], funkeln: true },
+    'Mystery':         { hub: [130, 280], art: 'irrlicht', n: 11, feld: [1000, 380, 900, 90],  dx: [-40, 40],  dy: [-360, -200], t: [8, 14] },
+    'Liebesfilme':     { hub: [90, 255],  art: 'herz',     n: 10, feld: [1040, 440, 840, 40],  dx: [-40, 40],  dy: [-520, -420], t: [7, 12] },
+    'Kindheit':        { hub: [40, 170],  art: 'gluehwurm', n: 12, feld: [1000, 250, 900, 230], dx: [-50, 50],  dy: [-60, -10],   t: [6, 11] },
+    'Kriegsfilme':     { hub: [140, 320], art: 'asche',    n: 16, feld: [1500, 0, 440, 470],   dx: [-700, -300], dy: [-70, -30], t: [6, 11] },
+    'Historienfilme':  { hub: [110, 260], art: 'gold',     n: 16, feld: [1500, 0, 440, 470],   dx: [-700, -300], dy: [30, 70],   t: [6, 11] },
+    'Western':         { hub: [130, 280], art: 'sand',     n: 14, feld: [940, 290, 300, 190],  dx: [700, 1000], dy: [-10, 10],   t: [2.4, 5] }
   };
-  FX['Familie und Animation'] = FX['Familie & Animation'];
+  FX['Familie & Animation'] = FX['Kindheit'];   // alter Name, bis 16.11.2026
+  FX['Familie und Animation'] = FX['Kindheit'];
   let bgGenre = null, fxGenre = null;
 
   /** Fester Zufallswert 0..1 (immer gleich für dasselbe Teilchen – kein Springen beim Neuaufbau). */
@@ -2590,7 +2598,9 @@
           + Math.round(f.dy[0] + fxZufall(i, 7) * (f.dy[1] - f.dy[0])) + 'px';
         if (f.dreh) st += ';--r:' + Math.round((fxZufall(i, 8) > 0.5 ? 1 : -1) * f.dreh) + 'deg';
       }
-      h += '<i class="' + (f.funkeln ? 'fk' : 'zg') + ' n' + (i % 6) + '" style="' + st + '"></i>';
+      // innen: ein zweites Element für die eigene Bewegung (Fledermaus flattert), außen läuft die Strecke
+      const innen = f.innen ? '<u style="animation-duration:' + (0.22 + 0.12 * fxZufall(i, 9)).toFixed(2) + 's"></u>' : '';
+      h += '<i class="' + (f.funkeln ? 'fk' : 'zg') + ' n' + (i % 6) + '" style="' + st + '">' + innen + '</i>';
     }
     if (f.art === 'sterne') h += '<b class="schnuppe"></b>';
     if (f.art === 'sand') h += '<b class="laeufer"></b>';
@@ -2602,7 +2612,8 @@
     if (!el.fx) return;
     const liste = ansicht === A.LISTE;
     const wand = liste && seite.raster && seite.poster && !!bgGenre;
-    const hub = wand ? 'translateY(-' + ((FX[bgGenre] && FX[bgGenre].hub) || 220) + 'px)' : '';
+    const hubs = (FX[bgGenre] && FX[bgGenre].hub) || [100, 250];
+    const hub = wand ? 'translateY(-' + (seite.akt === 0 ? hubs[0] : hubs[1]) + 'px)' : '';
     el.bgs.style.transform = hub;
     el.wand.classList.toggle('szene', wand);
     fxSetzen(liste && bgGenre ? bgGenre : null);
@@ -2658,6 +2669,7 @@
       return h ? hintergrundBild(id, h) : null;
     }
     const pr = tag(e, 'Primary');
+    if (pr && t === 'BoxSet' && istGenre(e)) return genreKachel(id, pr);
     if (pr) return posterUrl(id, pr, 330);
     if ((t === 'Episode' || t === 'Season') && e.SeriesId && e.SeriesPrimaryImageTag) return posterUrl(e.SeriesId, e.SeriesPrimaryImageTag, 330);
     return null;

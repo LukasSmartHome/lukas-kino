@@ -249,6 +249,18 @@ final class Jellyfin {
         return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillWidth=" + breite + "&quality=85" + (tag != null ? "&tag=" + tag : "");
     }
 
+    /** Kennzeichen in der Bild-Adresse: beste Qualität, und Bilder lädt es in voller Farbtiefe (für die gezeichneten Genre-Bilder). */
+    static final String FEIN = "quality=96";
+
+    /** Gezeichnetes Genre-Bild: Kachel bzw. Hintergrund einer Kategorie, ohne sichtbare Streifen in den Farbverläufen. */
+    static String genreKachel(String id, String tag) {
+        return SERVER + "/Items/" + id + "/Images/Primary?fillHeight=588&" + FEIN + (tag != null ? "&tag=" + tag : "");
+    }
+
+    static String genreHintergrund(String id, String tag) {
+        return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillWidth=1920&" + FEIN + (tag != null ? "&tag=" + tag : "");
+    }
+
     static String hintergrund(String id, String tag) {
         return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillWidth=1920&quality=85" + (tag != null ? "&tag=" + tag : "");
     }

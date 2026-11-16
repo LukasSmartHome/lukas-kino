@@ -77,7 +77,8 @@ public class FilmeActivity extends Activity {
         FARBEN.put("Fantasy", 0xFF6A3DE8);
         FARBEN.put("Mystery", 0xFF2F6E73);
         FARBEN.put("Liebesfilme", 0xFFE8508D);
-        FARBEN.put("Familie & Animation", 0xFF3E9BF0);
+        FARBEN.put("Familie & Animation", 0xFF3E9BF0);     // alter Name, bis 16.11.2026
+        FARBEN.put("Kindheit", 0xFF3E9BF0);                 // neuer Name (Lukas: keine Rubrik „Familie“, lieber Erinnerung)
         FARBEN.put("Kriegsfilme", 0xFF5E6B2B);
         FARBEN.put("Historienfilme", 0xFF9C7442);
         FARBEN.put("Western", 0xFFE9A23B);
@@ -137,6 +138,8 @@ public class FilmeActivity extends Activity {
     static final int RASTER_OBEN_KLEIN = 112, RASTER_OBEN_GROSS = 300;
     // Poster-Wand (geöffnete Kategorie oder Filmreihe, seit 16.11.2026): 9 Poster nebeneinander über die ganze Fläche
     static final int POSTER_SPALTEN = 9, POSTER_W = 172, POSTER_H = 258, POSTER_LUECKE = 25, POSTER_OBEN_GROSS = 190;
+    /** Kategorie mit gezeichneter Szene: in der ersten Zeile gehört das obere Drittel dem Bild (Wunsch Lukas 16.11.2026). */
+    static final int SZENE_OBEN_GROSS = 372;
 
     /** Baut eine Poster-Wand: Filme (und Filmreihen-Kacheln) zeilenweise, 9 nebeneinander. */
     static void posterWandFuellen(Seite s, List<JSONObject> eintraege) {
@@ -1587,7 +1590,7 @@ public class FilmeActivity extends Activity {
             setzeHintergrund(null, f != null ? f : 0xFF444444);
             return;
         }
-        final String url = hintergrundUrl(e);
+        final String url = genre != null ? Jellyfin.genreHintergrund(e.optString("Id"), Jellyfin.hintergrundTag(e)) : hintergrundUrl(e);
         if (url == null) {
             setzeHintergrund(null, 0xFF1D2027);
             return;
@@ -1717,6 +1720,7 @@ public class FilmeActivity extends Activity {
             return tag != null ? Jellyfin.hintergrund(id, tag) : null;
         }
         String pr = Jellyfin.tag(e, "Primary");
+        if (pr != null && "BoxSet".equals(t) && istGenre(e)) return Jellyfin.genreKachel(id, pr);   // gezeichnet: volle Farbtiefe
         if (pr != null) return Jellyfin.poster(id, pr, 330);
         if ("Episode".equals(t) || "Season".equals(t)) {
             String sid = e.optString("SeriesId", null), stag = e.optString("SeriesPrimaryImageTag", null);
@@ -2952,12 +2956,16 @@ public class FilmeActivity extends Activity {
             float hz = wandSzene ? 1f : 0f;
             szeneHoch = naeher(szeneHoch, hz, dt, 90);
             if (szeneHoch != hz) weiter = true;
-            float hub = szeneGenre != null ? -GenreEffekt.wandHub(szeneGenre) * Ani.EASE.getInterpolation(Math.max(0f, Math.min(1f, szeneHoch))) : 0f;
+            // großer Kopf (erste Zeile, oberes Drittel): fast das ganze Motiv; kleiner Kopf: der wichtigste Streifen
+            float kopfK = Ani.EASE.getInterpolation(Math.max(0f, Math.min(1f, seite.kopfAnim)));
+            float hub = szeneGenre != null ? -Ani.mix(GenreEffekt.wandHub(szeneGenre, false), GenreEffekt.wandHub(szeneGenre, true), kopfK)
+                    * Ani.EASE.getInterpolation(Math.max(0f, Math.min(1f, szeneHoch))) : 0f;
             hubGezeigt = hub;
             if (blend < 1f) bildMalen(c, bildAlt, farbeAlt, 1f, hubAlt);
             bildMalen(c, bildNeu, farbeNeu, blend, hub);
             if (szeneGenre != null && bildNeu != null && GenreEffekt.kennt(szeneGenre) && ansicht != Ansicht.DETAIL) {
-                GenreEffekt.malen(c, p, szeneGenre, jetztMs(), blend, hub, wandSzene ? POSTER_OBEN_GROSS + 6 : 640);
+                GenreEffekt.malen(c, p, szeneGenre, jetztMs(), blend, hub,
+                        wandSzene ? RASTER_OBEN_KLEIN + (SZENE_OBEN_GROSS - RASTER_OBEN_KLEIN) * kopfK + 6 : 640);
                 effektAn = true;
             }
 
@@ -3305,17 +3313,20 @@ public class FilmeActivity extends Activity {
         private boolean rasterZeichnen(Canvas c, float dt) {
             boolean weiter = false;
             Seite s = seite;
-            if (s.poster && szeneGenre != null && bildNeu != null) {
-                // Kategorie mit gezeichneter Szene: oben neben dem Namen bleibt das Motiv gut sichtbar, links (hinter dem
-                // Namen) und unter den Postern wird es ruhig
-                p.setShader(new LinearGradient(0, 0, 0, 300, new int[]{0x33050608, 0x59050608, 0xD9050608},
-                        new float[]{0f, 0.6f, 1f}, Shader.TileMode.CLAMP));
-                c.drawRect(0, 0, 1920, 300, p);
+            final boolean szene = s.poster && szeneGenre != null && bildNeu != null;
+            if (szene) {
+                // Kategorie mit gezeichneter Szene: oben bleibt das Motiv gut sichtbar (in der ersten Zeile das obere Drittel),
+                // links hinter dem Namen und ab den Postern wird es ruhig
+                float kv = Ani.EASE.getInterpolation(Math.max(0f, Math.min(1f, s.kopfAnim)));
+                float kante = RASTER_OBEN_KLEIN + (SZENE_OBEN_GROSS - RASTER_OBEN_KLEIN) * kv + 14;
+                p.setShader(new LinearGradient(0, 0, 0, kante, new int[]{0x26050608, 0x33050608, 0xD9050608},
+                        new float[]{0f, 0.72f, 1f}, Shader.TileMode.CLAMP));
+                c.drawRect(0, 0, 1920, kante, p);
                 p.setShader(null);
                 p.setColor(0xD9050608);
-                c.drawRect(0, 300, 1920, 1080, p);
-                p.setShader(new LinearGradient(0, 0, 1150, 0, 0xB3050608, 0x00050608, Shader.TileMode.CLAMP));
-                c.drawRect(0, 0, 1150, 300, p);
+                c.drawRect(0, kante, 1920, 1080, p);
+                p.setShader(new LinearGradient(0, 0, 1000, 0, 0xA6050608, 0x00050608, Shader.TileMode.CLAMP));
+                c.drawRect(0, 0, 1000, kante, p);
                 p.setShader(null);
             } else {
                 // ruhiger, stark abgedunkelter Hintergrund, damit die Bilder leuchten
@@ -3341,20 +3352,20 @@ public class FilmeActivity extends Activity {
             s.anim = naeher(s.anim, s.akt, dt, 70);
             if (s.anim != s.akt) weiter = true;
             float k = Ani.EASE.getInterpolation(Math.max(0f, Math.min(1f, s.kopfAnim)));
-            float obenGross = s.poster ? POSTER_OBEN_GROSS : RASTER_OBEN_GROSS;
+            float obenGross = szene ? SZENE_OBEN_GROSS : s.poster ? POSTER_OBEN_GROSS : RASTER_OBEN_GROSS;
             float oben = RASTER_OBEN_KLEIN + (obenGross - RASTER_OBEN_KLEIN) * k;
 
             // Kopf: Name, darunter Zeitraum und Anzahl (nur gross), rechts das Foto im Fokus
             String name = s.poster ? s.titel : s.kopf != null ? ordnerName(s.kopf) : s.titel;
-            float titelY = 80 + ((s.poster ? 108 : 190) - 80) * k;
-            gross.setTextSize(44 + (s.poster ? 24 : 40) * k);
+            float titelY = 80 + ((szene ? 206 : s.poster ? 108 : 190) - 80) * k;
+            gross.setTextSize(44 + (szene ? 46 : s.poster ? 24 : 40) * k);
             gross.setShadowLayer(Ani.schatten(24), 0, 3, 0x80000000);
             c.drawText(kuerzen(name, gross, s.poster ? 880 : 1180 + 520 * k), LINKS - 3, titelY, gross);
             gross.clearShadowLayer();
             gross.setTextSize(130);
             if (s.kopfInfo != null && !s.kopfInfo.isEmpty() && k > 0.02f) {
                 meta.setAlpha(Math.round(0xE6 * k));
-                c.drawText(s.kopfInfo, LINKS, titelY + (s.poster ? 48 : 62) * k, meta);
+                c.drawText(s.kopfInfo, LINKS, titelY + (szene ? 56 : s.poster ? 48 : 62) * k, meta);
                 meta.setAlpha(0xE6);
             }
             if (s.poster) {
@@ -3369,8 +3380,9 @@ public class FilmeActivity extends Activity {
                         txt = fokus.optString("Name") + (jahr > 0 ? "   ·   " + jahr : "");
                     }
                     meta.setTextAlign(Paint.Align.RIGHT);
-                    if (szeneGenre != null) meta.setShadowLayer(Ani.schatten(14), 0, 2, 0xE6000000);   // liegt über dem Motiv
-                    c.drawText(kuerzen(txt, meta, 800), 1810, 80 + 28 * k, meta);
+                    if (szene) meta.setShadowLayer(Ani.schatten(14), 0, 2, 0xE6000000);   // liegt über dem Bild
+                    // mit Szene steht der Name des ausgewählten Films unten im Kopf (direkt über den Postern), das Motiv bleibt frei
+                    c.drawText(kuerzen(txt, meta, 800), 1810, szene ? 80 + (oben - 30 - 80) * k : 80 + 28 * k, meta);
                     meta.clearShadowLayer();
                     meta.setTextAlign(Paint.Align.LEFT);
                 }
