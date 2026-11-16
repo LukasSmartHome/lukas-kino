@@ -271,8 +271,12 @@
     },
 
     weiterschauen: function () {
+      // Was dieses Profil als gesehen führt – auch selbst so markiert, um einen abgebrochenen Film loszuwerden –
+      // steht nicht mehr in Weiterschauen (Wunsch Lukas 16.11.2026). Die Stelle zum Fortsetzen bleibt bei Jellyfin erhalten.
       return this.liste('/UserItems/Resume?userId=' + this.benutzer + '&mediaTypes=Video&includeItemTypes=Movie&limit=24&fields='
-        + FELDER + '&enableImageTypes=Primary,Backdrop,Logo');
+        + FELDER + '&enableImageTypes=Primary,Backdrop,Logo').then(function (l) {
+        return l.filter(function (e) { return e && !istGesehen(e); });
+      });
     },
     neu: function () {
       return this.liste('/Items?userId=' + this.benutzer + '&includeItemTypes=Movie&recursive=true&sortBy=DateCreated'
@@ -934,7 +938,7 @@
   function empfohlenSeite() {
     const s = neueSeite('Empfohlen');
     empfohlen.gruppen.forEach(function (g) {
-      // Gesehenes bleibt drin (Haken auf dem Poster zeigt es an)
+      // Gesehenes bleibt drin (grüner Rahmen ums Poster zeigt es an)
       if (g.eintraege.length) {
         s.reihen.push(reiheAus('Mit ' + g.note + ' bewertet', g.eintraege, POSTER));
       }
@@ -1121,7 +1125,7 @@
   // ------------------------------------------------------------------ Gesehen je Profil (ab 80 %)
   // Quelle: Home Assistant (sensor.kino_gesehen, Paket kino_gesehen.yaml) über bewertungen.json → gesehen → Profil.
   // Gesehene Filme verschwinden bei diesem Profil aus Neu, den Kategorien und Alle Filme (Empfohlen behält sie) und stehen in der
-  // Kategorie „Gesehen“ ganz rechts. Weiterschauen, Merkliste und Suche zeigen weiter alles.
+  // Kategorie „Gesehen“ ganz rechts, seit 16.11.2026 auch nicht mehr in Weiterschauen. Merkliste und Suche zeigen weiter alles.
 
   const GESEHEN_GRENZE = 0.8;
   const ges = { ids: [], menge: {}, lokal: {}, sig: '' };
@@ -1222,6 +1226,8 @@
       r.fokus = 0;
       r.version++;
     });
+    // ein angefangener Film gehört dann auch wieder nach Weiterschauen
+    jf.weiterschauen().then(function (w) { liveEinsetzen(w); }, function () { /* bleibt, wie es ist */ });
     jf.neu().then(function (neu) {
       s.reihen.forEach(function (r) {
         if (r.titel !== 'Neu' || r.quelle) return;
@@ -1361,13 +1367,15 @@
     const alle = Object.keys(startseiten).map(function (k) { return startseiten[k]; }).concat(stapel);
     if (alle.indexOf(seite) < 0) alle.push(seite);
     alle.forEach(function (s) {
-      if (s.poster) s.wandVersion = (s.wandVersion || 0) + 1;   // Haken auf den Postern nachziehen
+      if (s.poster) s.wandVersion = (s.wandVersion || 0) + 1;   // grüne Rahmen auf den Postern nachziehen
       if (s.ohneFilter || s.raster) return;
       for (let i = s.reihen.length - 1; i >= 0; i--) {
         const r = s.reihen[i];
-        if (r.titel === 'Weiterschauen' || r.titel === 'Merkliste') continue;
+        if (r.titel === 'Merkliste') continue;
+        // Weiterschauen: Gesehenes fliegt auch hier raus (seit 16.11.2026), die Live-Kacheln vorne bleiben
+        const wr = r.titel === 'Weiterschauen';
         const vorher = r.eintraege.length;
-        r.eintraege = r.eintraege.filter(function (e) { return !istGesehen(e); });
+        r.eintraege = r.eintraege.filter(function (e) { return !istGesehen(e) || (wr && e && e._live); });
         if (r.eintraege.length === vorher) continue;
         r.version++;
         r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.length - 1));
@@ -2007,6 +2015,7 @@
     b.innerHTML = ''
       + '<div class="ebene" id="bgs"><div class="bg"></div><div class="bg"></div></div>'
       + '<div class="ebene" id="verlauf"></div>'
+      + '<div class="ebene" id="fx"></div>'
       + '<div class="ebene" id="liste"><div id="reihen"></div><div id="info"></div></div>'
       + '<div class="ebene aus" id="wand"><div class="w-kopf"><div class="w-name"></div><div class="w-info"></div>'
       + '  <div class="w-rechts"></div></div><div class="w-fenster"><div class="w-gitter"></div><div class="w-leer"></div></div></div>'
@@ -2047,6 +2056,7 @@
     el.bg = Array.prototype.slice.call(b.querySelectorAll('.bg'));
     el.bgs = q('#bgs');
     el.verlauf = q('#verlauf');
+    el.fx = q('#fx');
     el.liste = q('#liste');
     el.reihen = q('#reihen');
     el.info = q('#info');
@@ -2516,14 +2526,87 @@
       if (wand) hintergrundSetzen(null, '#1B1E25');
       return;
     }
-    const reiheMitBild = istFilmreihe(e) && !!hintergrundTag(e);   // Filmreihe: ihr eigenes Bild
-    if ((typ(e) === 'BoxSet' && !reiheMitBild) || typ(e) === 'Gesehen' || typ(e) === 'Sammlungen') {
+    // Sammlung mit eigenem Bild: Filmreihe (Bild von Jellyfin) oder Kategorie mit gezeichneter Szene (seit 16.11.2026)
+    const sammlungMitBild = typ(e) === 'BoxSet' && !!hintergrundTag(e);
+    const genre = sammlungMitBild && !istFilmreihe(e) ? e.Name : null;
+    if ((typ(e) === 'BoxSet' && !sammlungMitBild) || typ(e) === 'Gesehen' || typ(e) === 'Sammlungen') {
       hintergrundSetzen(null, typ(e) === 'Gesehen' ? '#3E4A5E' : typ(e) === 'Sammlungen' ? '#3A3380' : FARBEN[e.Name] || '#444444');
       return;
     }
     const url = hintergrundUrl(e);
     if (!url) hintergrundSetzen(null, '#1D2027');
-    else hintergrundSetzen(url, null);
+    else hintergrundSetzen(url, null, genre);
+  }
+
+  // ------------------------------------------------------------------ Genre-Szenen: ein bisschen Leben (16.11.2026)
+  // Über dem gezeichneten Hintergrund einer Kategorie bewegt sich etwas Passendes (Funken bei Action, Herzen bei
+  // Liebesfilmen …). Bewusst sparsam: wenige kleine Teile, reine CSS-Bewegung (nur transform und opacity, das macht
+  // die Grafikkarte), im leichten Modus (Jonas) gar nichts. In der geöffneten Kategorie rutscht das Bild nach oben
+  // (hub = so viele Pixel), damit der wichtigste Teil des Motivs im schmalen Streifen über den Postern steht.
+  const FX = {
+    'Action':              { hub: 170, art: 'action',  n: 14, feld: [1350, 300, 520, 120], dx: [-60, 60],  dy: [-420, -280], t: [3, 6.5] },
+    'Komödien':            { hub: 150, art: 'konfetti', n: 16, feld: [1000, -30, 900, 10], dx: [-40, 40],  dy: [540, 580],   t: [5, 9], dreh: 720 },
+    'Horror':              { hub: 150, art: 'fleder',  n: 5,  feld: [1960, 60, 10, 260],  dx: [-1200, -1100], dy: [-40, 40], t: [9, 16] },
+    'Thriller':            { hub: 120, art: 'regen',   n: 26, feld: [980, -60, 990, 10],  dx: [-46, -46],  dy: [600, 600],   t: [0.8, 1.5] },
+    'Science-Fiction':     { hub: 140, art: 'sterne',  n: 20, feld: [900, 0, 1010, 300],  t: [1.6, 4], funkeln: true },
+    'Krimi':               { hub: 165, art: 'staub',   n: 12, feld: [1300, 190, 300, 290], dx: [-20, 20],  dy: [-46, -20],   t: [7, 13] },
+    'Drama':               { hub: 260, art: 'staub',   n: 12, feld: [1450, 0, 210, 470],  dx: [-16, 16],   dy: [20, 46],     t: [7, 13] },
+    'Abenteuer':           { hub: 220, art: 'blatt',   n: 11, feld: [1000, -30, 900, 10], dx: [-70, 70],   dy: [540, 580],   t: [7, 12], dreh: 300 },
+    'Fantasy':             { hub: 60, art: 'funken',  n: 14, feld: [980, 10, 920, 400],  t: [2.2, 4.5], funkeln: true },
+    'Mystery':             { hub: 250, art: 'irrlicht', n: 11, feld: [1000, 380, 900, 90], dx: [-40, 40],  dy: [-360, -200], t: [8, 14] },
+    'Liebesfilme':         { hub: 225, art: 'herz',    n: 10, feld: [1040, 440, 840, 40], dx: [-40, 40],   dy: [-520, -420], t: [7, 12] },
+    'Familie & Animation': { hub: 200, art: 'ballon',  n: 7,  feld: [1030, 500, 860, 20], dx: [-50, 50],   dy: [-620, -560], t: [10, 17] },
+    'Kriegsfilme':         { hub: 290, art: 'asche',   n: 16, feld: [1500, 0, 440, 470],  dx: [-700, -300], dy: [-70, -30],  t: [6, 11] },
+    'Historienfilme':      { hub: 230, art: 'gold',    n: 16, feld: [1500, 0, 440, 470],  dx: [-700, -300], dy: [30, 70],    t: [6, 11] },
+    'Western':             { hub: 250, art: 'sand',    n: 14, feld: [940, 290, 300, 190], dx: [700, 1000], dy: [-10, 10],    t: [2.4, 5] }
+  };
+  FX['Familie und Animation'] = FX['Familie & Animation'];
+  let bgGenre = null, fxGenre = null;
+
+  /** Fester Zufallswert 0..1 (immer gleich für dasselbe Teilchen – kein Springen beim Neuaufbau). */
+  function fxZufall(i, k) {
+    const x = Math.sin(i * 127.1 + k * 311.7 + 17) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function fxSetzen(genre) {
+    const f = !LEICHT && genre ? FX[genre] : null;
+    const name = f ? genre : null;
+    if (name === fxGenre) return;
+    fxGenre = name;
+    el.fx.className = 'ebene' + (f ? ' fx-' + f.art : '');
+    if (!f) {
+      el.fx.innerHTML = '';
+      return;
+    }
+    let h = '';
+    for (let i = 0; i < f.n; i++) {
+      const x = f.feld[0] + fxZufall(i, 1) * f.feld[2], y = f.feld[1] + fxZufall(i, 2) * f.feld[3];
+      const dauer = f.t[0] + fxZufall(i, 3) * (f.t[1] - f.t[0]);
+      let st = 'left:' + Math.round(x) + 'px;top:' + Math.round(y) + 'px;animation-duration:' + dauer.toFixed(2)
+        + 's;animation-delay:-' + (fxZufall(i, 4) * dauer).toFixed(2) + 's';
+      if (!f.funkeln) {
+        st += ';--dx:' + Math.round(f.dx[0] + fxZufall(i, 6) * (f.dx[1] - f.dx[0])) + 'px;--dy:'
+          + Math.round(f.dy[0] + fxZufall(i, 7) * (f.dy[1] - f.dy[0])) + 'px';
+        if (f.dreh) st += ';--r:' + Math.round((fxZufall(i, 8) > 0.5 ? 1 : -1) * f.dreh) + 'deg';
+      }
+      h += '<i class="' + (f.funkeln ? 'fk' : 'zg') + ' n' + (i % 6) + '" style="' + st + '"></i>';
+    }
+    if (f.art === 'sterne') h += '<b class="schnuppe"></b>';
+    if (f.art === 'sand') h += '<b class="laeufer"></b>';
+    el.fx.innerHTML = h;
+  }
+
+  /** Klassen für Genre-Szene und Wand setzen (Bild rutscht in der geöffneten Kategorie nach oben). */
+  function szeneAnwenden() {
+    if (!el.fx) return;
+    const liste = ansicht === A.LISTE;
+    const wand = liste && seite.raster && seite.poster && !!bgGenre;
+    const hub = wand ? 'translateY(-' + ((FX[bgGenre] && FX[bgGenre].hub) || 220) + 'px)' : '';
+    el.bgs.style.transform = hub;
+    el.wand.classList.toggle('szene', wand);
+    fxSetzen(liste && bgGenre ? bgGenre : null);
+    el.fx.style.transform = hub;
   }
 
   function hintergrundUrl(e) {
@@ -2649,12 +2732,14 @@
 
   let bgOben = 0, bgSchluessel = null, bgAufraeumen = 0;
 
-  function hintergrundSetzen(url, farbe) {
+  function hintergrundSetzen(url, farbe, genre) {
     const key = url || farbe;
     if (key === bgSchluessel) return;
     bgSchluessel = key;
     const zeigen = function () {
       if (bgSchluessel !== key) return;
+      bgGenre = genre || null;     // gezeichnete Szene einer Kategorie? Dann bewegt sich etwas darin
+      szeneAnwenden();
       const neu = el.bg[1 - bgOben], alt = el.bg[bgOben];
       sofort(neu);
       neu.classList.remove('an');
@@ -2754,6 +2839,7 @@
     el.trailer.classList.toggle('aus', !T.offen);
     el.bgs.classList.toggle('aus', !(liste || suche));
     el.verlauf.classList.toggle('aus', !(liste || suche));
+    szeneAnwenden();
     const wand = liste && seite.raster && ansicht === A.LISTE;
     el.liste.classList.toggle('aus', !liste || wand);
     el.wand.classList.toggle('aus', !wand);
@@ -2963,11 +3049,11 @@
       b.firstChild.style.width = (f * 100) + '%';
       c.appendChild(b);
     }
-    if ((t === 'Movie' ? istGesehen(e) : gesehen(e)) && !ordner) {
-      const h = div('k-haken');
-      h.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="' + GELB + '" stroke-width="3.2" stroke-linecap="round" '
-        + 'stroke-linejoin="round"><path d="M4 10l4.5 5L16 5"/></svg>';
-      c.appendChild(h);
+    // Schon gesehen: grüner Rahmen ums ganze Poster statt des kleinen Hakens oben rechts (Wunsch Lukas 16.11.2026) –
+    // sieht man auf einen Blick, auch ohne Fokus. Nicht auf der Seite „Gesehen“ (dort ist ohnehin alles gesehen).
+    if ((t === 'Movie' ? istGesehen(e) : gesehen(e)) && !ordner && t !== 'BoxSet' && seite.titel !== 'Gesehen') {
+      c.classList.add('gesehen');
+      c.appendChild(div('k-gruen'));
     }
     return c;
   }

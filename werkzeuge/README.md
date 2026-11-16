@@ -121,3 +121,18 @@ Läuft im File editor auf dem Pi (Kopie in `/config/kino_werkzeuge/`, Jellyfin-S
 - `auto` – beides nacheinander, höchstens 60 neue Filme je Lauf (für einen späteren Sensor alle 6 Stunden).
 - Nach dem Filme4-Umzug: `trailer`, dann `kategorien` ansehen und `kategorien --los`; neue Filme mit falschen Genres in
   `kategorien.json` eintragen.
+
+## genre_kunst/ – gezeichnete Bilder für die Kategorien (16.11.2026)
+
+Statt einfarbiger Kacheln mit „SAMMLUNG“ und Strich hat jede der 15 Kategorien ein gezeichnetes Motiv, alle im selben
+Stil (flache Scherenschnitt-Plakate in der Farbe der Kategorie, Name unten).
+
+- `genre_kunst.py` zeichnet je Kategorie eine Kachel (1000 x 1500, mit Name) und einen Hintergrund (1920 x 1080, Motiv
+  oben rechts, ohne Schrift). Braucht `rsvg-convert` und Pillow. Aufruf: `python3 genre_kunst.py zielordner`.
+- `genre_bilder.tar` = die fertigen Bilder (Ordner `kachel/` und `breit/`).
+- `genre_bilder_hochladen.py` setzt sie in Jellyfin als Bild (Primary) und Hintergrund (Backdrop) der Sammlungen.
+  Ohne `--los` nur Vorschau; die alten Kachel-Bilder werden vorher gesichert, `--zurueck` holt sie wieder.
+
+Die TCL-App (`GenreEffekt.java`) und die LG-Oberfläche (`FX` in `app.js`) lassen über dem Hintergrund etwas Passendes
+laufen (Funken, Konfetti, Fledermäuse, Regen, Herzen …). Wer das Motiv verschiebt, muss dort die Lage nachziehen
+(Motiv im Bild: x = 1160 + 0,75 * Kern-x, y = -120 + 0,75 * Kern-y).

@@ -15,7 +15,8 @@ import java.util.Set;
  * Was dieses Profil schon gesehen hat (ab 80 % der Laufzeit), getrennt nach Profil: TCL = Lukas, LG = Eltern bzw. Jonas.
  * Quelle: Home Assistant (sensor.kino_gesehen, Paket kino_gesehen.yaml) über bewertungen.json → gesehen → Profil.
  * Gesehene Filme verschwinden aus Neu, den Kategorien und Alle Filme (Empfohlen behält sie) und stehen in der Kategorie
- * „Gesehen“ ganz rechts. Weiterschauen, Merkliste und Suche zeigen weiter alles.
+ * „Gesehen“ ganz rechts. Seit 16.11.2026 auch aus Weiterschauen (Wunsch Lukas: einen abgebrochenen Film als gesehen
+ * markieren = er verschwindet überall). Merkliste und Suche zeigen weiter alles.
  */
 final class Gesehen {
 

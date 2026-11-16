@@ -59,6 +59,7 @@ public class FilmeActivity extends Activity {
     static final int QW = 352, QH = 198;          // Querformat 16:9 (Folgen, Fotos, Alben)
     static final int ABSTAND = 26, LINKS = 110, REIHE_Y = 668;
     static final int GELB = 0xFFF2B705;
+    static final int GRUEN = 0xFF3DDC68;          // Rahmen um schon gesehene Filme (statt Haken, Wunsch Lukas 16.11.2026)
     static final int POSTER = 0, QUER = 1;
 
     /** Farben der Kategorien (wie die Sammlungsbilder in Plex und Jellyfin). */
@@ -601,7 +602,7 @@ public class FilmeActivity extends Activity {
     private Seite empfohlenSeite() {
         Seite s = new Seite("Empfohlen");
         for (Empfohlen.Gruppe g : Empfohlen.gruppen()) {
-            // Gesehenes bleibt drin (Haken auf dem Poster zeigt es an)
+            // Gesehenes bleibt drin (grüner Rahmen ums Poster zeigt es an)
             List<JSONObject> l = new ArrayList<>(g.eintraege);
             if (!l.isEmpty()) s.reihen.add(reiheAus("Mit " + g.note + " bewertet", l, POSTER));
         }
@@ -890,8 +891,10 @@ public class FilmeActivity extends Activity {
             if (s.ohneFilter || s.raster) continue;
             for (int i = s.reihen.size() - 1; i >= 0; i--) {
                 Reihe r = s.reihen.get(i);
-                if ("Weiterschauen".equals(r.titel) || "Merkliste".equals(r.titel)) continue;
-                if (!r.eintraege.removeIf(Gesehen::hat)) continue;
+                if ("Merkliste".equals(r.titel)) continue;
+                // Weiterschauen: Gesehenes fliegt auch hier raus (seit 16.11.2026), die Live-Kacheln vorne bleiben
+                final boolean wr = "Weiterschauen".equals(r.titel);
+                if (!r.eintraege.removeIf(o -> Gesehen.hat(o) && !(wr && o.has("_live")))) continue;
                 r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.size() - 1));
                 if (r.eintraege.isEmpty() && r.geladen && s.reihen.size() > 1) {
                     s.reihen.remove(i);
@@ -927,7 +930,18 @@ public class FilmeActivity extends Activity {
         netz.execute(() -> {
             try {
                 final JSONArray neu = jf.neu();
+                // ein angefangener Film gehört dann auch wieder nach Weiterschauen
+                List<JSONObject> wl = null;
+                try {
+                    JSONArray wa = jf.weiterschauen();
+                    wl = new ArrayList<>();
+                    for (int k = 0; k < wa.length(); k++) if (wa.optJSONObject(k) != null) wl.add(wa.optJSONObject(k));
+                } catch (Exception ignored) {
+                    // dann bleibt Weiterschauen, wie es ist
+                }
+                final List<JSONObject> weiterNeu = wl;
                 h.post(() -> {
+                    if (weiterNeu != null) liveEinsetzen(weiterNeu);
                     for (Reihe r : start.reihen) {
                         if (r.quelle != null || !"Neu".equals(r.titel)) continue;
                         r.eintraege.clear();
@@ -1548,6 +1562,9 @@ public class FilmeActivity extends Activity {
     // Hintergrund: aktuelles und vorheriges Bild fuer die Ueberblendung, dazu eine verwischte Kopie fuers Glas
     private Bitmap bildAlt, bildNeu, logo, unscharf;
     private int farbeAlt, farbeNeu;
+    /** Zeigt der Hintergrund gerade die gezeichnete Szene einer Kategorie (Horror, Western …)? Dann ihr Name, sonst null. */
+    private String szeneGenre;
+    private float hubGezeigt, hubAlt;   // senkrechter Versatz des aktuellen bzw. des vorherigen Bildes (für die Überblendung)
     private long ueberblendStart;
     private String bildUrl, logoUrl;
     private final Map<String, String> titelbilder = new HashMap<>(); // Ordner-Id -> Bild-URL
@@ -1562,8 +1579,10 @@ public class FilmeActivity extends Activity {
             return;
         }
         String t = typ(e);
-        boolean reiheMitBild = istFilmreihe(e) && Jellyfin.hintergrundTag(e) != null;   // Filmreihe: ihr eigenes Bild
-        if (("BoxSet".equals(t) && !reiheMitBild) || "Gesehen".equals(t) || "Qualitaet".equals(t) || "Sammlungen".equals(t)) {
+        // Sammlung mit eigenem Bild: Filmreihe (Bild von Jellyfin) oder Kategorie mit gezeichneter Szene (seit 16.11.2026)
+        boolean sammlungMitBild = "BoxSet".equals(t) && Jellyfin.hintergrundTag(e) != null;
+        final String genre = sammlungMitBild && !istFilmreihe(e) ? e.optString("Name") : null;
+        if (("BoxSet".equals(t) && !sammlungMitBild) || "Gesehen".equals(t) || "Qualitaet".equals(t) || "Sammlungen".equals(t)) {
             Integer f = FARBEN.get(e.optString("Name"));
             setzeHintergrund(null, f != null ? f : 0xFF444444);
             return;
@@ -1575,7 +1594,7 @@ public class FilmeActivity extends Activity {
         }
         bildUrl = url;
         bilder.laden(url, (u, bm) -> {
-            if (u.equals(bildUrl) && bm != null) setzeHintergrund(bm, 0);
+            if (u.equals(bildUrl) && bm != null) setzeHintergrund(bm, 0, genre);
         });
     };
 
@@ -1620,7 +1639,17 @@ public class FilmeActivity extends Activity {
     }
 
     private void setzeHintergrund(Bitmap b, int farbe) {
-        if (b == bildNeu && farbe == farbeNeu) return;
+        setzeHintergrund(b, farbe, null);
+    }
+
+    /** genre = Name der Kategorie, wenn b ihre gezeichnete Szene ist (dann bewegt sich etwas darin), sonst null. */
+    private void setzeHintergrund(Bitmap b, int farbe, String genre) {
+        if (b == bildNeu && farbe == farbeNeu) {
+            szeneGenre = genre;
+            return;
+        }
+        szeneGenre = genre;
+        hubAlt = hubGezeigt;
         bildAlt = bildNeu;
         farbeAlt = farbeNeu;
         bildNeu = b;
@@ -2540,6 +2569,8 @@ public class FilmeActivity extends Activity {
         private long letzt = SystemClock.uptimeMillis();
         private final Map<Reihe, Float> scrolls = new HashMap<>();
         private float fokusZoom = 1f, detailAnim, leisteAnim, leisteFokusY = -1, sucheScroll, bewAnim;
+        private float szeneHoch;          // 0..1: in der Poster-Wand einer Kategorie rutscht die Szene nach oben (Motiv neben den Namen)
+        private boolean effektAn;         // die Genre-Szene bewegt sich: ruhig weiterzeichnen (ca. 25 Bilder pro Sekunde)
         private JSONObject letzterFokus;
         private final Path[] symbole = new Path[LEISTE.length];
         private final Bitmap[] appSymbole = new Bitmap[APPS]; // echte App-Symbole (Spotify, Prime, Netflix, YouTube)
@@ -2674,6 +2705,7 @@ public class FilmeActivity extends Activity {
             float dt = Math.min(64, jetzt - letzt);
             letzt = jetzt;
             boolean weiter = false;
+            effektAn = false;
 
             float s = getWidth() / 1920f;
             c.save();
@@ -2727,6 +2759,7 @@ public class FilmeActivity extends Activity {
             }
             c.restore();
             if (weiter) postInvalidateOnAnimation();
+            else if (effektAn) postInvalidateDelayed(40);
         }
 
         private void hintergrundLeer(Canvas c, int farbe) {
@@ -2914,8 +2947,19 @@ public class FilmeActivity extends Activity {
             float blend = Math.min(1f, (SystemClock.uptimeMillis() - ueberblendStart) / 450f);
             blend = Ani.EASE.getInterpolation(blend);
             if (blend < 1f) weiter = true;
-            if (blend < 1f) bildMalen(c, bildAlt, farbeAlt, 1f);
-            bildMalen(c, bildNeu, farbeNeu, blend);
+            // Genre-Szene: in der Poster-Wand der Kategorie rutscht das Bild nach oben, damit das Motiv neben dem Namen steht
+            boolean wandSzene = szeneGenre != null && seite.raster && seite.poster && ansicht == Ansicht.LISTE;
+            float hz = wandSzene ? 1f : 0f;
+            szeneHoch = naeher(szeneHoch, hz, dt, 90);
+            if (szeneHoch != hz) weiter = true;
+            float hub = szeneGenre != null ? -GenreEffekt.wandHub(szeneGenre) * Ani.EASE.getInterpolation(Math.max(0f, Math.min(1f, szeneHoch))) : 0f;
+            hubGezeigt = hub;
+            if (blend < 1f) bildMalen(c, bildAlt, farbeAlt, 1f, hubAlt);
+            bildMalen(c, bildNeu, farbeNeu, blend, hub);
+            if (szeneGenre != null && bildNeu != null && GenreEffekt.kennt(szeneGenre) && ansicht != Ansicht.DETAIL) {
+                GenreEffekt.malen(c, p, szeneGenre, jetztMs(), blend, hub, wandSzene ? POSTER_OBEN_GROSS + 6 : 640);
+                effektAn = true;
+            }
 
             boolean detail = ansicht == Ansicht.DETAIL;
             if (seite.raster && ansicht == Ansicht.LISTE) return rasterZeichnen(c, dt) | weiter;
@@ -2994,14 +3038,24 @@ public class FilmeActivity extends Activity {
             return v;
         }
 
-        private void bildMalen(Canvas c, Bitmap b, int farbe, float alpha) {
+        private long jetztMs() {
+            return SystemClock.uptimeMillis();
+        }
+
+        /** dy = senkrechter Versatz des Bildes (Genre-Szene in der Poster-Wand: nach oben), darunter wird es dunkel. */
+        private void bildMalen(Canvas c, Bitmap b, int farbe, float alpha, float dy) {
             int al = Math.round(255 * alpha);
             if (b != null) {
                 float sk = Math.max(1920f / b.getWidth(), 1080f / b.getHeight());
                 m.setScale(sk, sk);
-                m.postTranslate((1920 - b.getWidth() * sk) / 2f, (1080 - b.getHeight() * sk) / 2f);
+                m.postTranslate((1920 - b.getWidth() * sk) / 2f, (1080 - b.getHeight() * sk) / 2f + dy);
                 p.setAlpha(al);
                 c.drawBitmap(b, m, p);
+                if (dy < -0.5f) {
+                    p.setColor(0xFF050608);
+                    p.setAlpha(al);
+                    c.drawRect(0, 1080 + dy - 1, 1920, 1080, p);
+                }
                 p.setAlpha(255);
             } else if (farbe != 0) {
                 int dunkel = mischen(farbe, 0xFF050608, 0.55f);
@@ -3251,12 +3305,26 @@ public class FilmeActivity extends Activity {
         private boolean rasterZeichnen(Canvas c, float dt) {
             boolean weiter = false;
             Seite s = seite;
-            // ruhiger, stark abgedunkelter Hintergrund, damit die Bilder leuchten
-            p.setColor(0xC7050608);
-            c.drawRect(0, 0, 1920, 1080, p);
-            p.setShader(new LinearGradient(0, 0, 0, 360, 0x73000000, 0x00000000, Shader.TileMode.CLAMP));
-            c.drawRect(0, 0, 1920, 360, p);
-            p.setShader(null);
+            if (s.poster && szeneGenre != null && bildNeu != null) {
+                // Kategorie mit gezeichneter Szene: oben neben dem Namen bleibt das Motiv gut sichtbar, links (hinter dem
+                // Namen) und unter den Postern wird es ruhig
+                p.setShader(new LinearGradient(0, 0, 0, 300, new int[]{0x33050608, 0x59050608, 0xD9050608},
+                        new float[]{0f, 0.6f, 1f}, Shader.TileMode.CLAMP));
+                c.drawRect(0, 0, 1920, 300, p);
+                p.setShader(null);
+                p.setColor(0xD9050608);
+                c.drawRect(0, 300, 1920, 1080, p);
+                p.setShader(new LinearGradient(0, 0, 1150, 0, 0xB3050608, 0x00050608, Shader.TileMode.CLAMP));
+                c.drawRect(0, 0, 1150, 300, p);
+                p.setShader(null);
+            } else {
+                // ruhiger, stark abgedunkelter Hintergrund, damit die Bilder leuchten
+                p.setColor(0xC7050608);
+                c.drawRect(0, 0, 1920, 1080, p);
+                p.setShader(new LinearGradient(0, 0, 0, 360, 0x73000000, 0x00000000, Shader.TileMode.CLAMP));
+                c.drawRect(0, 0, 1920, 360, p);
+                p.setShader(null);
+            }
 
             JSONObject fokus = fokusEintrag();
             if (fokus != letzterFokus) {
@@ -3301,7 +3369,9 @@ public class FilmeActivity extends Activity {
                         txt = fokus.optString("Name") + (jahr > 0 ? "   ·   " + jahr : "");
                     }
                     meta.setTextAlign(Paint.Align.RIGHT);
+                    if (szeneGenre != null) meta.setShadowLayer(Ani.schatten(14), 0, 2, 0xE6000000);   // liegt über dem Motiv
                     c.drawText(kuerzen(txt, meta, 800), 1810, 80 + 28 * k, meta);
+                    meta.clearShadowLayer();
                     meta.setTextAlign(Paint.Align.LEFT);
                 }
             } else if (fokus != null && !fokus.optBoolean("IsFolder", false)) {
@@ -3382,14 +3452,16 @@ public class FilmeActivity extends Activity {
             c.scale(f, f);
             karteZeichnen(c, e, POSTER, 0, 0, zoom, al, fokus);
             if (fokus) {
-                // weißer Rahmen: bei so vielen Postern sieht man sofort, wo man gerade ist
+                // weißer Rahmen: bei so vielen Postern sieht man sofort, wo man gerade ist.
+                // Um einen gesehenen Film liegt er außen um den grünen Rahmen, damit man beides sieht.
                 float w = PW * zoom, hh = PH * zoom;
-                r.set(PW / 2f - w / 2 + 2.5f, PH / 2f - hh / 2 + 2.5f, PW / 2f + w / 2 - 2.5f, PH / 2f + hh / 2 - 2.5f);
+                float ein = gesehenRahmen(e) ? -3.5f : 2.5f;
+                r.set(PW / 2f - w / 2 + ein, PH / 2f - hh / 2 + ein, PW / 2f + w / 2 - ein, PH / 2f + hh / 2 - ein);
                 p.setShader(null);
                 p.setStyle(Paint.Style.STROKE);
                 p.setStrokeWidth(5f);
                 p.setColor(0xF2FFFFFF);
-                c.drawRoundRect(r, 18 * zoom - 2.5f, 18 * zoom - 2.5f, p);
+                c.drawRoundRect(r, 18 * zoom - ein, 18 * zoom - ein, p);
                 p.setStyle(Paint.Style.FILL);
             }
             c.restore();
@@ -3467,6 +3539,14 @@ public class FilmeActivity extends Activity {
                 p.setStyle(Paint.Style.FILL);
             }
             p.setAlpha(255);
+        }
+
+        /** Bekommt die Karte den grünen „schon gesehen“-Rahmen? Nicht auf der Seite „Gesehen“ – dort ist ohnehin alles gesehen. */
+        private boolean gesehenRahmen(JSONObject e) {
+            if (e == null || "Gesehen".equals(seite.titel)) return false;
+            String t = typ(e);
+            if ("BoxSet".equals(t) || "Gesehen".equals(t) || "Qualitaet".equals(t) || "Sammlungen".equals(t)) return false;
+            return "Movie".equals(t) ? Gesehen.hat(e) : Jellyfin.gesehen(e);
         }
 
         private void karteZeichnen(Canvas c, JSONObject e, int form, float x, float y, float zoom, int al, boolean fokus) {
@@ -3576,19 +3656,17 @@ public class FilmeActivity extends Activity {
                 p.setAlpha(al);
                 c.drawRoundRect(bar, 3 * zoom, 3 * zoom, p);
             }
-            boolean gesehenHaken = "Movie".equals(t) ? Gesehen.hat(e) : Jellyfin.gesehen(e);
-            if (gesehenHaken && !ordner) {
-                float cx2 = r.right - 26 * zoom, cy2 = r.top + 26 * zoom;
-                p.setColor(0xD9000000);
-                p.setAlpha(Math.round(0xD9 * al / 255f));
-                c.drawCircle(cx2, cy2, 15 * zoom, p);
-                p.setColor(GELB);
-                p.setAlpha(al);
+            if (!ordner && gesehenRahmen(e)) {
+                // Schon gesehen: grüner Rahmen ums ganze Poster statt des kleinen Hakens oben rechts (Wunsch Lukas 16.11.2026) –
+                // sieht man auf einen Blick, auch ohne dass das Poster ausgewählt ist
+                float ein = 2.5f * zoom;
+                RectF gr = new RectF(r.left + ein, r.top + ein, r.right - ein, r.bottom - ein);
+                p.setShader(null);
                 p.setStyle(Paint.Style.STROKE);
-                p.setStrokeWidth(3.2f * zoom);
-                p.setStrokeCap(Paint.Cap.ROUND);
-                c.drawLine(cx2 - 6 * zoom, cy2, cx2 - 1.5f * zoom, cy2 + 5 * zoom, p);
-                c.drawLine(cx2 - 1.5f * zoom, cy2 + 5 * zoom, cx2 + 7 * zoom, cy2 - 5 * zoom, p);
+                p.setStrokeWidth(5f * zoom);
+                p.setColor(GRUEN);
+                p.setAlpha(al);
+                c.drawRoundRect(gr, rad - ein, rad - ein, p);
                 p.setStyle(Paint.Style.FILL);
             }
             p.setAlpha(255);

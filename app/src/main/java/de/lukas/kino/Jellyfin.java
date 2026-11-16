@@ -94,8 +94,16 @@ final class Jellyfin {
     // ---------------------------------------------------------------- Listen
 
     JSONArray weiterschauen() throws Exception {
-        return liste("/UserItems/Resume?userId=" + benutzer + "&mediaTypes=Video&includeItemTypes=Movie&limit=24&fields=" + FELDER
+        JSONArray a = liste("/UserItems/Resume?userId=" + benutzer + "&mediaTypes=Video&includeItemTypes=Movie&limit=24&fields=" + FELDER
                 + "&enableImageTypes=Primary,Backdrop,Logo");
+        // Was dieses Profil als gesehen führt – auch selbst so markiert, um einen abgebrochenen Film loszuwerden –
+        // steht nicht mehr in Weiterschauen (Wunsch Lukas 16.11.2026). Die Stelle zum Fortsetzen bleibt bei Jellyfin erhalten.
+        JSONArray b = new JSONArray();
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject o = a.optJSONObject(i);
+            if (o != null && !Gesehen.hat(o)) b.put(o);
+        }
+        return b;
     }
 
     JSONArray neu() throws Exception {
