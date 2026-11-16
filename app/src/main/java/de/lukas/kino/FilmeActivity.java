@@ -82,6 +82,7 @@ public class FilmeActivity extends Activity {
         FARBEN.put("Western", 0xFFE9A23B);
         FARBEN.put("Gesehen", 0xFF3E4A5E);
         FARBEN.put("Schlechte Qualität", 0xFF5C4630);
+        FARBEN.put("Sammlungen", 0xFF3A3380);
     }
 
     // ------------------------------------------------------------------ Daten
@@ -116,6 +117,7 @@ public class FilmeActivity extends Activity {
 
         // Raster (Fotos wie in Plex): jede Reihe ist eine Zeile der Wand, fokus = Spalte
         boolean raster;
+        boolean poster;           // Wand aus Film-Postern (Kategorie, Filmreihe, Sammlungen, Gesehen) statt Fotos
         int spalten, kw, kh, luecke;
         float kopfAnim = 1f;      // 1 = grosser Kopf (erste Zeile), 0 = kleine Zeile ganz oben
         String kopfInfo = "";     // Zeile unter dem Namen (Zeitraum, Anzahl)
@@ -132,6 +134,27 @@ public class FilmeActivity extends Activity {
     // Live-Kacheln ganz links in Weiterschauen: breiter, mit Abstand zu den normalen Postern
     static final int LIVE_W = 470, LIVE_LUECKE = 64;
     static final int RASTER_OBEN_KLEIN = 112, RASTER_OBEN_GROSS = 300;
+    // Poster-Wand (geöffnete Kategorie oder Filmreihe, seit 16.11.2026): 9 Poster nebeneinander über die ganze Fläche
+    static final int POSTER_SPALTEN = 9, POSTER_W = 172, POSTER_H = 258, POSTER_LUECKE = 25, POSTER_OBEN_GROSS = 190;
+
+    /** Baut eine Poster-Wand: Filme (und Filmreihen-Kacheln) zeilenweise, 9 nebeneinander. */
+    static void posterWandFuellen(Seite s, List<JSONObject> eintraege) {
+        s.raster = true;
+        s.poster = true;
+        s.spalten = POSTER_SPALTEN;
+        s.kw = POSTER_W;
+        s.kh = POSTER_H;
+        s.luecke = POSTER_LUECKE;
+        s.reihen.clear();
+        for (int i = 0; i < eintraege.size(); i += s.spalten) {
+            Reihe r = new Reihe("", null, POSTER);
+            r.eintraege.addAll(eintraege.subList(i, Math.min(eintraege.size(), i + s.spalten)));
+            r.geladen = true;
+            s.reihen.add(r);
+        }
+        s.akt = 0;
+        s.anim = 0;
+    }
 
     /** Baut eine Raster-Seite: erst die Ordner, dann Fotos und Videos, zeilenweise. */
     static void rasterFuellen(Seite s, List<JSONObject> eintraege) {
@@ -206,6 +229,11 @@ public class FilmeActivity extends Activity {
     private final Map<Bereich, Seite> startseiten = new EnumMap<>(Bereich.class);
     private final Deque<Seite> stapel = new ArrayDeque<>();
     private Seite seite = new Seite("");
+    // Filmreihen (Star Wars, Eberhofer …): Jellyfin-Sammlungen, die keine Genre-Kategorie sind (seit 16.11.2026)
+    private volatile List<JSONObject> filmreihen = new ArrayList<>();
+    private volatile boolean filmreihenBekannt;
+    private volatile Map<String, JSONObject> reiheVonFilm;   // Film-Id → Filmreihe
+    private volatile long reiheVonFilmZeit;
     private String filmeId, serienId, fotosId;
 
     private String qcCode, qcSecret, fehlerText;
@@ -459,15 +487,24 @@ public class FilmeActivity extends Activity {
         if (!gemerkt.isEmpty()) s.reihen.add(reiheAus("Merkliste", gemerkt, POSTER));
         s.reihen.add(ohneGesehenes(reihe("Neu", neu, POSTER)));
         boolean qk = Qualitaet.nurLukas() && Qualitaet.anzahl() > 0;
-        if (samml.length() > 0 || Gesehen.anzahl() > 0 || qk) {
-            Reihe kat = reihe("Kategorien", samml, POSTER);
+        // Genre-Kategorien und Filmreihen (Star Wars, Eberhofer …) trennen – beides sind in Jellyfin Sammlungen
+        List<JSONObject> genres = new ArrayList<>(), reihenL = new ArrayList<>();
+        for (int i = 0; i < samml.length(); i++) {
+            JSONObject k = samml.optJSONObject(i);
+            if (k == null) continue;
+            if (istGenre(k)) genres.add(k);
+            else reihenL.add(alsFilmreihe(k));
+        }
+        filmreihen = reihenL;
+        filmreihenBekannt = true;
+        reiheVonFilm = null;
+        if (!genres.isEmpty() || !reihenL.isEmpty() || Gesehen.anzahl() > 0 || qk) {
+            Reihe kat = reiheAus("Kategorien", genres, POSTER);
+            if (!reihenL.isEmpty()) kat.eintraege.add(0, sammlungenKachel(reihenL.size()));
             if (Gesehen.anzahl() > 0) kat.eintraege.add(gesehenKachel());
             if (qk) kat.eintraege.add(qualitaetKachel());
             s.reihen.add(kat);
-            for (int i = 0; i < samml.length(); i++) {
-                JSONObject k = samml.getJSONObject(i);
-                s.reihen.add(new Reihe(k.optString("Name"), "samml:" + k.optString("Id"), POSTER));
-            }
+            for (JSONObject k : genres) s.reihen.add(new Reihe(k.optString("Name"), "samml:" + k.optString("Id"), POSTER));
         }
         s.reihen.add(new Reihe("Alle Filme", "@alle", POSTER));
         return s;
@@ -749,6 +786,76 @@ public class FilmeActivity extends Activity {
     }
 
     /** Kachel „Gesehen“ ganz rechts in der Reihe Kategorien. */
+    /** Genre-Kategorie (Action, Horror …) oder Filmreihe? Beides sind in Jellyfin Sammlungen (BoxSets). */
+    private static boolean istGenre(JSONObject k) {
+        String n = k.optString("Name");
+        return FARBEN.containsKey(n) || "Familie und Animation".equals(n);
+    }
+
+    /** Markiert eine Jellyfin-Sammlung als Filmreihe (Star Wars, Eberhofer …). */
+    private static JSONObject alsFilmreihe(JSONObject k) {
+        try {
+            k.put("_reihe", true);
+        } catch (Exception ignored) {
+        }
+        return k;
+    }
+
+    static boolean istFilmreihe(JSONObject e) {
+        return e != null && e.optBoolean("_reihe", false);
+    }
+
+    /** Name einer Filmreihe ohne das angehängte „Filmreihe“ bzw. „Collection“ von TMDb. */
+    static String reihenName(JSONObject e) {
+        String voll = ordnerName(e);
+        String kurz = voll.replaceAll("(?i)\\s*[-–]?\\s*(Filmreihe|Collection|Sammlung)$", "").trim();
+        return kurz.isEmpty() ? voll : kurz;
+    }
+
+    /** Kachel „Sammlungen“ in den Kategorien: führt zu allen Filmreihen. */
+    private static JSONObject sammlungenKachel(int anzahl) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("Type", "Sammlungen");
+            o.put("Id", "@sammlungen");
+            o.put("Name", "Sammlungen");
+            o.put("ChildCount", anzahl);
+        } catch (Exception ignored) {
+        }
+        return o;
+    }
+
+    /** Film-Id → Filmreihe. Wird 10 Minuten gemerkt. Nur im Netz-Faden aufrufen. */
+    private Map<String, JSONObject> filmreihenMitglieder() {
+        Map<String, JSONObject> m = reiheVonFilm;
+        if (m != null && SystemClock.uptimeMillis() - reiheVonFilmZeit < 600_000) return m;
+        m = new HashMap<>();
+        try {
+            List<JSONObject> l = filmreihen;
+            if (!filmreihenBekannt) {
+                // Startseite noch nicht geladen: Sammlungen selbst holen
+                JSONArray a = jf.sammlungen();
+                l = new ArrayList<>();
+                for (int i = 0; i < a.length(); i++) {
+                    JSONObject k = a.optJSONObject(i);
+                    if (k != null && !istGenre(k)) l.add(alsFilmreihe(k));
+                }
+            }
+            for (JSONObject fr : l) {
+                JSONArray kinder = jf.inhalt(fr.optString("Id"));
+                for (int i = 0; i < kinder.length(); i++) {
+                    JSONObject o = kinder.optJSONObject(i);
+                    if (o != null) m.put(o.optString("Id"), fr);
+                }
+            }
+        } catch (Exception e) {
+            return m;   // ohne Filmreihen weiter, beim nächsten Mal neu versuchen
+        }
+        reiheVonFilm = m;
+        reiheVonFilmZeit = SystemClock.uptimeMillis();
+        return m;
+    }
+
     private static JSONObject gesehenKachel() {
         JSONObject o = new JSONObject();
         try {
@@ -887,7 +994,8 @@ public class FilmeActivity extends Activity {
         final Seite neu = new Seite(titel);
         neu.kopf = kachel;
         neu.ohneFilter = true;
-        neu.reihen.add(new Reihe(titel, null, POSTER));
+        neu.raster = true;   // Poster-Wand wie bei den Kategorien (seit 16.11.2026)
+        neu.poster = true;
         neueSeite(neu);
         netz.execute(() -> {
             Map<String, JSONObject> gefunden = new HashMap<>();
@@ -904,9 +1012,9 @@ public class FilmeActivity extends Activity {
             h.post(() -> {
                 List<JSONObject> l = new ArrayList<>();
                 for (String id : ids) if (gefunden.containsKey(id)) l.add(gefunden.get(id));
-                neu.reihen.clear();
-                if (!l.isEmpty()) neu.reihen.add(reiheAus(l.size() == 1 ? "1 Film" : l.size() + " Filme", l, POSTER));
-                if (neu.reihen.isEmpty()) neu.leer = leer;
+                posterWandFuellen(neu, l);
+                neu.kopfInfo = l.size() == 1 ? "1 Film" : l.size() + " Filme";
+                if (l.isEmpty()) neu.leer = leer;
                 if (seite == neu) {
                     nachladen();
                     fokusGeaendert();
@@ -1284,8 +1392,10 @@ public class FilmeActivity extends Activity {
             for (int d = 0; d <= 7; d++)
                 for (int i : new int[]{s.akt + d, s.akt - d}) {
                     if (i < 0 || i >= s.reihen.size() || (i < s.akt && d > 2)) continue;
-                    for (JSONObject o : s.reihen.get(i).eintraege)
-                        bilder.laden(rasterUrl(o), (u, bm) -> buehne.invalidate());
+                    for (JSONObject o : s.reihen.get(i).eintraege) {
+                        String vorab = s.poster ? kartenUrl(o, POSTER) : rasterUrl(o);
+                        if (vorab != null) bilder.laden(vorab, (u, bm) -> buehne.invalidate());
+                    }
                 }
             return;
         }
@@ -1452,7 +1562,8 @@ public class FilmeActivity extends Activity {
             return;
         }
         String t = typ(e);
-        if ("BoxSet".equals(t) || "Gesehen".equals(t) || "Qualitaet".equals(t)) {
+        boolean reiheMitBild = istFilmreihe(e) && Jellyfin.hintergrundTag(e) != null;   // Filmreihe: ihr eigenes Bild
+        if (("BoxSet".equals(t) && !reiheMitBild) || "Gesehen".equals(t) || "Qualitaet".equals(t) || "Sammlungen".equals(t)) {
             Integer f = FARBEN.get(e.optString("Name"));
             setzeHintergrund(null, f != null ? f : 0xFF444444);
             return;
@@ -1891,6 +2002,9 @@ public class FilmeActivity extends Activity {
             case "Gesehen":
                 gesehenOeffnen(e);
                 break;
+            case "Sammlungen":
+                sammlungenOeffnen(e);
+                break;
             case "Qualitaet":
                 qualitaetOeffnen(e);
                 break;
@@ -1961,24 +2075,60 @@ public class FilmeActivity extends Activity {
         fokusGeaendert();
     }
 
+    /**
+     * Kategorie oder Filmreihe öffnen: seit 16.11.2026 als Poster-Wand über den ganzen Bildschirm (Wunsch Lukas – in den
+     * Reihen nach Jahren hat man leicht übersehen, dass darunter noch Filme kommen). Oben steht groß der Name.
+     * Genre: zuerst die Filmreihen als eigene Kachel (ab 2 Filmen der Reihe in diesem Genre), dann die übrigen Filme,
+     * die am besten bewerteten zuerst; Gesehenes fehlt wie bisher. Filmreihe: alle Teile in der Reihenfolge des Erscheinens.
+     */
     private void kategorieOeffnen(JSONObject s) {
-        final String id = s.optString("Id"), name = s.optString("Name");
-        final Seite neu = new Seite(name);
+        final String id = s.optString("Id");
+        final boolean istReihe = istFilmreihe(s);
+        final Seite neu = new Seite(istReihe ? reihenName(s) : s.optString("Name"));
         neu.kopf = s;
-        neu.reihen.add(new Reihe(name, null, POSTER));
+        neu.raster = true;
+        neu.poster = true;
         neueSeite(neu);
         netz.execute(() -> {
             try {
-                JSONArray roh = jf.inhalt(id);
+                final JSONArray roh = jf.inhalt(id);
+                final Map<String, JSONObject> zuReihe = istReihe ? new HashMap<String, JSONObject>() : filmreihenMitglieder();
                 h.post(() -> {
-                    neu.reihen.clear();
-                    List<JSONObject> a = new ArrayList<>();
+                    List<JSONObject> filme = new ArrayList<>();
                     for (int k = 0; k < roh.length(); k++) {
                         JSONObject o = roh.optJSONObject(k);
-                        if (o != null && !Gesehen.hat(o)) a.add(o);
+                        if (o != null && (istReihe || !Gesehen.hat(o))) filme.add(o);
                     }
-                    neu.reihen.addAll(reihenNachJahren(name, a));
-                    if (neu.reihen.isEmpty()) neu.leer = roh.length() > 0 ? "Alles schon gesehen" : "Keine Filme";
+                    List<JSONObject> wand = new ArrayList<>();
+                    int reihenN = 0;
+                    if (istReihe) {
+                        // Jellyfin liefert die neuesten zuerst – eine Filmreihe beginnt man beim ersten Teil
+                        for (int k = filme.size() - 1; k >= 0; k--) wand.add(filme.get(k));
+                    } else {
+                        Map<String, Integer> zahl = new HashMap<>();
+                        for (JSONObject o : filme) {
+                            JSONObject fr = zuReihe.get(o.optString("Id"));
+                            if (fr != null) zahl.merge(fr.optString("Id"), 1, Integer::sum);
+                        }
+                        Set<String> drin = new HashSet<>();
+                        List<JSONObject> rest = new ArrayList<>();
+                        for (JSONObject o : filme) {
+                            JSONObject fr = zuReihe.get(o.optString("Id"));
+                            Integer z = fr == null ? null : zahl.get(fr.optString("Id"));
+                            if (fr != null && z != null && z >= 2) {
+                                if (drin.add(fr.optString("Id"))) wand.add(fr);
+                            } else rest.add(o);
+                        }
+                        reihenN = wand.size();
+                        wand.sort((x, y) -> reihenName(x).compareToIgnoreCase(reihenName(y)));
+                        rest.sort((x, y) -> Double.compare(y.optDouble("CommunityRating", 0), x.optDouble("CommunityRating", 0)));
+                        wand.addAll(rest);
+                    }
+                    posterWandFuellen(neu, wand);
+                    int n = wand.size() - reihenN;
+                    neu.kopfInfo = (n == 1 ? "1 Film" : n + " Filme")
+                            + (reihenN > 0 ? "   ·   " + (reihenN == 1 ? "1 Filmreihe" : reihenN + " Filmreihen") : "");
+                    if (wand.isEmpty()) neu.leer = roh.length() > 0 ? "Alles schon gesehen" : "Keine Filme";
                     if (seite == neu) {
                         nachladen();
                         fokusGeaendert();
@@ -1987,6 +2137,18 @@ public class FilmeActivity extends Activity {
             } catch (Exception ignored) {
             }
         });
+    }
+
+    /** Kachel „Sammlungen“: alle Filmreihen (Star Wars, Eberhofer …) als Poster-Wand. */
+    private void sammlungenOeffnen(JSONObject kachel) {
+        final Seite neu = new Seite("Sammlungen");
+        neu.kopf = kachel;
+        List<JSONObject> l = new ArrayList<>(filmreihen);
+        l.sort((x, y) -> reihenName(x).compareToIgnoreCase(reihenName(y)));
+        posterWandFuellen(neu, l);
+        neu.kopfInfo = l.size() == 1 ? "1 Filmreihe" : l.size() + " Filmreihen";
+        if (l.isEmpty()) neu.leer = "Noch keine Filmreihen";
+        neueSeite(neu);
     }
 
     private void serieOeffnen(JSONObject serie) {
@@ -2783,7 +2945,7 @@ public class FilmeActivity extends Activity {
             seite.anim = naeher(seite.anim, seite.akt, dt, 85);
             if (seite.anim != seite.akt) weiter = true;
             float wegY = detailAnim * 520;
-            float reihenAlpha = 1f - detailAnim;
+            float reihenAlpha = seite.raster ? 0f : 1f - detailAnim;   // aus der Wand heraus gibt es keine Reihen
             if (reihenAlpha > 0.01f && seite.leer == null) {
                 float basis = versatz(seite, seite.anim);
                 for (int i = 0; i < seite.reihen.size(); i++) {
@@ -2815,7 +2977,7 @@ public class FilmeActivity extends Activity {
                 klein.setAlpha(0xB3);
             } else if (e != null) {
                 String t = typ(e);
-                if ("BoxSet".equals(t) || "Gesehen".equals(t) || "Qualitaet".equals(t)) kategorieInfo(c, e);
+                if ("BoxSet".equals(t) || "Gesehen".equals(t) || "Qualitaet".equals(t) || "Sammlungen".equals(t)) kategorieInfo(c, e);
                 else if ("Folder".equals(t) || "PhotoAlbum".equals(t) || "CollectionFolder".equals(t)) ordnerInfo(c, e);
                 else if ("Photo".equals(t) || "Video".equals(t)) fotoInfo(c, e);
                 else filmInfo(c, e, detail);
@@ -3111,22 +3273,38 @@ public class FilmeActivity extends Activity {
             s.anim = naeher(s.anim, s.akt, dt, 70);
             if (s.anim != s.akt) weiter = true;
             float k = Ani.EASE.getInterpolation(Math.max(0f, Math.min(1f, s.kopfAnim)));
-            float oben = RASTER_OBEN_KLEIN + (RASTER_OBEN_GROSS - RASTER_OBEN_KLEIN) * k;
+            float obenGross = s.poster ? POSTER_OBEN_GROSS : RASTER_OBEN_GROSS;
+            float oben = RASTER_OBEN_KLEIN + (obenGross - RASTER_OBEN_KLEIN) * k;
 
             // Kopf: Name, darunter Zeitraum und Anzahl (nur gross), rechts das Foto im Fokus
-            String name = s.kopf != null ? ordnerName(s.kopf) : s.titel;
-            float titelY = 80 + (190 - 80) * k;
-            gross.setTextSize(44 + 40 * k);
+            String name = s.poster ? s.titel : s.kopf != null ? ordnerName(s.kopf) : s.titel;
+            float titelY = 80 + ((s.poster ? 108 : 190) - 80) * k;
+            gross.setTextSize(44 + (s.poster ? 24 : 40) * k);
             gross.setShadowLayer(Ani.schatten(24), 0, 3, 0x80000000);
-            c.drawText(kuerzen(name, gross, 1180 + 520 * k), LINKS - 3, titelY, gross);
+            c.drawText(kuerzen(name, gross, s.poster ? 880 : 1180 + 520 * k), LINKS - 3, titelY, gross);
             gross.clearShadowLayer();
             gross.setTextSize(130);
             if (s.kopfInfo != null && !s.kopfInfo.isEmpty() && k > 0.02f) {
                 meta.setAlpha(Math.round(0xE6 * k));
-                c.drawText(s.kopfInfo, LINKS, titelY + 62 * k, meta);
+                c.drawText(s.kopfInfo, LINKS, titelY + (s.poster ? 48 : 62) * k, meta);
                 meta.setAlpha(0xE6);
             }
-            if (fokus != null && !fokus.optBoolean("IsFolder", false)) {
+            if (s.poster) {
+                // rechts: was gerade ausgewählt ist (die Poster haben keine Schrift)
+                if (fokus != null) {
+                    String txt;
+                    if ("BoxSet".equals(typ(fokus))) {
+                        int fn = fokus.optInt("ChildCount", 0);
+                        txt = reihenName(fokus) + (fn > 0 ? "   ·   " + (fn == 1 ? "1 Film" : fn + " Filme") : "");
+                    } else {
+                        int jahr = fokus.optInt("ProductionYear", 0);
+                        txt = fokus.optString("Name") + (jahr > 0 ? "   ·   " + jahr : "");
+                    }
+                    meta.setTextAlign(Paint.Align.RIGHT);
+                    c.drawText(kuerzen(txt, meta, 800), 1810, 80 + 28 * k, meta);
+                    meta.setTextAlign(Paint.Align.LEFT);
+                }
+            } else if (fokus != null && !fokus.optBoolean("IsFolder", false)) {
                 int nr = 0, gesamt = 0;
                 for (int i = 0; i < s.reihen.size(); i++) {
                     Reihe rr = s.reihen.get(i);
@@ -3148,10 +3326,12 @@ public class FilmeActivity extends Activity {
                     c.drawText(s.leer, LINKS, oben + 60, meta);
                 } else {
                     // lädt noch: Platzhalter-Wand
-                    for (int i = 0; i < 4; i++)
-                        for (int j = 0; j < FOTO_SPALTEN; j++) {
-                            float x = LINKS + j * (FOTO_W + FOTO_LUECKE), y = oben + i * (FOTO_H + FOTO_LUECKE);
-                            r.set(x, y, x + FOTO_W, y + FOTO_H);
+                    int ps = s.poster ? POSTER_SPALTEN : FOTO_SPALTEN, pw = s.poster ? POSTER_W : FOTO_W;
+                    int ph = s.poster ? POSTER_H : FOTO_H, pl = s.poster ? POSTER_LUECKE : FOTO_LUECKE;
+                    for (int i = 0; i < (s.poster ? 3 : 4); i++)
+                        for (int j = 0; j < ps; j++) {
+                            float x = LINKS + j * (pw + pl), y = oben + i * (ph + pl);
+                            r.set(x, y, x + pw, y + ph);
                             p.setColor(0x14FFFFFF);
                             c.drawRoundRect(r, 12, 12, p);
                         }
@@ -3184,12 +3364,24 @@ public class FilmeActivity extends Activity {
                         fe = rh.eintraege.get(j);
                         continue;
                     }
-                    rasterKachel(c, rh.eintraege.get(j), x, y, s.kw, s.kh, 1f, Math.round(235 * a), false);
+                    if (s.poster) posterKachel(c, rh.eintraege.get(j), x, y, 1f, Math.round(235 * a), false);
+                    else rasterKachel(c, rh.eintraege.get(j), x, y, s.kw, s.kh, 1f, Math.round(235 * a), false);
                 }
             }
-            if (fe != null) rasterKachel(c, fe, fx, fy, s.kw, s.kh, zoom, 255, true);
+            if (fe != null && s.poster) posterKachel(c, fe, fx, fy, zoom, 255, true);
+            else if (fe != null) rasterKachel(c, fe, fx, fy, s.kw, s.kh, zoom, 255, true);
             c.restore();
             return weiter;
+        }
+
+        /** Poster-Wand: dieselbe Karte wie in den Reihen (Poster, Haken, Sonderkacheln), nur etwas kleiner. */
+        private void posterKachel(Canvas c, JSONObject e, float x, float y, float zoom, int al, boolean fokus) {
+            float f = POSTER_W / (float) PW;
+            c.save();
+            c.translate(x, y);
+            c.scale(f, f);
+            karteZeichnen(c, e, POSTER, 0, 0, zoom, al, fokus);
+            c.restore();
         }
 
         private void rasterKachel(Canvas c, JSONObject e, float x, float y, int w0, int h0, float zoom, int al, boolean fokus) {
@@ -3291,6 +3483,11 @@ public class FilmeActivity extends Activity {
                 p.setAlpha(255);
                 return;
             }
+            if ("Sammlungen".equals(t)) {
+                sammlungenKarte(c, e, rad, al);
+                p.setAlpha(255);
+                return;
+            }
             String url = kartenUrl(e, form);
             Bitmap b = url != null ? bilder.sofort(url) : null;
             if (b == null && url != null && !bilder.fehlgeschlagen(url)) bilder.laden(url, (u, bm) -> invalidate());
@@ -3325,7 +3522,7 @@ public class FilmeActivity extends Activity {
             else if ("Episode".equals(t)) {
                 int n = e.optInt("IndexNumber", 0);
                 unten = (n > 0 ? n + ". " : "") + e.optString("Name");
-            }
+            } else if (istFilmreihe(e)) unten = reihenName(e);   // Filmreihe: Name im Bild, damit man sie von einem Film unterscheidet
             if (unten != null) {
                 c.save();
                 Path clip = new Path();
@@ -3387,6 +3584,42 @@ public class FilmeActivity extends Activity {
         }
 
         /** Kachel „Gesehen“ in den Kategorien: ruhiges Blaugrau, Auge mit Haken, Anzahl. */
+        /** Kachel „Sammlungen“ (Filmreihen wie Star Wars oder Eberhofer): drei gestapelte Poster auf Violett. */
+        private void sammlungenKarte(Canvas c, JSONObject e, float rad, int al) {
+            p.setShader(new LinearGradient(r.left, r.top, r.right, r.bottom, 0xFF5A4FCF, 0xFF1C1947, Shader.TileMode.CLAMP));
+            p.setAlpha(al);
+            c.drawRoundRect(r, rad, rad, p);
+            p.setShader(null);
+            float cx = r.centerX(), cy = r.top + r.height() * 0.38f, s = r.width() / 196f;
+            float pw = 44 * s, ph = 64 * s;
+            RectF q = new RectF();
+            p.setColor(0xFFFFFFFF);
+            p.setAlpha(Math.round(0x40 * al / 255f));
+            q.set(cx - pw / 2 - 30 * s, cy - ph / 2 + 6 * s, cx + pw / 2 - 30 * s, cy + ph / 2 + 6 * s);
+            c.drawRoundRect(q, 7 * s, 7 * s, p);
+            q.set(cx - pw / 2 + 30 * s, cy - ph / 2 + 6 * s, cx + pw / 2 + 30 * s, cy + ph / 2 + 6 * s);
+            c.drawRoundRect(q, 7 * s, 7 * s, p);
+            p.setColor(GELB);
+            p.setAlpha(al);
+            q.set(cx - pw / 2, cy - ph / 2 - 4 * s, cx + pw / 2, cy + ph / 2 - 4 * s);
+            c.drawRoundRect(q, 7 * s, 7 * s, p);
+            karte.setTextSize(28 * s);
+            karte.setAlpha(al);
+            karte.setTextAlign(Paint.Align.CENTER);
+            c.drawText("Sammlungen", cx, r.top + r.height() * 0.74f, karte);
+            int n = e.optInt("ChildCount", 0);
+            klein.setTextSize(22 * s);
+            klein.setAlpha(Math.round(0xB3 * al / 255f));
+            klein.setTextAlign(Paint.Align.CENTER);
+            c.drawText(n == 1 ? "1 Filmreihe" : n + " Filmreihen", cx, r.top + r.height() * 0.83f, klein);
+            karte.setTextAlign(Paint.Align.LEFT);
+            karte.setTextSize(26);
+            karte.setAlpha(255);
+            klein.setTextAlign(Paint.Align.LEFT);
+            klein.setTextSize(26);
+            klein.setAlpha(0xB3);
+        }
+
         /** Kachel „Schlechte Qualität“: Fahne auf braunem Grund. */
         private void qualitaetKarte(Canvas c, JSONObject e, float rad, int al) {
             p.setShader(new LinearGradient(r.left, r.top, r.right, r.bottom, 0xFF7A5A36, 0xFF2E2418, Shader.TileMode.CLAMP));
@@ -3817,10 +4050,11 @@ public class FilmeActivity extends Activity {
 
         private void kategorieInfo(Canvas c, JSONObject e) {
             gross.setShadowLayer(Ani.schatten(30), 0, 4, 0x66000000);
-            c.drawText(e.optString("Name"), LINKS - 6, 330, gross);
+            c.drawText(istFilmreihe(e) ? reihenName(e) : e.optString("Name"), LINKS - 6, 330, gross);
             gross.clearShadowLayer();
             int n = e.optInt("ChildCount", 0);
-            if (n > 0) c.drawText(n == 1 ? "1 Film" : n + " Filme", LINKS, 400, meta);
+            if (n > 0 && "Sammlungen".equals(typ(e))) c.drawText(n == 1 ? "1 Filmreihe" : n + " Filmreihen", LINKS, 400, meta);
+            else if (n > 0) c.drawText(n == 1 ? "1 Film" : n + " Filme", LINKS, 400, meta);
         }
 
         private void ordnerInfo(Canvas c, JSONObject e) {

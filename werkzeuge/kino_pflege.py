@@ -332,7 +332,9 @@ def befehl_kategorien(los=False, still=False):
     key = schluessel()
     user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
     filme = filme_holen(key, user)
-    samm = {s["name"]: s for s in sammlungen_holen(key, user)}
+    # Nur die Genre-Kategorien aus kategorien.json anfassen. Alle anderen Sammlungen in Jellyfin sind Filmreihen
+    # (Star Wars, Eberhofer ... - seit 16.11.2026) und bleiben, wie sie sind; frueher haette dieser Abgleich sie geleert.
+    samm = {s["name"]: s for s in sammlungen_holen(key, user) if s["name"] in set(zuo.values())}
     fehlt = sorted(set(zuo.values()) - set(samm))
     if fehlt:
         print("Sammlungen fehlen in Jellyfin (werden nicht angelegt):", ", ".join(fehlt))
