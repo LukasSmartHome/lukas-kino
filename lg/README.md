@@ -30,6 +30,10 @@ Verweise auf denselben Ordner):
   Geht direkt etwas schief, wird automatisch auf den Pi gewechselt (und umgekehrt).
 - `?person=`, `?leicht=1/0`, `?ha=` überschreiben das zum Testen.
 
+## Poster-Wand und Sammlungen (seit 16.11.2026)
+
+Wie am TCL: eine geöffnete Kategorie, Filmreihe oder „Gesehen“ ist eine Poster-Wand (`posterWandFuellen`, 9 Poster nebeneinander, `#wand.poster`), keine Reihen nach Jahren mehr. Genre-Kategorie = Sammlung mit Farbe in `FARBEN`, alles andere ist eine Filmreihe (`istFilmreihe`). Kachel „Sammlungen“ vorn in den Kategorien; im Genre steht eine Filmreihe als eine Kachel, wenn dort mindestens 2 ihrer Filme liegen. Einspielen: `werkzeuge/kino_web_patch_wand_1611.py` (Stand davor auf dem Pi: `app.js.bak_vor_wand2_16-11-2026`).
+
 ## Schneller Start, kein Intro (seit 16.11.2026)
 
 - Das Start-Intro ist entfernt (Wunsch Lukas: nervt auf Dauer, lauter Ton). Die Datei `/share/kino/intro.mp4` wird nicht mehr geladen.

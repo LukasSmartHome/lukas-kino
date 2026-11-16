@@ -1326,6 +1326,35 @@ body {
 
 .leicht .wk.fokus { box-shadow: none; }
 
+/* ------------------------------------------------------------ Poster-Wand (Kategorie, Filmreihe, Sammlungen – 16.11.2026) */
+
+#wand.poster .w-name { top: 46px; font-size: 68px; max-width: 900px; }
+#wand.poster .w-info { top: 128px; }
+#wand.poster .w-rechts { top: 80px; max-width: 800px; overflow: hidden; text-overflow: ellipsis; }
+#wand.poster .w-fenster { top: 176px; }
+#wand.poster.klein .w-name { top: 38px; transform: scale(.65); max-width: 1380px; }
+#wand.poster.klein .w-rechts { top: 52px; }
+#wand.poster.klein .w-fenster { top: 98px; }
+
+.karte.wp { width: 172px; height: 258px; border-radius: 16px; transition: transform .2s cubic-bezier(.2, .8, .2, 1); }
+.karte.wp.fokus { transform: scale(1.1); }
+.karte.wp.fokus:after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 4px rgba(255, 255, 255, .95);
+}
+.karte.wp .k-unten span { left: 14px; right: 14px; bottom: 12px; font-size: 22px; }
+
+/* Kachel „Sammlungen“ (Filmreihen) in den Kategorien */
+.karte.k-sammlungen { background: linear-gradient(135deg, #5A4FCF, #1C1947); }
+.karte.k-sammlungen svg { position: absolute; left: 38px; top: 70px; width: 120px; height: 80px; }
+.karte.k-sammlungen .kg-name { font-size: 28px; }
+
 /* ------------------------------------------------------------ Kachel „Gesehen“ in den Kategorien */
 
 .karte.k-gesehen { background: linear-gradient(135deg, #56637A, #242B38); }

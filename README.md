@@ -7,6 +7,7 @@ Eigene, werbefreie Startseite für Lukas' TCL-Fernseher (Google TV, Android 14).
 - Hoch: nur das Bild. Runter: Kacheln zurück. Nochmal runter: Suche nach Apps und Spielen. Home oder Zurück: an den Anfang.
 - PlayStation-Kachel wechselt auf HDMI 2.
 - Beim Einschalten steht alles sofort da (seit 16.11.2026 kein Einflug der Kacheln und kein Zoom mehr – das ruckelte, weil der Fernseher genau dann aufwacht). Das Hintergrundbild wird nur neu geladen, wenn es ein anderes ist.
+- Filme: eine geöffnete Kategorie zeigt seit 16.11.2026 (1.0.54) alle Filme als Poster-Wand über den ganzen Bildschirm (9 nebeneinander, Name der Kategorie groß oben, die am besten bewerteten zuerst) statt Reihen nach Jahren. Filmreihen (Jellyfin-Sammlungen, die keine Genre-Kategorie sind, z. B. Star Wars, Eberhofer) stehen in der neuen Kachel „Sammlungen“ ganz vorn in den Kategorien und zusätzlich als eine Kachel im passenden Genre (ab 2 Filmen der Reihe in diesem Genre). Jellyfin legt die Filmreihen selbst an (Bibliothek Filme: „Filme automatisch zu Sammlungen hinzufügen“, braucht mindestens 2 Filme der Reihe).
 - Kein Start-Intro mehr und kein Sprach-Teil („Claude am Fernseher“): Mikrofon-Dienst und Mikrofon-Rechte sind seit 16.11.2026 aus (`Sprache.AN = false`, Dienst im Manifest `enabled="false"`).
 
 ## Aufbau
