@@ -191,6 +191,18 @@
 
   // ------------------------------------------------------------------ Jellyfin
 
+  // Vorab laden (16.11.2026): Beim Start gehen alle Anfragen der Startseite sofort gleichzeitig los (vorabStarten),
+  // statt nacheinander. Der normale Ablauf bleibt gleich - er bekommt nur Antworten, die schon unterwegs sind.
+  const vorab = { an: false, jf: {}, datei: {} };
+
+  /** Vorab geholte Datei (bewertungen.json, plexfilme.json) genau einmal und nur frisch (15 s) hergeben. */
+  function vorabDatei(name) {
+    const v = vorab.datei[name];
+    if (!v) return null;
+    delete vorab.datei[name];
+    return Date.now() - v.zeit < 15000 ? v.p : null;
+  }
+
   const jf = {
     token: speicherLesen('lk_token'),
     benutzer: speicherLesen('lk_user'),
@@ -239,9 +251,23 @@
       }
     },
 
-    liste: async function (pfad) {
-      const o = await this.anfrage('GET', pfad);
-      return (o && o.Items) || [];
+    liste: function (pfad) {
+      const self = this;
+      const eintraege = function (o) { return o ? (o.Items || []) : []; };
+      const frisch = function () { return self.anfrage('GET', pfad).then(eintraege); };
+      if (vorab.an) {
+        // Vorab: Anfrage starten und unter ihrem Pfad merken
+        const p = self.anfrage('GET', pfad);
+        vorab.jf[pfad] = { zeit: Date.now(), p: p };
+        return p.then(eintraege);
+      }
+      const v = vorab.jf[pfad];
+      if (v) {
+        // genau einmal und nur frisch (15 s); ging sie schief, ganz normal neu fragen
+        delete vorab.jf[pfad];
+        if (Date.now() - v.zeit < 15000) return v.p.then(eintraege, frisch);
+      }
+      return frisch();
     },
 
     weiterschauen: function () {
@@ -593,9 +619,14 @@
       if (this.plex && Date.now() - (this.plexZeit || 0) < 1800000) return;
       const p = {}, zuHa = {}, zuJf = {};
       try {
-        const r = await fetch('../plexfilme.json?t=' + Date.now());
-        if (r.ok) {
-          const f = ((await r.json()) || {}).filme || {};
+        let pj = vorabDatei('plexfilme.json');
+        if (pj) pj = await pj;
+        if (!pj) {
+          const r = await fetch(`../plexfilme.json?t=${Date.now()}`);
+          if (r.ok) pj = await r.json();
+        }
+        if (pj) {
+          const f = pj.filme || {};
           Object.keys(f).forEach(function (id) {
             if (f[id] && f[id].t) p[familienSchluessel(f[id].t, f[id].j || '')] = id;
             if (f[id] && f[id].jf) {
@@ -804,9 +835,13 @@
 
   async function familieLaden() {
     try {
-      const r = await fetch('../bewertungen.json?t=' + Date.now());
-      if (!r.ok) return;
-      const j = await r.json();
+      let j = vorabDatei('bewertungen.json');
+      if (j) j = await j;
+      if (!j) {
+        const r = await fetch(`../bewertungen.json?t=${Date.now()}`);
+        if (!r.ok) return;
+        j = await r.json();
+      }
       const noten = {}, gesehen = {}, nurName = {};
       Object.keys(j.bewertungen || {}).forEach(function (id) {
         const f = j.bewertungen[id], t = plexTitel(f.t);
@@ -829,7 +864,8 @@
       try { await merk.ausHa(j); } catch (x) { /* Merkliste bleibt, wie sie war */ }
       try { await gesehenAusHa(j); } catch (x) { /* Gesehen bleibt, wie es war */ }
       try { qualitaetAusHa(j); } catch (x) { /* Meldungen bleiben, wie sie waren */ }
-      try { await empfohlenAusHa(j); } catch (x) { /* Empfohlen bleibt, wie es war */ }
+      // Empfohlen braucht die Startseite nicht: laeuft im Hintergrund weiter, der Start wartet nicht darauf (16.11.2026)
+      empfohlenAusHa(j).catch(function () { /* Empfohlen bleibt, wie es war */ });
     } catch (e) { /* ohne Bewertungen weiter */ }
   }
 
@@ -5078,72 +5114,34 @@
     }
   }
 
-  // ------------------------------------------------------------------ Start-Intro (seit 04.11.2026, wie am TCL)
-  // Das private Intro (SOURCE, mit Fotos) liegt nur auf dem Pi unter /share/kino/intro.mp4, nicht im Repo.
-  // Es läuft beim Start im Vollbild über der Oberfläche, die dahinter schon lädt, und blendet am Ende weich aus.
-  // Jede Taste (außer Lautstärke) und jeder Klick überspringt. Fehlt die Datei oder geht Abspielen nicht: ohne Intro.
-  // Lädt die Seite innerhalb einer Minute neu (z. B. Kontowechsel), kommt es nicht noch einmal.
+  // ------------------------------------------------------------------ Vorab laden (16.11.2026)
+  // Das Start-Intro gibt es seit 16.11.2026 nicht mehr (Wunsch Lukas: nervt auf Dauer, lauter Ton).
+  // Alles, was die Startseite braucht, wird sofort gleichzeitig angefragt - siehe vorab oben bei Jellyfin.
 
-  const intro = { el: null, video: null, weg: true };
-  const LAUTSTAERKE = [173, 174, 175, 447, 448, 449];
-
-  function introZeigen() {
+  function vorabStarten() {
+    if (!jf.angemeldet()) return;
+    const still = function () { /* Fehler behandelt der normale Ablauf */ };
+    ['bewertungen.json', 'plexfilme.json'].forEach(function (name) {
+      vorab.datei[name] = {
+        zeit: Date.now(),
+        p: fetch(`../${name}?t=${Date.now()}`).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+      };
+    });
+    vorab.an = true;
     try {
-      const vorher = Number(sessionStorage.getItem('lk_intro') || 0);
-      if (Date.now() - vorher < 60000) return;
-      sessionStorage.setItem('lk_intro', String(Date.now()));
-    } catch (e) { /* ohne Speicher eben immer */ }
-    const d = document.createElement('div');
-    d.id = 'intro';
-    const v = document.createElement('video');
-    v.src = '../intro.mp4';
-    v.preload = 'auto';
-    v.setAttribute('playsinline', '');
-    d.appendChild(v);
-    document.body.appendChild(d);
-    intro.el = d;
-    intro.video = v;
-    intro.weg = false;
-    v.addEventListener('ended', introAusblenden);
-    v.addEventListener('error', introAusblenden);
-    d.addEventListener('click', introAusblenden);
-    setTimeout(introAusblenden, 25000); // Notbremse, falls das Video hängt
-    const p = v.play();
-    if (p && p.catch) {
-      p.catch(function () {
-        // Ton ohne Tastendruck nicht erlaubt: dann stumm, sonst ganz ohne Intro
-        v.muted = true;
-        const q = v.play();
-        if (q && q.catch) q.catch(introAusblenden);
-      });
+      [jf.bibliotheken(), jf.weiterschauen(), jf.neu(), jf.sammlungen()].forEach(function (p) { p.catch(still); });
+    } catch (e) {
+      /* dann eben ohne Vorab */
     }
+    vorab.an = false;
+    filmIndexLaden();
   }
-
-  function introAusblenden() {
-    if (intro.weg) return;
-    intro.weg = true;
-    const d = intro.el, v = intro.video;
-    d.style.opacity = '0';
-    setTimeout(function () {
-      try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) { /* egal */ }
-      if (d.parentNode) d.parentNode.removeChild(d);
-    }, 380);
-  }
-
-  // Läuft das Intro, schluckt jede Taste (außer Lautstärke) das Überspringen, bevor die Oberfläche sie sieht.
-  document.addEventListener('keydown', function (ev) {
-    if (intro.weg || LAUTSTAERKE.indexOf(ev.keyCode) >= 0) return;
-    introAusblenden();
-    ev.preventDefault();
-    ev.stopImmediatePropagation();
-  }, true);
 
   // ------------------------------------------------------------------ Start
 
   function start() {
     bauen();
     skalieren();
-    introZeigen();
     window.addEventListener('resize', skalieren);
     try {
       document.body.tabIndex = -1;
@@ -5151,7 +5149,15 @@
       window.focus();
     } catch (e) { /* egal */ }
     if (parameter.abmelden === '1') jf.abmelden();
+    const benutzerVorher = jf.benutzer;
+    vorabStarten();
     const weiter = function () {
+      if (jf.benutzer !== benutzerVorher) {
+        // Konto gewechselt (kontoPruefen): die Vorab-Antworten gehoeren zum alten Konto
+        vorab.jf = {};
+        filmIndex.laedt = null;
+        filmIndex.fertig = false;
+      }
       if (jf.angemeldet()) laden();
       else anmelden();
     };

@@ -29,3 +29,13 @@ Verweise auf denselben Ordner):
   Standardspur der Datei, spielt der Film als HLS über Jellyfin auf dem Pi: Bild nur umverpackt, Ton → AC3 5.1.
   Geht direkt etwas schief, wird automatisch auf den Pi gewechselt (und umgekehrt).
 - `?person=`, `?leicht=1/0`, `?ha=` überschreiben das zum Testen.
+
+## Schneller Start, kein Intro (seit 16.11.2026)
+
+- Das Start-Intro ist entfernt (Wunsch Lukas: nervt auf Dauer, lauter Ton). Die Datei `/share/kino/intro.mp4` wird nicht mehr geladen.
+- Beim Start gehen alle Anfragen der Startseite sofort gleichzeitig los (`vorabStarten` in `app.js`: Bibliotheken, Weiterschauen,
+  Neu, Kategorien, Film-Index, `bewertungen.json`, `plexfilme.json`) statt nacheinander. Der Ablauf danach ist unverändert –
+  er bekommt nur Antworten, die schon unterwegs sind (einmalig, höchstens 15 s alt; ging eine schief, fragt er normal neu).
+  „Empfohlen“ wird im Hintergrund berechnet, der Start wartet nicht mehr darauf.
+- Gemessen im Browser mit nachgestelltem Jellyfin (150 ms je Antwort): Startseite nach 1,11 s → 0,44 s. Aussehen unverändert.
+- Eingespielt mit `werkzeuge/kino_web_patch_1611.py ORDNER` (läuft gleich im Repo und auf dem Pi, vergleicht sich über Prüfsummen).
