@@ -363,6 +363,33 @@ def tmdb_api(pfad, params=None):
     return None
 
 
+def per_laufzeit(e, kand, dcache):
+    """Zweiter Blick für unsichere Filme: Kandidaten mit genau gleichem Namen (deutsch oder Original), Jahr gleich, ±1
+    oder unbekannt – und die Laufzeit der Datei passt zu TMDB (höchstens 8 Min. bzw. 8 % daneben). Passt genau einer,
+    ist es sicher. Gibt es im genauen Jahr einen anderen Kandidaten, wird nicht geraten."""
+    q = e.get("q") or {}
+    m = q.get("min") or 0
+    if m < 40 or q.get("kaputt"):
+        return None, None
+    name, jahr = e.get("vorschlag") or "", e.get("vorschlag_jahr")
+    nn = normal(name)
+    exakt = [x for x in kand if x.get("tmdb") and (normal(x.get("name")) == nn or (x.get("original") and normal(x["original"]) == nn))]
+    if jahr:
+        if any(x.get("jahr") == jahr for x in kand if x not in exakt):
+            return None, None
+        exakt = [x for x in exakt if not x.get("jahr") or abs(x["jahr"] - jahr) <= 1]
+    passt = []
+    for x in exakt[:4]:
+        info = tmdb_film(x["tmdb"], dcache) or {}
+        lz = info.get("min") or 0
+        if lz >= 40 and abs(lz - m) <= max(8, 0.08 * lz):
+            passt.append((x, lz))
+    if len(passt) == 1:
+        x, lz = passt[0]
+        return x, "Name passt und Laufzeit passt (%d Min., TMDB %d Min.)" % (m, lz)
+    return None, None
+
+
 def tmdb_jahr(rd):
     rd = rd or ""
     return int(rd[:4]) if rd[:4].isdigit() else None
@@ -1193,6 +1220,7 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
 
     # 3) Filme bei TMDB erkennen (über Jellyfin, gecacht)
     filmliste = [e for e in plan if e["art"] == "film"]
+    dcache_lz = lade(os.path.join(d, "tmdb_details.json"), {})
     for i, e in enumerate(filmliste):
         mid = ID_IM_NAMEN.search(e["pfad"])
         if mid:
@@ -1210,6 +1238,10 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
             t2, s2, g2, k2 = tmdb_treffer(e["alt"][0], e["alt"][1], tcache)
             if s2:
                 t, sicher, grund, kand = t2, s2, "über den anderen Namen erkannt (%s): %s" % (e["alt"][0], g2), k2
+        if not sicher and kand and tmdb_schluessel():
+            t3, g3 = per_laufzeit(e, kand, dcache_lz)
+            if t3:
+                t, sicher, grund = t3, True, g3
         e["kandidaten"] = ["%s (%s) tmdb:%s" % (x.get("name"), x.get("jahr"), x.get("tmdb")) for x in kand[:3]]
         if t:
             e.update(titel=t.get("name"), jahr=t.get("jahr"), tmdb=t.get("tmdb"), imdb=None if t.get("tmdb") else t.get("imdb"))
@@ -1220,6 +1252,7 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
             fortschritt("TMDB %d/%d" % (i, len(filmliste)))
             speichere(os.path.join(d, "tmdb_cache.json"), tcache)
     speichere(os.path.join(d, "tmdb_cache.json"), tcache)
+    speichere(os.path.join(d, "tmdb_details.json"), dcache_lz)
 
     # 4) Entscheidungen von Claude/Lukas (nach Pfad gespeichert)
     for e in plan:
