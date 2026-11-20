@@ -326,6 +326,10 @@ def tmdb_schluessel():
     return _TMDB[0]
 
 
+TMDB_PRO_SEKUNDE = 20  # TMDB lässt ca. 40 Anfragen pro Sekunde zu (Stand 2026) – wir bleiben bei der Hälfte
+_TMDB_LETZTE = [0.0]
+
+
 def tmdb_api(pfad, params=None):
     """GET auf api.themoviedb.org/3 mit dem eigenen Schlüssel. {} = gibt es nicht (404), None = gerade nicht erreichbar.
     Der Schlüssel taucht in keiner Meldung auf."""
@@ -340,6 +344,10 @@ def tmdb_api(pfad, params=None):
         params["api_key"] = key
     url = "https://api.themoviedb.org/3" + pfad + "?" + urllib.parse.urlencode(params)
     for versuch in range(4):
+        warte = _TMDB_LETZTE[0] + 1.0 / TMDB_PRO_SEKUNDE - time.time()
+        if warte > 0:
+            time.sleep(warte)
+        _TMDB_LETZTE[0] = time.time()
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=20) as r:
                 return json.load(r)
@@ -348,7 +356,8 @@ def tmdb_api(pfad, params=None):
                 return {}
             if x.code == 401:
                 sys.exit("TMDB-Schlüssel wird abgelehnt (401) – tmdb_schluessel.txt prüfen")
-            time.sleep(2 + 3 * versuch)  # 429 = zu schnell
+            nach = (x.headers or {}).get("Retry-After") if x.code == 429 else None  # 429 = zu schnell
+            time.sleep(int(nach) if nach and str(nach).isdigit() else 2 + 3 * versuch)
         except Exception:
             time.sleep(2 + 3 * versuch)
     return None
@@ -763,52 +772,83 @@ def gb_pro_stunde(q):
     return (q.get("bytes") or 0) / 1e9 / (m / 60.0) if m > 0 else 0
 
 
+# Review-Ordner (Wunsch Lukas 20.11.): alles, was nicht sicher gut ist, nach Grund sortiert – Nummer = Wichtigkeit
+REVIEW_KAT = {"kaputt": "1 Kaputt oder unvollständig", "kino": "2 Im Kino abgefilmt", "tv": "3 TV-Aufnahme",
+              "schlecht": "4 Schlechte Qualität", "vielleicht": "5 Vielleicht schlechte Qualität",
+              "ungeprueft": "5 Vielleicht schlechte Qualität", "disc": "6 DVD und Blu-ray (umwandeln)",
+              "serie": "7 Serien (kommen später)"}
+SENDER = re.compile(r"(?i)(?:^|[^a-z0-9])(kabel ?(?:1|eins)|pro ?7|prosieben|sat ?\.? ?1|rtl ?(?:2|zwei|nitro|up)?|vox|zdf(?:neo)?|"
+                    r"das ?erste|ard|arte|3sat|tele ?5|sixx|super ?rtl|dmax|servus ?tv|orf ?[123]?|srf ?[12]?|kika|"
+                    r"hdtv|dvb-?[ct]2?|tv-?aufnahme|aufnahme)(?=[^a-z0-9]|$)")
+
+
 def ampel(e):
-    """(Farbe, Gründe) – rot = wirklich schlecht/kaputt, gelb = ansehen, gruen = ok, grau = nicht gemessen."""
+    """(Farbe, Gründe) – rot = wirklich schlecht/kaputt, gelb = ansehen, gruen = ok, grau = nicht gemessen.
+    Setzt außerdem e["review_kat"] = wichtigster Grund (für den Review-Ordner)."""
     q = e.get("q") or {}
-    rot, gelb = [], []
+    rot, gelb = [], []  # Einträge: (Kategorie, Text)
     if q.get("kaputt"):
-        rot.append("lässt sich nicht lesen (%s)" % (q.get("fehler") or "?")[:80])
+        rot.append(("kaputt", "lässt sich nicht lesen (%s)" % (q.get("fehler") or "?")[:80]))
     ende = str(q.get("ende") or "")
     if ende.startswith("kaputt"):
-        rot.append("Ende fehlt – Datei vermutlich unvollständig")
+        rot.append(("kaputt", "Ende fehlt – Datei vermutlich unvollständig"))
     elif ende.startswith("fehler"):
-        gelb.append("Fehler beim Abspielen am Ende")
+        gelb.append(("kaputt", "Fehler beim Abspielen am Ende"))
     name = os.path.splitext(" / ".join(e["pfad"].split(os.sep)[-2:]))[0]
     m = ROT_NAME.search(name)
     if m:
-        rot.append("im Kino abgefilmt? („%s“ im Namen)" % m.group(1))
+        rot.append(("kino", "im Kino abgefilmt? („%s“ im Namen)" % m.group(1)))
     else:
         m = GELB_NAME.search(name)
         if m:
-            gelb.append("%s („%s“ im Namen)" % (GELB_TEXT.get(m.group(1).lower(), "Vorab-Fassung?"), m.group(1)))
+            gelb.append(("kino", "%s („%s“ im Namen)" % (GELB_TEXT.get(m.group(1).lower(), "Vorab-Fassung?"), m.group(1))))
+    # Sendernamen nur außerhalb des Filmtitels suchen („Vox Lux“ ist ein Film, keine VOX-Aufnahme)
+    probe = " %s " % re.sub(r"[._\-()\[\]]+", " ", name.lower())
+    for t_ in (e.get("titel"), e.get("vorschlag")):
+        t_ = re.sub(r"[._\-()\[\]:]+", " ", (t_ or "").lower()).strip()
+        if len(t_) > 2:
+            probe = probe.replace(" %s " % t_, "  ")
+    m = SENDER.search(probe)
+    if m or e["pfad"].lower().endswith((".ts", ".m2t", ".rec")):
+        gelb.append(("tv", "vom Fernsehen aufgenommen? („%s“)" % (m.group(1) if m else os.path.splitext(e["pfad"])[1])))
     k = klasse(q)
     if k == 360:
-        rot.append("sehr niedrige Auflösung")
+        rot.append(("schlecht", "sehr niedrige Auflösung"))
     elif k == 576:
-        gelb.append("nur DVD-/SD-Auflösung")
+        gelb.append(("vielleicht", "nur DVD-/SD-Auflösung"))
     codec = (q.get("codec") or "").lower()
     if codec in ALT_CODEC:
-        gelb.append("alter Codec (%s, z. B. XviD/DivX)" % codec)
+        gelb.append(("vielleicht", "alter Codec (%s, z. B. XviD/DivX)" % codec))
     gbh = gb_pro_stunde(q)
     if gbh and k and not q.get("kaputt"):
         g, r = GRENZEN[k]
         f = 0.6 if codec in SPARSAM_CODEC else 1.0
         if gbh < r * f:
-            rot.append("sehr stark komprimiert (%s GB pro Stunde)" % zahl(gbh))
+            rot.append(("schlecht", "sehr stark komprimiert (%s GB pro Stunde)" % zahl(gbh)))
         elif gbh < g * f:
-            gelb.append("stark komprimiert (%s GB pro Stunde)" % zahl(gbh))
+            gelb.append(("vielleicht", "stark komprimiert (%s GB pro Stunde)" % zahl(gbh)))
     tm = e.get("tmdb_min") or 0
     if e.get("art") == "film" and q.get("min") and not q.get("kaputt"):
         if tm >= 40:
             if q["min"] < 0.7 * tm:
-                rot.append("nur %d von %d Min. – unvollständig oder falscher Film?" % (q["min"], tm))
+                rot.append(("kaputt", "nur %d von %d Min. – unvollständig oder falscher Film?" % (q["min"], tm)))
             elif q["min"] < 0.88 * tm:
-                gelb.append("%d von %d Min. – gekürzt oder unvollständig?" % (q["min"], tm))
+                gelb.append(("kaputt", "%d von %d Min. – gekürzt oder unvollständig?" % (q["min"], tm)))
+            elif q["min"] > tm + max(12, 0.12 * tm):
+                gelb.append(("tv", "%d statt %d Min. – Fernsehaufnahme mit Werbung/Vorlauf? (oder Extended)" % (q["min"], tm)))
         elif q["min"] < 50:
-            gelb.append("nur %d Min. – Ausschnitt oder unvollständig?" % q["min"])
+            gelb.append(("kaputt", "nur %d Min. – Ausschnitt oder unvollständig?" % q["min"]))
     farbe = "rot" if rot else "gelb" if gelb else ("gruen" if q.get("quelle") == "ffprobe" else "grau")
-    return farbe, rot + gelb
+    # Ordner nach dem schwersten Grund: erst rote Gründe, sonst gelbe – bei gelb schlägt „TV-Aufnahme“ alles andere
+    # (eine Fernsehaufnahme ist oft gekürzt, das ist dann kein Defekt)
+    if rot:
+        e["review_kat"] = min((k_ for k_, _ in rot), key=list(REVIEW_KAT).index)
+    elif gelb:
+        reihe = ["tv", "kino", "kaputt", "schlecht", "vielleicht"]
+        e["review_kat"] = min((k_ for k_, _ in gelb), key=reihe.index)
+    else:
+        e["review_kat"] = "ungeprueft" if farbe == "grau" else None
+    return farbe, [t for _, t in rot + gelb]
 
 
 def q_text(q):
@@ -909,8 +949,13 @@ def per_id(art, wert, cache):
 
 def entscheidung_anwenden(e, aktion, cache):
     """Eine Entscheidung (von Claude/Lukas) auf einen Plan-Eintrag anwenden."""
-    a, _, rest = aktion.partition(":")
     e["entschieden"] = aktion
+    if aktion.endswith("!") or aktion == "gut":
+        e["qualitaet_ok"] = True  # Lukas: trotzdem in „Lukas Filme geordnet“
+        aktion = aktion.rstrip("!")
+        if aktion in ("gut", ""):
+            return
+    a, _, rest = aktion.partition(":")
     e["sicher"] = True
     if a in ("tmdb", "imdb"):
         art = "Tmdb" if a == "tmdb" else "Imdb"
@@ -941,6 +986,8 @@ def entscheidung_anwenden(e, aktion, cache):
 
 
 ZIELORDNER = None  # --ziel="Lukas Filme geordnet": Filme flach dorthin, Filmreihen als Unterordner (Wunsch Lukas 20.11.)
+REVIEWORDNER = None  # --review="Lukas Filme nochmal drüber schauen": alles, was nicht sicher gut ist, nach Grund sortiert
+REVIEW_STANDARD = "Lukas Filme nochmal drüber schauen"
 
 
 def reihe_name(n):
@@ -975,6 +1022,18 @@ def ziel_setzen(e):
             e["ziel"] = os.path.join(ZIELORDNER, r, ohne_strich(name, r) + teil + ext)
         else:
             e["ziel"] = os.path.join(ZIELORDNER, name + teil + ext)
+    elif a == "review" and REVIEWORDNER:
+        basis = os.path.join(REVIEWORDNER, e["review"])
+        if e.get("disc"):  # ganze DVD/Blu-ray bleibt zusammen: <Review>/6 …/<Disc-Name>/<Rest wie vorher>
+            e["ziel"] = os.path.join(basis, e["disc_name"], rel[len(e["disc"]) + 1:])
+        elif e["art"] == "disc":
+            e["ziel"] = os.path.join(basis, os.path.basename(rel))
+        elif e["art"] == "folge" and e.get("serie"):
+            e["ziel"] = os.path.join(basis, sauber(e["serie"]), "Staffel %02d" % (e.get("staffel") or 1), os.path.basename(rel))
+        elif e["art"] == "film" and e.get("sicher") and e.get("titel"):
+            e["ziel"] = os.path.join(basis, film_name(e) + teil + ext)
+        else:
+            e["ziel"] = os.path.join(basis, rel)
     elif a == "film":
         o = film_ordner(e.get("titel"), e.get("jahr"), e.get("tmdb"), e.get("imdb"))
         e["ziel"] = os.path.join(k, "Filme", o, o + teil + ext)
@@ -994,12 +1053,14 @@ def ziel_setzen(e):
         e["ziel"] = None
 
 
-def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), mit_musik=False, ziel=None, mit_serien=False):
+def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), mit_musik=False, ziel=None, mit_serien=False,
+               review=None):
     """OHNE = Ordner, die gar nicht betreten werden (Musik-Ordner aus bereiche.json). Ohne MIT_MUSIK bleibt jede
     Musik-Datei liegen (Runde 1 = nur Filme). ZIEL = Ordner auf der Platte für die fertigen Filme (Runde 1:
     nur Filme dorthin; Serien, DVD-Abbilder und rote Filme bleiben liegen, nur erzwungene Untertitel gehen mit)."""
-    global ZIELORDNER
+    global ZIELORDNER, REVIEWORDNER
     ZIELORDNER = ziel or None
+    REVIEWORDNER = (review or REVIEW_STANDARD) if ZIELORDNER else None
     d = sdir(quelle)
     del NICHT_LESBAR[:]
     tcache = lade(os.path.join(d, "tmdb_cache.json"), {})
@@ -1024,6 +1085,28 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
     for e in plan:
         ordner_inhalt.setdefault(os.path.dirname(e["pfad"]), set()).add(e["art"])
 
+    # DVD-/Blu-ray-Strukturen: ALLE Dateien darin gehören zusammen (VOB, IFO, BUP, BDMV …) – nie auseinanderreißen
+    disc_wurzel = set()
+    for e in plan:
+        teile = e["pfad"].split(os.sep)
+        gross = [t.upper() for t in teile[:-1]]
+        marke = next((m for m in ("VIDEO_TS", "BDMV", "AUDIO_TS", "CERTIFICATE") if m in gross), None)
+        if marke and gross.index(marke) > 0:
+            disc_wurzel.add(os.sep.join(teile[:gross.index(marke)]))
+        elif teile[-1].lower().endswith((".ifo", ".vob", ".bup")) and len(teile) > 1:
+            disc_wurzel.add(os.sep.join(teile[:-1]))
+    disc_name, schon = {}, {}
+    for w in sorted(disc_wurzel):
+        n = sauber(os.path.basename(w)) or "Disc"
+        schon[n.lower()] = schon.get(n.lower(), 0) + 1
+        disc_name[w] = n if schon[n.lower()] == 1 else "%s (%d)" % (n, schon[n.lower()])
+
+    def disc_von(rel):
+        for w in disc_wurzel:
+            if rel.startswith(w + os.sep):
+                return w
+        return None
+
     # wie viele echte Filme (ohne Samples/Extras) liegen in jedem Ordner?
     filmordner = {}
     for e in plan:
@@ -1038,6 +1121,11 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
         teile = rel.split(os.sep)
         stem = os.path.splitext(teile[-1])[0]
         e["sicher"] = True
+        w = disc_von(rel) if disc_wurzel else None
+        if w:
+            e.update(art="disc", aktion="lassen", sicher=False, disc=w, disc_name=disc_name[w],
+                     grund="DVD-/Blu-ray-Abbild – umwandeln")
+            continue
         if a == "video":
             extra = next((o for o in teile[:-1] if EXTRA_ORDNER.match(o)), None)
             if extra or (re.search(r"(?i)\bsample\b", stem) and g < 400e6) or (re.search(r"(?i)\btrailer\b", stem) and g < 600e6):
@@ -1140,9 +1228,9 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
                 fortschritt("TMDB-Details %d/%d" % (i, len(mit_id)))
                 speichere(os.path.join(d, "tmdb_details.json"), dcache)
         speichere(os.path.join(d, "tmdb_details.json"), dcache)
-        for e in plan:
-            if e["art"] == "film":
-                e["ampel"], e["probleme"] = ampel(e)
+    for e in plan:
+        if e["art"] in ("film", "folge"):
+            e["ampel"], e["probleme"] = ampel(e)
 
     # 5) Doppelte: a) exakt gleiche Dateien (gleiche Größe, dann Prüfsumme)
     nach_groesse = {}
@@ -1212,13 +1300,18 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
                 e["besser_als"] = bester[0]
                 besser.append(e)
 
-    # 5d) Runde 1 mit Zielordner: nur Filme. Serien, rote Filme (abgefilmt/kaputt) bleiben liegen – kommen später
+    # 5d) Runde 1 mit Zielordner: in „Lukas Filme geordnet“ kommen nur sicher gute Filme (Ampel grün). Alles andere
+    #     kommt in den Review-Ordner, sortiert nach dem wichtigsten Grund (Wunsch Lukas 20.11. 23:46).
     if ZIELORDNER:
         for e in plan:
             if e["aktion"] == "serie" and not mit_serien:
-                e.update(aktion="lassen", grund="Serie – kommt später (Runde 1 nur Filme)")
-            elif e["aktion"] == "film" and e.get("ampel") == "rot" and not e.get("entschieden"):
-                e.update(aktion="lassen", grund="Qualität rot – kommt später: " + "; ".join(e.get("probleme") or []))
+                e.update(aktion="review", review=REVIEW_KAT["serie"], grund="Serie – kommt später (Runde 1 nur Filme)")
+            elif e["art"] == "disc" and e["aktion"] == "lassen":
+                e.update(aktion="review", review=REVIEW_KAT["disc"], sicher=True,
+                         grund="DVD-/Blu-ray-Abbild – erst umwandeln (verlustfrei in eine MKV)")
+            elif e["aktion"] == "film" and e.get("sicher") and e.get("ampel") != "gruen" and not e.get("qualitaet_ok"):
+                kat = e.get("review_kat") or "vielleicht"
+                e.update(aktion="review", review=REVIEW_KAT[kat], grund="; ".join(e.get("probleme") or []) or "nicht gemessen")
 
     # 6) Untertitel folgen ihrem Film/ihrer Folge (gleicher Name oder einziges Video im Ordner bzw. im Ordner darüber)
     videos_im = {}
@@ -1262,7 +1355,7 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
             continue
         v = nach_nr[e["gehoert_zu"]]
         e["aktion"], e["sicher"] = v["aktion"], v.get("sicher")
-        if v.get("ziel") and v["aktion"] in ("film", "serie"):
+        if v.get("ziel") and v["aktion"] in ("film", "serie", "review"):
             vz = v["ziel"]
             e["ziel"] = os.path.join(os.path.dirname(vz), os.path.splitext(os.path.basename(vz))[0] + e["untertitel_zusatz"] +
                                      os.path.splitext(e["pfad"])[1].lower())
@@ -1294,8 +1387,8 @@ def zahl(x, stellen=1):
 
 def qualitaet_schreiben(d, plan):
     """qualitaet.tsv (alle Filme und Folgen, schlechteste zuerst) und die Überblicks-Zeilen für Bericht und Ausgabe."""
-    filme_l = [e for e in plan if e["art"] == "film" and e["aktion"] == "film"]
-    folgen_l = [e for e in plan if e["art"] == "folge" and e["aktion"] == "serie"]
+    filme_l = [e for e in plan if e["art"] == "film" and e["aktion"] in ("film", "review")]
+    folgen_l = [e for e in plan if e["art"] == "folge" and e["aktion"] in ("serie", "review")]
     doppelt_l = [e for e in plan if e["art"] in ("film", "folge") and e["aktion"] == "doppelt"]
     amp = {"rot": [], "gelb": [], "gruen": [], "grau": []}
     for e in filme_l + folgen_l:
@@ -1311,15 +1404,18 @@ def qualitaet_schreiben(d, plan):
                 e["nr"], e.get("ampel") or "grau", filmname(e), {2160: "4K", 576: "SD", 360: "<SD", 0: "?"}.get(k, "%dp" % k),
                 q.get("codec") or "", "ja" if q.get("hdr") else "", "ja" if q.get("deutsch") else "nein",
                 q.get("kanaele") or "", zahl(e["bytes"] / 1e9), zahl(q.get("min") or 0, 0), zahl(gb_pro_stunde(q)),
-                e["aktion"], "ja" if e.get("sicher") else "nein", "; ".join(e.get("probleme") or []), e["pfad"])) + "\n")
+                e["aktion"] + (" → " + e["review"] if e.get("review") else ""), "ja" if e.get("sicher") else "nein",
+                "; ".join(e.get("probleme") or []), e["pfad"])) + "\n")
     kl = {}
     for e in filme_l:
         k = klasse(e.get("q") or {})
         kl[k] = kl.get(k, 0) + 1
     gemessen = [e for e in filme_l if (e.get("q") or {}).get("quelle") == "ffprobe" and not (e.get("q") or {}).get("kaputt")]
     zeilen = [
-        "Filme: %d (%s TB), davon noch unsicher: %d" % (len(filme_l), zahl(sum(e["bytes"] for e in filme_l) / 1e12),
-                                                     len([e for e in filme_l if not e.get("sicher")])),
+        "Filme: %d (%s TB) – sicher gut: %d · zum Drüberschauen: %d · noch unsicher, welcher Film: %d" % (
+            len(filme_l), zahl(sum(e["bytes"] for e in filme_l) / 1e12),
+            len([e for e in filme_l if e["aktion"] == "film" and e.get("sicher")]),
+            len([e for e in filme_l if e["aktion"] == "review"]), len([e for e in filme_l if not e.get("sicher")])),
         "Auflösung: 4K %d · 1080p %d · 720p %d · SD %d · darunter %d · unbekannt %d" % (
             kl.get(2160, 0), kl.get(1080, 0), kl.get(720, 0), kl.get(576, 0), kl.get(360, 0), kl.get(0, 0)),
         "Ohne deutschen Ton (gemessen): %d · mit HDR: %d" % (
@@ -1340,13 +1436,19 @@ def qualitaet_schreiben(d, plan):
             zeilen.append("Filmreihen (eigene Ordner in %s): %d mit %d Filmen" % (ZIELORDNER, len(reihen), sum(len(v) for v in reihen.values())))
         else:
             zeilen.append("Filmreihen: noch nicht erkannt – dafür fehlt tmdb_schluessel.txt neben dem Skript (Filme landen sonst alle flach)")
-        liegen = {}
+        rv, discs = {}, set()
         for e in plan:
-            if e["art"] in ("film", "folge", "disc") and e["aktion"] == "lassen":
-                g_ = "Serien-Folgen" if e["art"] == "folge" else "DVD/Blu-ray-Abbilder" if e["art"] == "disc" else "rote Filme (abgefilmt/kaputt)"
-                liegen[g_] = liegen.get(g_, 0) + 1
-        if liegen:
-            zeilen.append("Bleibt in Runde 1 liegen: " + " · ".join("%s %d" % kv for kv in sorted(liegen.items())))
+            if e["aktion"] != "review":
+                continue
+            if e.get("disc"):
+                if e["disc"] in discs:
+                    continue
+                discs.add(e["disc"])
+            elif e["art"] not in ("film", "folge", "disc"):
+                continue
+            rv[e["review"]] = rv.get(e["review"], 0) + 1
+        if rv:
+            zeilen.append("Nach „%s“: " % REVIEWORDNER + " · ".join("%s: %d" % kv for kv in sorted(rv.items())))
     musik = [e for e in plan if e["art"] == "audio"]
     if musik:
         zeilen.append("Musik-Dateien außerhalb der Musik-Ordner: %d (%s GB) – %s" % (
@@ -1461,6 +1563,7 @@ def lauf_optionen(quelle, neu=False):
         o = {"ohne_tmdb": "--ohne-tmdb" in sys.argv, "ohne_bib": "--ohne-bibliothek" in sys.argv,
              "mit_musik": "--mit-musik" in sys.argv, "mit_serien": "--mit-serien" in sys.argv,
              "ziel": (opt("ziel") or "").strip().strip('"').strip("/\\") or None,
+             "review": (opt("review") or "").strip().strip('"').strip("/\\") or None,
              "ohne_extra": [x.strip().strip('"') for x in (opt("ohne") or "").split(";") if x.strip()]}
         speichere(pfad, o)
     else:
@@ -1470,9 +1573,10 @@ def lauf_optionen(quelle, neu=False):
     if not o.get("mit_musik"):
         ohne += musik_ordner(quelle)
     if o.get("ziel"):
-        ohne.append(o["ziel"])  # schon Sortiertes nie wieder anfassen
+        ohne += [o["ziel"], o.get("review") or REVIEW_STANDARD]  # schon Sortiertes nie wieder anfassen
     return {"ohne_tmdb": bool(o.get("ohne_tmdb")), "ohne_bib": bool(o.get("ohne_bib")), "ohne": ohne,
-            "mit_musik": bool(o.get("mit_musik")), "ziel": o.get("ziel"), "mit_serien": bool(o.get("mit_serien"))}
+            "mit_musik": bool(o.get("mit_musik")), "ziel": o.get("ziel"), "mit_serien": bool(o.get("mit_serien")),
+            "review": o.get("review")}
 
 
 def cmd_karte(a):
@@ -1620,7 +1724,7 @@ def cmd_endtest(a):
         sys.exit("ffmpeg fehlt")
     icache = lade(os.path.join(d, "info_cache.json"), {})
     alle, neu_ = "--alle" in sys.argv, "--neu" in sys.argv
-    jobs = [e for e in plan if e["art"] in ("film", "folge") and (alle or e["aktion"] in ("film", "serie"))]
+    jobs = [e for e in plan if e["art"] in ("film", "folge") and (alle or e["aktion"] in ("film", "serie", "review"))]
     geprueft = kaputt = fehler = 0
     t0 = time.time()
     for i, e in enumerate(jobs):
@@ -1721,7 +1825,8 @@ def cmd_ausfuehren(a):
     plan = lade(os.path.join(d, "plan.json"), None)
     if not plan:
         sys.exit("erst pruefen laufen lassen")
-    jobs = [e for e in plan if e.get("sicher") and e.get("ziel") and e["aktion"] in ("film", "serie", "musik", "doppelt", "beiseite")]
+    jobs = [e for e in plan if e.get("sicher") and e.get("ziel")
+            and e["aktion"] in ("film", "serie", "musik", "doppelt", "beiseite", "review")]
     fehlt, besetzt, ok = [], [], []
     for e in jobs:
         src, dst = os.path.join(quelle, e["pfad"]), os.path.join(quelle, e["ziel"])
@@ -1731,6 +1836,11 @@ def cmd_ausfuehren(a):
             besetzt.append(e)
         else:
             ok.append(e)
+    # eine DVD/Blu-ray wird nur ganz oder gar nicht verschoben
+    kaputte_gruppen = {e.get("disc") for e in fehlt + besetzt if e.get("disc")}
+    if kaputte_gruppen:
+        ok = [e for e in ok if e.get("disc") not in kaputte_gruppen]
+        print("DVD/Blu-ray bleibt ganz liegen (eine Datei fehlt oder Ziel besetzt): %d" % len(kaputte_gruppen))
     zaehl = {}
     for e in ok:
         z = zaehl.setdefault(e["aktion"], [0, 0])
@@ -1742,7 +1852,7 @@ def cmd_ausfuehren(a):
     if fehlt:
         print("Quelle fehlt inzwischen: %d" % len(fehlt))
     if not o["los"]:
-        for e in ok[:12]:
+        for e in ok[:int(opt("zeigen", "12"))]:
             print("  %s\n    -> %s" % (e["pfad"], e["ziel"]))
         print("(nur Vorschau – mit --los ausführen)")
         return

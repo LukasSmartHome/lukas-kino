@@ -52,6 +52,14 @@ v3.1 (20.11.2026 nachts, nach Lukas' Rundgang über die echte Platte – Filme4 
   the West german“); findet TMDB den einen Namen nicht sicher, wird der andere probiert.
 - Bei Doppelten verliert eine abgefilmte Fassung immer gegen eine ordentliche.
 
+v3.2 (20.11.2026 23:55, Wunsch Lukas): **Nur sicher gute Filme (Ampel grün) kommen nach „Lukas Filme geordnet“.**
+Alles andere landet in **„Lukas Filme nochmal drüber schauen“** (`--review=` ändert den Namen), sortiert nach dem
+wichtigsten Grund: `1 Kaputt oder unvollständig`, `2 Im Kino abgefilmt`, `3 TV-Aufnahme` (Sendername im Namen, .ts,
+deutlich länger als bei TMDB), `4 Schlechte Qualität`, `5 Vielleicht schlechte Qualität`, `6 DVD und Blu-ray (umwandeln)`
+(ganze Disc bleibt zusammen, wird nur ganz oder gar nicht verschoben), `7 Serien (kommen später)`. Erkannte Filme heißen
+dort schon `Titel (Jahr)`. Entscheidung `NR=gut` oder `NR=tmdb:…!` = trotzdem nach „Lukas Filme geordnet“.
+TMDB-Anfragen höchstens 20 pro Sekunde (TMDB erlaubt ca. 40), bei 429 wird gewartet.
+
 Ablauf am PC (Platte z. B. `E:`; Pfad immer als `E:/` schreiben, `"E:\"` verschluckt das Anführungszeichen):
 
 | Schritt | Befehl | Dauer (ca. 1.500 Filme) |
