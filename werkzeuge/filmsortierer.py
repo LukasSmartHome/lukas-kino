@@ -563,6 +563,20 @@ def art_grob(rel):
     return "sonst"
 
 
+HIER = os.path.dirname(os.path.abspath(__file__))  # Ordner des Skripts (am PC C:\Kino) – dort liegt ein Spiegel des Stands
+
+
+def melde(d, text):
+    """Stand in Kino/_sortierer/fortschritt.txt UND neben dem Skript (status.txt) – so kann Claude ihn über die
+    Desktop-App lesen, ohne die Film-Platte anzufassen."""
+    zeile = time.strftime("%Y-%m-%d %H:%M:%S ") + text + "\n"
+    for p_ in (os.path.join(d, "fortschritt.txt"), os.path.join(HIER, "status.txt")):
+        try:
+            open(p_, "w", encoding="utf-8").write(zeile)
+        except OSError:
+            pass
+
+
 NICHT_LESBAR = []  # (Pfad, Fehler) – Ordner/Dateien, die nicht gelesen werden konnten; wird immer gemeldet
 
 
@@ -1072,10 +1086,7 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
     plan = []
 
     def fortschritt(t):
-        try:
-            open(os.path.join(d, "fortschritt.txt"), "w", encoding="utf-8").write(time.strftime("%H:%M:%S ") + t + "\n")
-        except OSError:
-            pass
+        melde(d, t)
 
     fortschritt("Liste der Dateien …")
     for rel, g, mt in dateien(quelle, ohne=ohne):
@@ -1537,6 +1548,16 @@ def zusammenfassung(quelle, plan):
     print("Bericht für Lukas:", os.path.join(d, "bericht.md"))
     print("Unsichere für Claude:", os.path.join(d, "unsicher.tsv"), "(%d)" % len(unsicher))
     print("Weiter: entscheiden QUELLE NR=tmdb:… | dann ausfuehren QUELLE (Vorschau) | dann ausfuehren QUELLE --los")
+    # Spiegel der Berichte neben dem Skript (am PC C:\Kino\bericht) – für Claude lesbar, ohne die Platte anzufassen
+    ziel_ = os.path.join(HIER, "bericht")
+    try:
+        os.makedirs(ziel_, exist_ok=True)
+        for n_ in ("bericht.md", "unsicher.tsv", "qualitaet.tsv"):
+            if os.path.exists(os.path.join(d, n_)):
+                shutil.copyfile(os.path.join(d, n_), os.path.join(ziel_, n_))
+    except OSError:
+        pass
+    melde(d, "Plan fertig: %d Dateien, unsicher %d – Bericht liegt bereit" % (len(plan), len(unsicher)))
 
 
 FILM_MIN = 300e6  # Videos ab 300 MB zählen in der Karte als Film (kleiner = Clip, Sample, Musikvideo)
@@ -1605,8 +1626,7 @@ def cmd_karte(a):
                 z[i + 1] += g
             n += 1
             if n % 20000 == 0:
-                open(os.path.join(d, "fortschritt.txt"), "w", encoding="utf-8").write(
-                    time.strftime("%H:%M:%S ") + "karte: %d Dateien gelesen\n" % n)
+                melde(d, "karte: %d Dateien gelesen" % n)
 
     def art_von(z):
         if ist_musik(z):
@@ -1631,7 +1651,7 @@ def cmd_karte(a):
             z = agg[k]
             f.write("%s\t%d\t%d\t%s\t%d\t%d\t%s\t%d\t%s\t%s\n" % (k or ".", t, z[0], zahl(z[1] / 1e9), z[2], z[4],
                                                                zahl(z[5] / 1e9), z[6], zahl((z[1] + z[3] + z[5] + z[7]) / 1e9), art_von(z)))
-    open(os.path.join(d, "fortschritt.txt"), "w", encoding="utf-8").write(time.strftime("%H:%M:%S ") + "karte fertig\n")
+    melde(d, "karte fertig: %d Dateien" % n)
     m = musik_ordner(quelle)
     print("Bestand gesichert: %s (%d Dateien, %s GB, %d s)" % (name, n, gb(sum(ges[1::2])), time.time() - t0))
     print("Ganze Platte: Filme (Videos ab 300 MB) %d (%s GB) · kleine Videos %d (%s GB) · Musik %d (%s GB) · Sonstiges %d (%s GB)" % (
@@ -1741,8 +1761,7 @@ def cmd_endtest(a):
         if geprueft % 20 == 0:
             speichere(os.path.join(d, "info_cache.json"), icache, True)
             rest = (time.time() - t0) / geprueft * (len(jobs) - i - 1)
-            open(os.path.join(d, "fortschritt.txt"), "w", encoding="utf-8").write(
-                time.strftime("%H:%M:%S ") + "endtest %d/%d, noch ca. %d min, kaputt %d\n" % (i + 1, len(jobs), rest / 60, kaputt))
+            melde(d, "endtest %d/%d, noch ca. %d min, Ende fehlt bisher bei %d" % (i + 1, len(jobs), rest / 60, kaputt))
     speichere(os.path.join(d, "info_cache.json"), icache, True)
     print("Endtest: %d geprüft in %d min – Ende fehlt (kaputt): %d · Fehlermeldungen: %d" % (
         geprueft, (time.time() - t0) / 60, kaputt, fehler))
@@ -1888,7 +1907,7 @@ def cmd_ausfuehren(a):
                 fehler += 1
                 print("Fehler bei", e["pfad"], ":", x)
             if i % 200 == 0:
-                open(os.path.join(d, "fortschritt.txt"), "w", encoding="utf-8").write("ausfuehren %d/%d\n" % (i, len(ok)))
+                melde(d, "ausfuehren %d/%d" % (i, len(ok)))
     print("Fertig: %d erledigt (%d davon kopiert), %d Fehler. Protokoll: %s" % (n, kopiert, fehler, log))
     print("Rückgängig: zurueck-lauf QUELLE --los")
 

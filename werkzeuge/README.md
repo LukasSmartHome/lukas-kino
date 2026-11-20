@@ -202,3 +202,5 @@ laufen (Funken, Konfetti, Fledermäuse, Regen, Herzen …). Die Bilder bekommen 
 bester Qualität (`quality=96`, am TCL in voller Farbtiefe) – sonst sieht man in den Farbverläufen Streifen.
 Die Kategorie „Familie & Animation“ heißt seit 16.11.2026 „Kindheit“ (`--umbenennen` im Hochlade-Skript). Wer das Motiv verschiebt, muss dort die Lage nachziehen
 (Motiv im Bild: x = 1160 + 0,75 * Kern-x, y = -120 + 0,75 * Kern-y).
+
+Stand-Spiegel (v3.3): Jede Fortschrittsmeldung steht zusätzlich in `status.txt` neben dem Skript (am PC `C:\Kino\status.txt`), nach jedem Plan liegen `bericht.md`, `unsicher.tsv`, `qualitaet.tsv` als Kopie in `C:\Kino\bericht\`. So kann Claude den Stand über die Desktop-App lesen, ohne die Film-Platte anzufassen.
