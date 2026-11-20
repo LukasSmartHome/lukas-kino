@@ -1700,6 +1700,17 @@ def cmd_bereich(a):
     print("Musik-Ordner, die in Runde 1 übersprungen werden: %d" % len(musik_ordner(quelle)))
 
 
+def cmd_tmdbtest(a):
+    """Eine Probe-Anfrage an TMDB (Star Wars). Zeigt nie den Schlüssel."""
+    if not tmdb_schluessel():
+        sys.exit("FEHLER: keine tmdb_schluessel.txt neben dem Skript (%s)" % HIER)
+    d = tmdb_api("/movie/11", {"language": "de-DE"})
+    if not d:
+        sys.exit("FEHLER: TMDB antwortet nicht (Internet?)")
+    c = (d.get("belongs_to_collection") or {}).get("name")
+    print("TMDB ok: %s (%s), Filmreihe: %s" % (d.get("title"), (d.get("release_date") or "")[:4], reihe_name(c)))
+
+
 def cmd_pruefen(a):
     a, _ = optionen(a)
     quelle = os.path.abspath(a[0])
@@ -1710,6 +1721,7 @@ def cmd_pruefen(a):
         tipp = "" if os.path.exists(os.path.join(sdir(quelle), "bereiche.json")) else " (Tipp: vorher karte laufen lassen)"
         print("Runde 1 – nur Filme: %d Musik-Ordner werden übersprungen, Musik-Dateien bleiben liegen%s" % (
             len(musik_ordner(quelle)), tipp))
+    melde(sdir(quelle), "pruefen gestartet")
     plan = plan_bauen(quelle, ohne_ff="--ohne-ffprobe" in sys.argv, **lo)
     zusammenfassung(quelle, plan)
 
@@ -1909,6 +1921,7 @@ def cmd_ausfuehren(a):
             if i % 200 == 0:
                 melde(d, "ausfuehren %d/%d" % (i, len(ok)))
     print("Fertig: %d erledigt (%d davon kopiert), %d Fehler. Protokoll: %s" % (n, kopiert, fehler, log))
+    melde(d, "ausfuehren fertig: %d verschoben, %d Fehler" % (n, fehler))
     print("Rückgängig: zurueck-lauf QUELLE --los")
 
 
@@ -1977,7 +1990,7 @@ def cmd_kopieren(a):
         print("(nur Vorschau – mit --los ausführen)")
 
 
-BEFEHLE = {"karte": cmd_karte, "bestand": cmd_karte, "bereich": cmd_bereich, "endtest": cmd_endtest, "pruefen": cmd_pruefen, "entscheiden": cmd_entscheiden, "vorschau": cmd_vorschau,
+BEFEHLE = {"tmdbtest": cmd_tmdbtest, "karte": cmd_karte, "bestand": cmd_karte, "bereich": cmd_bereich, "endtest": cmd_endtest, "pruefen": cmd_pruefen, "entscheiden": cmd_entscheiden, "vorschau": cmd_vorschau,
            "ausfuehren": cmd_ausfuehren, "zurueck-lauf": cmd_zurueck_lauf, "kopieren": cmd_kopieren,
            "inventar": cmd_inventar, "offen": cmd_offen, "suche": cmd_suche, "bilder": cmd_bilder,
            "doppelte": cmd_doppelte, "umbenennen": cmd_umbenennen, "stapel": cmd_stapel, "scan": cmd_scan, "titel": cmd_titel, "zurueck": cmd_zurueck}
