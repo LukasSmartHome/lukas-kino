@@ -153,9 +153,28 @@ def aus_dateiname(pfad):
     return n.strip(" -"), jahr, kurz
 
 
+def kandidaten_tmdb(namen, jahr):
+    res, gesehen = [], set()
+    for n in namen:
+        p = {"query": n, "language": "de-DE", "include_adult": "false"}
+        if jahr:
+            p["year"] = jahr
+        d = tmdb_api("/search/movie", p)
+        if d is None:
+            return [{"fehler": "TMDB nicht erreichbar"}]
+        for r in (d or {}).get("results") or []:
+            if r.get("id") not in gesehen:
+                gesehen.add(r.get("id"))
+                res.append(r)
+    return [{"name": r.get("title"), "original": r.get("original_title"), "jahr": tmdb_jahr(r.get("release_date")),
+             "tmdb": str(r.get("id")), "imdb": None, "inhalt": (r.get("overview") or "")[:140]} for r in res[:6]]
+
+
 def kandidaten(name, jahr=None):
     namen = [name]
     umlaut = re.sub(r"ae", "ä", re.sub(r"oe", "ö", re.sub(r"ue", "ü", name)))
+    if tmdb_schluessel():
+        return kandidaten_tmdb(namen + ([umlaut] if umlaut != name else []), jahr)
     if umlaut != name:
         namen.append(umlaut)  # „Goettliche“ -> „Göttliche“
     res, gesehen = [], set()
@@ -288,6 +307,76 @@ def sauber(s):
     s = re.sub(r'[<>:"/\\|?*]', " ", s)
     s = re.sub(r"\s+", " ", s).strip(" .")
     return s
+
+
+_TMDB = []
+
+
+def tmdb_schluessel():
+    """Eigener TMDB-Schlüssel (v3-Key oder v4-Lesetoken) aus tmdb_schluessel.txt – Lukas legt die Datei selbst an.
+    Wird nie ausgegeben. Ohne Schlüssel gibt es keine Filmreihen und keinen Laufzeit-Vergleich, sonst läuft alles."""
+    if not _TMDB:
+        k = None
+        for p in (opt("tmdb-schluessel"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmdb_schluessel.txt"),
+                  "/config/tmdb_schluessel.txt", "/homeassistant/tmdb_schluessel.txt"):
+            if p and os.path.exists(p):
+                k = open(p, encoding="utf-8").read().strip().strip('"') or None
+                break
+        _TMDB.append(k)
+    return _TMDB[0]
+
+
+def tmdb_api(pfad, params=None):
+    """GET auf api.themoviedb.org/3 mit dem eigenen Schlüssel. {} = gibt es nicht (404), None = gerade nicht erreichbar.
+    Der Schlüssel taucht in keiner Meldung auf."""
+    key = tmdb_schluessel()
+    if not key:
+        return None
+    params = dict(params or {})
+    hdr = {"Accept": "application/json", "User-Agent": "filmsortierer"}
+    if len(key) > 40:
+        hdr["Authorization"] = "Bearer " + key
+    else:
+        params["api_key"] = key
+    url = "https://api.themoviedb.org/3" + pfad + "?" + urllib.parse.urlencode(params)
+    for versuch in range(4):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=20) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as x:
+            if x.code == 404:
+                return {}
+            if x.code == 401:
+                sys.exit("TMDB-Schlüssel wird abgelehnt (401) – tmdb_schluessel.txt prüfen")
+            time.sleep(2 + 3 * versuch)  # 429 = zu schnell
+        except Exception:
+            time.sleep(2 + 3 * versuch)
+    return None
+
+
+def tmdb_jahr(rd):
+    rd = rd or ""
+    return int(rd[:4]) if rd[:4].isdigit() else None
+
+
+def tmdb_film(tmdb_id, cache):
+    """TMDB-Details auf Deutsch: Laufzeit und Filmreihe (belongs_to_collection). Gecacht; None = gerade nicht abrufbar."""
+    k = str(tmdb_id)
+    if k in cache:
+        return cache[k]
+    if not tmdb_schluessel() or not k.isdigit():
+        return None
+    d = tmdb_api("/movie/" + k, {"language": "de-DE"})
+    if d is None:
+        return None
+    if not d:
+        cache[k] = {}
+        return {}
+    c = d.get("belongs_to_collection") or {}
+    rd = d.get("release_date") or ""
+    cache[k] = {"titel": d.get("title"), "jahr": int(rd[:4]) if rd[:4].isdigit() else None, "min": d.get("runtime") or 0,
+                "sammlung": reihe_name(c.get("name")) if c else None, "sammlung_id": c.get("id")}
+    return cache[k]
 
 
 def remote_daten(item_id, ziel):
@@ -483,6 +572,14 @@ def dateien(quelle, ohne_ausgabe=True, ohne=()):
         except OSError as x:
             NICHT_LESBAR.append((rel_ordner or ".", str(x)[:160]))
             return
+        nur_film = False
+        if not rel_ordner:
+            # Lukas' Markierung ganz oben auf der Platte: „(MUSIK)“ wird nie betreten; gibt es Ordner mit „(FILM)“,
+            # dann NUR diese (auch keine losen Dateien im Hauptordner)
+            eintraege = [de for de in eintraege if "(musik)" not in de.name.lower()]
+            nur_film = any("(film)" in de.name.lower() and de.is_dir(follow_symlinks=False) for de in eintraege)
+            if nur_film:
+                eintraege = [de for de in eintraege if "(film)" in de.name.lower() and de.is_dir(follow_symlinks=False)]
         unter = []
         for de in eintraege:
             rel = os.path.join(rel_ordner, de.name) if rel_ordner else de.name
@@ -552,14 +649,17 @@ def film_vorschlag(rel, filmordner):
         if on and not ok:
             ordn = (on, oj, "ordner")
     if datei and ordn and ordn[1] and not datei[1]:
-        return ordn
+        return ordn + (datei[:2],)
+    if datei and ordn and normal(datei[0]) in normal(ordn[0]) and len(normal(ordn[0])) > len(normal(datei[0])) + 3:
+        # „west.ac3.xvid-FiSTER.avi“ im Ordner „A Million Ways to Die in the West german“ -> Ordner gewinnt
+        return (ordn[0], ordn[1] or datei[1], "ordner", datei[:2])
     if datei:
-        return datei
+        return datei + ((ordn[:2],) if ordn else (None,))
     if ordn:
-        return ordn
+        return ordn + (None,)
     if kurz and n:
-        return n, j, "kurzform"
-    return stem, None, "unklar"
+        return n, j, "kurzform", None
+    return stem, None, "unklar", None
 
 
 def serie_vorschlag(rel, m):
@@ -698,8 +798,15 @@ def ampel(e):
             rot.append("sehr stark komprimiert (%s GB pro Stunde)" % zahl(gbh))
         elif gbh < g * f:
             gelb.append("stark komprimiert (%s GB pro Stunde)" % zahl(gbh))
-    if e.get("art") == "film" and q.get("min") and q["min"] < 50 and not q.get("kaputt"):
-        gelb.append("nur %d Min. – Ausschnitt oder unvollständig?" % q["min"])
+    tm = e.get("tmdb_min") or 0
+    if e.get("art") == "film" and q.get("min") and not q.get("kaputt"):
+        if tm >= 40:
+            if q["min"] < 0.7 * tm:
+                rot.append("nur %d von %d Min. – unvollständig oder falscher Film?" % (q["min"], tm))
+            elif q["min"] < 0.88 * tm:
+                gelb.append("%d von %d Min. – gekürzt oder unvollständig?" % (q["min"], tm))
+        elif q["min"] < 50:
+            gelb.append("nur %d Min. – Ausschnitt oder unvollständig?" % q["min"])
     farbe = "rot" if rot else "gelb" if gelb else ("gruen" if q.get("quelle") == "ffprobe" else "grau")
     return farbe, rot + gelb
 
@@ -739,7 +846,7 @@ def tmdb_treffer(name, jahr, cache):
     # Jellyfin liefert jeden Film oft doppelt (TMDB und IMDb/OMDb) – mit TMDB-ID zählt, IMDb nur als Rückfall
     kand = [x for x in alle if x.get("tmdb")] or alle
     nn = normal(name)
-    exakt = [x for x in kand if normal(x.get("name")) == nn]
+    exakt = [x for x in kand if normal(x.get("name")) == nn or (x.get("original") and normal(x["original"]) == nn)]
     if jahr:
         t = [x for x in exakt if x.get("jahr") == jahr]
         if len(t) == 1:
@@ -780,6 +887,14 @@ def bibliothek():
 def per_id(art, wert, cache):
     """Titel und Jahr zu einer TMDB- oder IMDb-ID (über Jellyfin, gecacht)."""
     k = "id|%s|%s" % (art, wert)
+    if k not in cache and tmdb_schluessel():
+        if art == "Tmdb":
+            d = tmdb_api("/movie/" + str(wert), {"language": "de-DE"})
+        else:
+            d = ((tmdb_api("/find/" + str(wert), {"external_source": "imdb_id", "language": "de-DE"}) or {}).get("movie_results") or [None])[0]
+        if d is None:
+            return None
+        cache[k] = {"name": d.get("title"), "jahr": tmdb_jahr(d.get("release_date")), "tmdb": str(d.get("id"))} if d else None
     if k not in cache:
         try:
             res = jf("/Items/RemoteSearch/Movie", {"SearchInfo": {"ProviderIds": {art: wert}}}) or []
@@ -825,33 +940,66 @@ def entscheidung_anwenden(e, aktion, cache):
         e["grund"] = "unbekannte Entscheidung " + aktion
 
 
+ZIELORDNER = None  # --ziel="Lukas Filme geordnet": Filme flach dorthin, Filmreihen als Unterordner (Wunsch Lukas 20.11.)
+
+
+def reihe_name(n):
+    """„Star Wars Filmreihe“ -> „Star Wars“, „Taxi Collection“ -> „Taxi“."""
+    n = re.sub(r"(?i)\s*[-–:]?\s*(filmreihe|reihe|collection|sammlung|kollektion|saga)\s*$", "", n or "").strip()
+    return n or None
+
+
+def film_name(e):
+    t = sauber(e.get("titel") or "Unbekannt")
+    return "%s (%s)" % (t, e["jahr"]) if e.get("jahr") else t
+
+
+def ohne_strich(name, reihe):
+    """Jellyfin hält Dateien im selben Ordner für VERSIONEN eines Films, wenn alle mit dem Ordnernamen und
+    dann „-“ beginnen („Star Wars - Episode I…“). Deshalb den Strich direkt nach dem Reihennamen weglassen."""
+    if name.lower().startswith(reihe.lower()):
+        return reihe + re.sub(r"^\s*[-–]+\s*", " ", name[len(reihe):])
+    return name
+
+
 def ziel_setzen(e):
-    """Zielpfad (relativ zum Ausgabe-Ordner) aus der Aktion."""
+    """Zielpfad relativ zur QUELLE (Platte) aus der Aktion."""
     rel, ext = e["pfad"], os.path.splitext(e["pfad"])[1].lower()
     a = e["aktion"]
-    if a == "film":
+    k = opt("ausgabe", "Kino")
+    teil = (" - part%s" % e["teil"]) if e.get("teil") else ""
+    if a == "film" and ZIELORDNER:
+        name = film_name(e)
+        if e.get("sammlung"):
+            r = sauber(e["sammlung"])
+            e["ziel"] = os.path.join(ZIELORDNER, r, ohne_strich(name, r) + teil + ext)
+        else:
+            e["ziel"] = os.path.join(ZIELORDNER, name + teil + ext)
+    elif a == "film":
         o = film_ordner(e.get("titel"), e.get("jahr"), e.get("tmdb"), e.get("imdb"))
-        teil = (" - part%s" % e["teil"]) if e.get("teil") else ""
-        e["ziel"] = os.path.join("Filme", o, o + teil + ext)
+        e["ziel"] = os.path.join(k, "Filme", o, o + teil + ext)
     elif a == "serie":
-        e["ziel"] = os.path.join("Serien", sauber(e.get("serie") or "Unbekannt"), "Staffel %02d" % (e.get("staffel") or 1),
+        e["ziel"] = os.path.join(k, "Serien", sauber(e.get("serie") or "Unbekannt"), "Staffel %02d" % (e.get("staffel") or 1),
                                  os.path.basename(rel))
     elif a == "musik":
         teile = rel.split(os.sep)
         if len(teile) > 1 and teile[0].lower() in ("musik", "music", "mp3", "audio"):
             teile = teile[1:]  # „Musik/Musik/…“ vermeiden
-        e["ziel"] = os.path.join("Musik", *teile)
+        e["ziel"] = os.path.join(k, "Musik", *teile)
     elif a == "doppelt":
-        e["ziel"] = os.path.join("_Pruefen", "Doppelt", rel)
+        e["ziel"] = os.path.join(k, "_Pruefen", "Doppelt", rel)
     elif a == "beiseite":
-        e["ziel"] = os.path.join("_Pruefen", "Beiseite", rel)
+        e["ziel"] = os.path.join(k, "_Pruefen", "Beiseite", rel)
     else:
         e["ziel"] = None
 
 
-def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), mit_musik=False):
+def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), mit_musik=False, ziel=None, mit_serien=False):
     """OHNE = Ordner, die gar nicht betreten werden (Musik-Ordner aus bereiche.json). Ohne MIT_MUSIK bleibt jede
-    Musik-Datei liegen (Runde 1 = nur Filme)."""
+    Musik-Datei liegen (Runde 1 = nur Filme). ZIEL = Ordner auf der Platte für die fertigen Filme (Runde 1:
+    nur Filme dorthin; Serien, DVD-Abbilder und rote Filme bleiben liegen, nur erzwungene Untertitel gehen mit)."""
+    global ZIELORDNER
+    ZIELORDNER = ziel or None
     d = sdir(quelle)
     del NICHT_LESBAR[:]
     tcache = lade(os.path.join(d, "tmdb_cache.json"), {})
@@ -903,9 +1051,9 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
                     e.update(art="folge", aktion="serie", serie=name, staffel=st, folge=fo, sicher=bool(name),
                              grund="Folge S%02dE%02d" % (st, fo) if name else "Folge ohne Serienname")
                 else:
-                    n, j, herkunft = film_vorschlag(rel, filmordner.get(os.path.dirname(rel), 0) == 1)
+                    n, j, herkunft, alt = film_vorschlag(rel, filmordner.get(os.path.dirname(rel), 0) == 1)
                     tm = TEIL.search(os.path.splitext(teile[-1])[0])
-                    e.update(art="film", aktion="film", vorschlag=n, vorschlag_jahr=j, herkunft=herkunft,
+                    e.update(art="film", aktion="film", vorschlag=n, vorschlag_jahr=j, herkunft=herkunft, alt=alt,
                              teil=int(tm.group(2)) if tm else None)
         elif a == "audio":
             if mit_musik:
@@ -959,6 +1107,10 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
             e.update(sicher=False, grund="ohne TMDB geprüft", titel=e["vorschlag"], jahr=e["vorschlag_jahr"])
             continue
         t, sicher, grund, kand = tmdb_treffer(e["vorschlag"], e["vorschlag_jahr"], tcache)
+        if not sicher and e.get("alt") and e["alt"][0]:
+            t2, s2, g2, k2 = tmdb_treffer(e["alt"][0], e["alt"][1], tcache)
+            if s2:
+                t, sicher, grund, kand = t2, s2, "über den anderen Namen erkannt (%s): %s" % (e["alt"][0], g2), k2
         e["kandidaten"] = ["%s (%s) tmdb:%s" % (x.get("name"), x.get("jahr"), x.get("tmdb")) for x in kand[:3]]
         if t:
             e.update(titel=t.get("name"), jahr=t.get("jahr"), tmdb=t.get("tmdb"), imdb=None if t.get("tmdb") else t.get("imdb"))
@@ -975,6 +1127,22 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
         if e["pfad"] in entsch:
             entscheidung_anwenden(e, entsch[e["pfad"]], tcache)
     speichere(os.path.join(d, "tmdb_cache.json"), tcache)
+
+    # 4b) TMDB-Details (Filmreihe, Laufzeit) – nur mit eigenem TMDB-Schlüssel, gecacht
+    dcache = lade(os.path.join(d, "tmdb_details.json"), {})
+    if not ohne_tmdb and tmdb_schluessel():
+        mit_id = [e for e in plan if e["art"] == "film" and e.get("tmdb")]
+        for i, e in enumerate(mit_id):
+            info = tmdb_film(e["tmdb"], dcache)
+            if info:
+                e.update(sammlung=info.get("sammlung"), tmdb_min=info.get("min") or 0)
+            if i % 50 == 0:
+                fortschritt("TMDB-Details %d/%d" % (i, len(mit_id)))
+                speichere(os.path.join(d, "tmdb_details.json"), dcache)
+        speichere(os.path.join(d, "tmdb_details.json"), dcache)
+        for e in plan:
+            if e["art"] == "film":
+                e["ampel"], e["probleme"] = ampel(e)
 
     # 5) Doppelte: a) exakt gleiche Dateien (gleiche Größe, dann Prüfsumme)
     nach_groesse = {}
@@ -1014,7 +1182,7 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
     for k, es in gleich.items():
         if len(es) < 2:
             continue
-        es.sort(key=lambda x: rang(x.get("q") or {}), reverse=True)
+        es.sort(key=lambda x: (0 if x.get("ampel") == "rot" else 1,) + rang(x.get("q") or {}), reverse=True)
         for x in es[1:]:
             if x.get("entschieden"):
                 continue
@@ -1044,6 +1212,14 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
                 e["besser_als"] = bester[0]
                 besser.append(e)
 
+    # 5d) Runde 1 mit Zielordner: nur Filme. Serien, rote Filme (abgefilmt/kaputt) bleiben liegen – kommen später
+    if ZIELORDNER:
+        for e in plan:
+            if e["aktion"] == "serie" and not mit_serien:
+                e.update(aktion="lassen", grund="Serie – kommt später (Runde 1 nur Filme)")
+            elif e["aktion"] == "film" and e.get("ampel") == "rot" and not e.get("entschieden"):
+                e.update(aktion="lassen", grund="Qualität rot – kommt später: " + "; ".join(e.get("probleme") or []))
+
     # 6) Untertitel folgen ihrem Film/ihrer Folge (gleicher Name oder einziges Video im Ordner bzw. im Ordner darüber)
     videos_im = {}
     for e in plan:
@@ -1063,7 +1239,14 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), 
         v = v[0]
         vstem = os.path.splitext(os.path.basename(v["pfad"]))[0]
         zusatz = stem[len(vstem):] if stem.lower().startswith(vstem.lower()) else ""
-        if not zusatz:
+        if ZIELORDNER:
+            # Wunsch Lukas: nur erzwungene Untertitel (fremdsprachige Stellen) bleiben beim Film, der Rest kommt beiseite
+            if not re.search(r"(?i)(?<![a-z])(forced|erzwungen)(?![a-z])", stem):
+                e.update(aktion="beiseite", grund="normaler Untertitel – nur erzwungene (forced) bleiben beim Film")
+                continue
+            engl = re.search(r"(?i)(?<![a-z])(english|eng|en)(?![a-z])", stem)
+            zusatz = ".en.forced" if engl else ".de.forced"
+        elif not zusatz:
             sp = re.findall(r"(?i)(?<![a-z])(german|deutsch|ger|de|english|eng|en|forced)(?![a-z])", stem)
             zusatz = "".join("." + s.lower() for s in sp)
         e.update(gehoert_zu=v["nr"], untertitel_zusatz=zusatz, sicher=v.get("sicher"), grund="Untertitel zu " + v["pfad"])
@@ -1148,12 +1331,28 @@ def qualitaet_schreiben(d, plan):
     ]
     if folgen_l:
         zeilen.append("Serien: %d Folgen in %d Serien" % (len(folgen_l), len({normal(e.get("serie")) for e in folgen_l})))
+    reihen = {}
+    for e in filme_l:
+        if e.get("sammlung"):
+            reihen.setdefault(e["sammlung"], []).append(e)
+    if ZIELORDNER:
+        if tmdb_schluessel():
+            zeilen.append("Filmreihen (eigene Ordner in %s): %d mit %d Filmen" % (ZIELORDNER, len(reihen), sum(len(v) for v in reihen.values())))
+        else:
+            zeilen.append("Filmreihen: noch nicht erkannt – dafür fehlt tmdb_schluessel.txt neben dem Skript (Filme landen sonst alle flach)")
+        liegen = {}
+        for e in plan:
+            if e["art"] in ("film", "folge", "disc") and e["aktion"] == "lassen":
+                g_ = "Serien-Folgen" if e["art"] == "folge" else "DVD/Blu-ray-Abbilder" if e["art"] == "disc" else "rote Filme (abgefilmt/kaputt)"
+                liegen[g_] = liegen.get(g_, 0) + 1
+        if liegen:
+            zeilen.append("Bleibt in Runde 1 liegen: " + " · ".join("%s %d" % kv for kv in sorted(liegen.items())))
     musik = [e for e in plan if e["art"] == "audio"]
     if musik:
         zeilen.append("Musik-Dateien außerhalb der Musik-Ordner: %d (%s GB) – %s" % (
             len(musik), zahl(sum(e["bytes"] for e in musik) / 1e9),
             "bleiben liegen (Runde 2)" if all(e["aktion"] == "lassen" for e in musik) else "werden einsortiert"))
-    return {"ampel": amp, "zeilen": zeilen}
+    return {"ampel": amp, "zeilen": zeilen, "reihen": reihen}
 
 
 def bericht_schreiben(quelle, plan, besser):
@@ -1191,6 +1390,9 @@ def bericht_schreiben(quelle, plan, besser):
             z.append("| %s | %d | %s |" % (namen[k], zaehl[k][0], gb(zaehl[k][1])))
     if serien:
         z += ["", "## Serien", ""] + ["- %s: %d Folgen" % (n, c) for n, c in sorted(serien.items())]
+    if info.get("reihen"):
+        z += ["", "## Filmreihen (%d)" % len(info["reihen"]), ""]
+        z += ["- **%s**: %s" % (r, ", ".join(sorted(filmname(e) for e in es))) for r, es in sorted(info["reihen"].items())]
     for farbe, titel in (("rot", "Qualität ROT – wirklich schlecht oder kaputt, bitte ansehen"),
                          ("gelb", "Qualität GELB – mal reinschauen, oft trotzdem ok")):
         es = info["ampel"][farbe]
@@ -1257,7 +1459,8 @@ def lauf_optionen(quelle, neu=False):
     pfad = os.path.join(sdir(quelle), "optionen.json")
     if neu:
         o = {"ohne_tmdb": "--ohne-tmdb" in sys.argv, "ohne_bib": "--ohne-bibliothek" in sys.argv,
-             "mit_musik": "--mit-musik" in sys.argv,
+             "mit_musik": "--mit-musik" in sys.argv, "mit_serien": "--mit-serien" in sys.argv,
+             "ziel": (opt("ziel") or "").strip().strip('"').strip("/\\") or None,
              "ohne_extra": [x.strip().strip('"') for x in (opt("ohne") or "").split(";") if x.strip()]}
         speichere(pfad, o)
     else:
@@ -1266,8 +1469,10 @@ def lauf_optionen(quelle, neu=False):
     ohne = list(o.get("ohne_extra") or [])
     if not o.get("mit_musik"):
         ohne += musik_ordner(quelle)
+    if o.get("ziel"):
+        ohne.append(o["ziel"])  # schon Sortiertes nie wieder anfassen
     return {"ohne_tmdb": bool(o.get("ohne_tmdb")), "ohne_bib": bool(o.get("ohne_bib")), "ohne": ohne,
-            "mit_musik": bool(o.get("mit_musik"))}
+            "mit_musik": bool(o.get("mit_musik")), "ziel": o.get("ziel"), "mit_serien": bool(o.get("mit_serien"))}
 
 
 def cmd_karte(a):
@@ -1512,14 +1717,14 @@ def cmd_vorschau(a):
 def cmd_ausfuehren(a):
     a, o = optionen(a)
     quelle = os.path.abspath(a[0])
-    d, aus = sdir(quelle), ausgabe(quelle)
+    d = sdir(quelle)
     plan = lade(os.path.join(d, "plan.json"), None)
     if not plan:
         sys.exit("erst pruefen laufen lassen")
     jobs = [e for e in plan if e.get("sicher") and e.get("ziel") and e["aktion"] in ("film", "serie", "musik", "doppelt", "beiseite")]
     fehlt, besetzt, ok = [], [], []
     for e in jobs:
-        src, dst = os.path.join(quelle, e["pfad"]), os.path.join(aus, e["ziel"])
+        src, dst = os.path.join(quelle, e["pfad"]), os.path.join(quelle, e["ziel"])
         if not os.path.exists(L(src)):
             fehlt.append(e)
         elif os.path.exists(L(dst)):
@@ -1546,12 +1751,12 @@ def cmd_ausfuehren(a):
     n = kopiert = fehler = 0
     with open(log, "a", encoding="utf-8") as lg:
         for i, e in enumerate(ok):
-            src, dst = os.path.join(quelle, e["pfad"]), os.path.join(aus, e["ziel"])
+            src, dst = os.path.join(quelle, e["pfad"]), os.path.join(quelle, e["ziel"])
             try:
                 os.makedirs(L(os.path.dirname(dst)), exist_ok=True)
                 if os.path.exists(L(dst)):
                     continue
-                zeile = {"alt": e["pfad"], "neu": e["ziel"], "aktion": e["aktion"]}
+                zeile = {"alt": e["pfad"], "neu": e["ziel"], "aktion": e["aktion"], "basis": "quelle"}
                 # erst ins Protokoll (sofort auf die Platte), dann verschieben: auch bei Stromausfall mitten im Lauf
                 # weiß zurueck-lauf, was wo liegt (es schiebt nur zurück, was wirklich am neuen Platz liegt)
                 lg.write(json.dumps(dict(zeile, art="verschoben"), ensure_ascii=False) + "\n")
@@ -1593,7 +1798,7 @@ def cmd_zurueck_lauf(a):
         return
     n = 0
     for z in reversed(zeilen):
-        src, dst = os.path.join(aus, z["neu"]), os.path.join(quelle, z["alt"])
+        src, dst = os.path.join(quelle if z.get("basis") == "quelle" else aus, z["neu"]), os.path.join(quelle, z["alt"])
         if z["art"].startswith("kopiert"):
             continue  # Quelle liegt noch da, die Kopie bleibt einfach stehen
         if os.path.exists(L(src)) and not os.path.exists(L(dst)):

@@ -33,13 +33,32 @@ Neu in v3:
 - `ausfuehren --los` schreibt jede Zeile ins Protokoll, bevor verschoben wird (sofort auf die Platte) – auch nach einem
   Stromausfall kann `zurueck-lauf` alles zurückschieben.
 
+v3.1 (20.11.2026 nachts, nach Lukas' Rundgang über die echte Platte – Filme4 hängt als `D:`):
+- **Markierung ganz oben:** Ordner mit `(MUSIK)` im Namen werden nie betreten (auch nicht von `karte`). Gibt es Ordner mit
+  `(FILM)`, werden nur diese gelesen. Auf Filme4: `Filme A-Z (FILM)`, `Filme PC (FILM)`, `Filme von a-z (FILM)` (DVD-Kopien),
+  `25 (FILM)` (neue Filme 2024–2026, dazu Serien und zweimal „Mega Hits 2026“), `Star Wars 1--8 (FILM)`.
+- **`--ziel="Lukas Filme geordnet"`** (Wunsch Lukas): einzelne Filme liegen flach als `Titel (Jahr).mkv` direkt darin,
+  Filmreihen bekommen einen Unterordner (`Star Wars/…`, `Taxi/Taxi (1998).avi`, `Taxi/Taxi 2 (2000).mkv`) – auch wenn erst
+  ein Teil da ist. Kein „Reihe - …“ am Dateianfang (sonst hält Jellyfin die Teile für Versionen eines Films).
+  Nur **erzwungene Untertitel** (forced) gehen mit (`Titel (Jahr).de.forced.srt`), normale Untertitel, Info-Bilder, .nfo
+  kommen nach `Kino/_Pruefen/Beiseite`, schlechtere Doppelte nach `Kino/_Pruefen/Doppelt` (beides außerhalb des Zielordners).
+  In Runde 1 bleiben liegen: Serien, DVD/Blu-ray-Abbilder (VIDEO_TS/VOB, BDMV) und rote Filme (abgefilmt, kaputt).
+  Ziele sind jetzt relativ zur Platte; das Protokoll merkt sich das (`basis`), `zurueck-lauf` kann alte und neue Läufe.
+- **Eigener TMDB-Schlüssel** `tmdb_schluessel.txt` neben dem Skript (Lukas legt ihn an, wird nie ausgegeben): dann erkennt
+  das Skript Filme direkt bei TMDB (deutsche Titel, Originaltitel zählt auch), braucht am PC weder Jellyfin noch Samba,
+  holt die **Filmreihe** und vergleicht die **Laufzeit** (deutlich kürzer = rot/gelb). Ohne Schlüssel: Jellyfin wie bisher,
+  dann aber keine Reihen-Ordner.
+- Filmname aus dem Ordner, wenn der Dateiname nur ein Teil davon ist („west.ac3.xvid“ im Ordner „A Million Ways to Die in
+  the West german“); findet TMDB den einen Namen nicht sicher, wird der andere probiert.
+- Bei Doppelten verliert eine abgefilmte Fassung immer gegen eine ordentliche.
+
 Ablauf am PC (Platte z. B. `E:`; Pfad immer als `E:/` schreiben, `"E:\"` verschluckt das Anführungszeichen):
 
 | Schritt | Befehl | Dauer (ca. 1.500 Filme) |
 |---|---|---|
 | 0 | CrystalDiskInfo ansehen, `chkdsk E:` **ohne /f** (nur lesen). „Scannen und reparieren“ nicht ohne Rückfrage | 15 min |
 | 1 | `python fs.py karte E:/` | Minuten |
-| 2 | `python fs.py pruefen E:/ --ohne-bibliothek` | 1–3 h |
+| 2 | `python fs.py pruefen D:/ --ohne-bibliothek "--ziel=Lukas Filme geordnet"` | 1–3 h |
 | 3 | `python fs.py endtest E:/` | 1–2 h |
 | 4 | Unsichere: `suche …`, `vorschau E:/ NR …`, `entscheiden E:/ NR=… …` | je nach Dateinamen |
 | 5 | `python fs.py ausfuehren E:/`, dann `… --los` | Minuten |
