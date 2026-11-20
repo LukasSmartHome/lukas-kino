@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
-"""Filmsortierer für Lukas' Jellyfin (Claude, Konto A, 02.11.2026 – v2 mit Eingangs-Modus für ganze Platten).
+"""Filmsortierer für Lukas' Jellyfin (Claude, Konto A, 02.11.2026 – v2 mit Eingangs-Modus für ganze Platten;
+v3 Konto B, 20.11.2026: Karte, Runde 1 nur Filme, Qualitäts-Ampel, Endtest, lange Windows-Pfade, sicheres Protokoll).
 
 Läuft im File editor auf dem Pi (dort sind /media und /share eingehängt) und genauso am Windows-PC (Python 3.8+).
-Braucht nur Python. ffprobe/ffmpeg sind optional (bessere Qualitätsvergleiche, Kontaktbögen).
+Braucht nur Python. ffprobe/ffmpeg sind optional (Qualität, Ampel, Endtest, Kontaktbögen) – für die Ampel nötig.
 Der Jellyfin-Schlüssel wird aus jellyfin_schluessel.txt gelesen und nie ausgegeben.
 GRUNDREGEL: Es wird NIE etwas gelöscht oder überschrieben. Alles ohne --los ist nur Vorschau.
+Gelesen wird nur (Ordner auflisten, Dateikopf per ffprobe, Anfang/Ende für Prüfsummen). Geschrieben wird nur in
+QUELLE/Kino/ – und dort nur durch ausfuehren --los (Umbenennen auf derselben Platte, Daten bleiben, wo sie sind).
 
 A) Eingang – eine ganze Platte oder einen Ordner mit unsortierten Filmen, Serien, Musik durchgehen
-  bestand QUELLE                vorhandene Ordnung festhalten: Liste aller Dateien -> QUELLE/Kino/_sortierer/bestand_*.tsv
-  pruefen QUELLE                alles einordnen (Film, Serie, Musik, Untertitel, Zusatzkram), Filme bei TMDB erkennen,
-                                Doppelte finden (exakt gleiche Datei, gleicher Film, schon in der Bibliothek)
-                                -> Kino/_sortierer/plan.json, bericht.md (für Lukas), unsicher.tsv (für Claude)
+  karte QUELLE                  ERSTER SCHRITT, schnell: listet nur Namen und Größen (öffnet keine Datei), sichert den
+                                Bestand (bestand_*.tsv = alte Ordnung) und zeigt, wo Filme und wo Musik liegen.
+                                Reine Musik-Ordner landen in bereiche.json und werden danach übersprungen.
+  bereich QUELLE "ORDNER"=musik|filme [...]   Einordnung von Hand korrigieren (Pfad relativ zu QUELLE)
+  bestand QUELLE                wie karte
+  pruefen QUELLE                Filme (und Serien) einordnen, bei TMDB erkennen, Qualität messen (Ampel), Doppelte
+                                finden (exakt gleiche Datei, gleicher Film, schon in der Bibliothek)
+                                -> Kino/_sortierer/plan.json, bericht.md (für Lukas), qualitaet.tsv, unsicher.tsv (für Claude)
+                                Runde 1 = nur Filme: Musik-Ordner aus bereiche.json werden gar nicht betreten, Musik-
+                                Dateien anderswo bleiben liegen. --mit-musik schaltet das ab (Runde 2).
                                 Optionen: --ohne-tmdb  --ohne-ffprobe  --ohne-bibliothek (beim großen Umzug: die
                                 SSD-Filme sollen ja mit auf die Platte und nicht als „schon da“ gelten)
+                                --ohne="Ordner A;Ordner B" (zusätzlich überspringen)
+  endtest QUELLE [--alle] [--neu]  spielt bei jedem Film die letzten Sekunden ab: findet abgebrochene Downloads/Kopien
+                                (MKV zeigt sonst die volle Laufzeit). Nur lesen. Ergebnis fließt in die Ampel.
   vorschau QUELLE NR [NR ...]   Kontaktbogen mit 12 Standbildern für unsichere Fälle (braucht ffmpeg)
   entscheiden QUELLE NR=AKTION [NR=AKTION ...]
                                 unsichere Fälle festlegen. AKTION: tmdb:603 | imdb:tt0133093 | titel:Name_mit_Unterstrich:1999
@@ -64,6 +76,17 @@ DATEI_TYPEN = (".mkv", ".mp4", ".avi", ".m4v", ".ts", ".mov", ".wmv", ".mpg", ".
 MUELL = r"(german|deutsch|dl|ml|dual|ac3|eac3|dts|dd5[ .]?1|truehd|atmos|720p|1080p|2160p|4k|uhd|hdr|sdr|web|webrip|web-?dl|bluray|bdrip|brrip|hdtv|dvdrip|x264|x265|h264|h265|hevc|avc|remux|repack|proper|internal|extended|uncut|unrated|ld|md|sd|hd)"
 
 _KEY = None
+
+
+def L(p):
+    """Windows: lange Pfade (ab 240 Zeichen) mit dem Vorsatz \\\\?\\ ansprechen – sonst sieht Windows sie nicht
+    (Ordner würden still übersprungen). Auf dem Pi und bei kurzen Pfaden bleibt alles, wie es ist."""
+    if os.name != "nt" or not p:
+        return p
+    p = os.path.abspath(p)
+    if len(p) < 240 or p.startswith("\\\\?\\"):
+        return p
+    return "\\\\?\\UNC\\" + p[2:] if p.startswith("\\\\") else "\\\\?\\" + p
 
 
 def schluessel():
@@ -442,25 +465,57 @@ def art_grob(rel):
     return "sonst"
 
 
-def dateien(quelle, ohne_ausgabe=True):
-    """Alle Dateien unter QUELLE: (relativer Pfad, Bytes, Änderungszeit) – ohne Systemordner und ohne den Ausgabe-Ordner."""
+NICHT_LESBAR = []  # (Pfad, Fehler) – Ordner/Dateien, die nicht gelesen werden konnten; wird immer gemeldet
+
+
+def dateien(quelle, ohne_ausgabe=True, ohne=()):
+    """Alle Dateien unter QUELLE: (relativer Pfad, Bytes, Änderungszeit) – ohne Systemordner, ohne den Ausgabe-Ordner
+    und ohne die Ordner in OHNE (relativ zu QUELLE, werden gar nicht betreten). Liest nur Ordnereinträge, öffnet keine
+    Datei. Was nicht lesbar ist, landet in NICHT_LESBAR statt still zu fehlen."""
+    quelle = os.path.abspath(quelle)
     aus = os.path.normcase(os.path.abspath(ausgabe(quelle))) if ohne_ausgabe else None
-    for wurzel, ordner, namen in os.walk(quelle):
-        ordner[:] = sorted(o for o in ordner if o not in SYSTEM and not o.startswith(".Trash")
-                           and os.path.normcase(os.path.abspath(os.path.join(wurzel, o))) != aus)
-        for n in sorted(namen):
-            p = os.path.join(wurzel, n)
+    ohne_n = {os.path.normcase(os.path.normpath(o)) for o in ohne if o}
+
+    def lauf(abs_ordner, rel_ordner):
+        try:
+            with os.scandir(L(abs_ordner)) as it:
+                eintraege = sorted(it, key=lambda x: x.name)
+        except OSError as x:
+            NICHT_LESBAR.append((rel_ordner or ".", str(x)[:160]))
+            return
+        unter = []
+        for de in eintraege:
+            rel = os.path.join(rel_ordner, de.name) if rel_ordner else de.name
             try:
-                st = os.stat(p)
-            except OSError:
+                if de.is_dir(follow_symlinks=False):
+                    unter.append((de.name, rel))
+                    continue
+                if not de.is_file(follow_symlinks=False):
+                    continue
+                st = de.stat(follow_symlinks=False)
+            except OSError as x:
+                NICHT_LESBAR.append((rel, str(x)[:160]))
                 continue
-            yield os.path.relpath(p, quelle), st.st_size, int(st.st_mtime)
+            yield rel, st.st_size, int(st.st_mtime)
+        for n, rel in unter:
+            if n in SYSTEM or n.startswith(".Trash"):
+                continue
+            p = os.path.join(abs_ordner, n)
+            if aus and os.path.normcase(p) == aus:
+                continue
+            if os.path.normcase(rel) in ohne_n:
+                continue
+            for x in lauf(p, rel):
+                yield x
+
+    for x in lauf(quelle, ""):
+        yield x
 
 
 def fingerabdruck(pfad, groesse):
     """Schnelle Prüfsumme: Größe + erste und letzte 4 MiB (reicht, um gleiche Dateien sicher zu erkennen)."""
     h = hashlib.md5(str(groesse).encode())
-    with open(pfad, "rb") as f:
+    with open(L(pfad), "rb") as f:
         h.update(f.read(4 << 20))
         if groesse > 8 << 20:
             f.seek(-(4 << 20), 2)
@@ -531,42 +586,134 @@ def qualitaet_aus_name(rel, groesse):
 
 
 def ffprobe_info(pfad, groesse):
+    """Liest nur den Dateikopf. Ergebnis None = nicht gemessen (kein ffprobe, Zeitüberschreitung);
+    kaputt=True = ffprobe lief, findet aber kein Bild (z. B. MP4 ohne Inhaltsverzeichnis = abgebrochene Kopie)."""
     fp = shutil.which("ffprobe")
     if not fp:
         return None
+    r = None
     try:
         r = subprocess.run([fp, "-v", "error", "-show_entries",
                             "stream=codec_type,codec_name,width,height,channels,color_transfer:stream_tags=language,title:format=duration",
-                            "-of", "json", pfad], capture_output=True, timeout=60)
+                            "-of", "json", L(pfad)], capture_output=True, timeout=60)
         d = json.loads(r.stdout or b"{}")
-    except Exception:
+    except subprocess.TimeoutExpired:
         return None
+    except Exception:
+        d = {}
     st = d.get("streams") or []
     v = [x for x in st if x.get("codec_type") == "video" and x.get("codec_name") not in ("mjpeg", "png")]
     if not v:
-        return None  # nicht lesbar -> Qualität aus dem Dateinamen
+        q = qualitaet_aus_name(pfad, groesse)  # nicht lesbar -> Qualität aus dem Dateinamen, aber als kaputt markiert
+        zeilen = ((r.stderr if r is not None else b"") or b"").decode("utf-8", "replace").strip().splitlines()
+        f = (zeilen[-1] if zeilen else "kein Bild gefunden").replace(L(pfad) + ": ", "").replace(pfad + ": ", "")
+        q.update(kaputt=True, fehler=f[:160], quelle="ffprobe")
+        return q
     a = [x for x in st if x.get("codec_type") == "audio"]
     spr = [((x.get("tags") or {}).get("language") or "?").lower() for x in a]
     deutsch = any(s in ("ger", "deu", "de", "german") for s in spr)
     if not deutsch and all(s in ("?", "und") for s in spr):
         deutsch = qualitaet_aus_name(pfad, groesse)["deutsch"]  # Spuren ohne Sprache: Dateiname entscheidet
-    return {"deutsch": deutsch, "h": v[0].get("height") or 0,
+    return {"deutsch": deutsch, "h": v[0].get("height") or 0, "w": v[0].get("width") or 0,
+            "codec": (v[0].get("codec_name") or "").lower(),
             "hdr": any(x.get("color_transfer") in ("smpte2084", "arib-std-b67") for x in v),
             "kanaele": max([x.get("channels") or 0 for x in a] or [0]), "bytes": groesse, "ton": spr,
             "min": round(float((d.get("format") or {}).get("duration") or 0) / 60, 1), "quelle": "ffprobe"}
 
 
+def klasse(q):
+    """Auflösungsklasse 2160/1080/720/576/360 (0 = unbekannt). Nach der Breite, damit Breitbild-Filme
+    (1920x800) als 1080p zählen; ohne Breite nach der Höhe."""
+    w, h = q.get("w") or 0, q.get("h") or 0
+    if w:
+        return 2160 if w >= 3200 else 1080 if w >= 1700 else 720 if w >= 1180 else 576 if w >= 640 else 360
+    if h:
+        return 2160 if h >= 1500 else 1080 if h >= 800 else 720 if h >= 600 else 576 if h >= 480 else 360
+    return 0
+
+
+def heil(q):
+    return not q.get("kaputt") and not str(q.get("ende") or "").startswith("kaputt")
+
+
 def rang(q):
-    """Bessere Fassung: deutscher Ton vor Auflösung vor HDR vor Tonkanälen vor Größe (Vorgabe Lukas)."""
-    return (1 if q.get("deutsch") else 0, q.get("h") or 0, 1 if q.get("hdr") else 0, q.get("kanaele") or 0, q.get("bytes") or 0)
+    """Bessere Fassung: heile Datei vor deutschem Ton vor Auflösung vor HDR vor Tonkanälen vor Größe (Vorgabe Lukas)."""
+    return (1 if heil(q) else 0, 1 if q.get("deutsch") else 0, klasse(q), 1 if q.get("hdr") else 0,
+            q.get("kanaele") or 0, q.get("bytes") or 0)
+
+
+# ---- Qualitäts-Ampel (nur Anzeige – deswegen wird nichts verschoben, Lukas entscheidet)
+ROT_NAME = re.compile(r"(?i)(?:^|[^a-z0-9])(cam|camrip|hdcam|hd-cam|telesync|hdts|hd-ts|telecine|hdtc|predvd|pdvd)(?=[^a-z0-9]|$)")
+GELB_NAME = re.compile(r"(?i)(?:^|[^a-z0-9])(ts|tc|scr|screener|dvdscr|bdscr|r5|md|ld|mic-?dubbed|line-?dubbed)(?=[^a-z0-9]|$)")
+GELB_TEXT = {"ts": "Kino-Mitschnitt (TS)?", "tc": "Kino-Mitschnitt (TC)?", "scr": "Vorab-Kopie (Screener)?",
+             "screener": "Vorab-Kopie (Screener)?", "dvdscr": "Vorab-Kopie (Screener)?", "bdscr": "Vorab-Kopie (Screener)?",
+             "r5": "Vorab-Fassung (R5)?", "md": "Ton im Kino mit Mikrofon aufgenommen (MD)?",
+             "ld": "Ton aus dem Kino (LD)?", "micdubbed": "Ton im Kino mit Mikrofon aufgenommen?",
+             "mic-dubbed": "Ton im Kino mit Mikrofon aufgenommen?", "linedubbed": "Ton aus dem Kino?",
+             "line-dubbed": "Ton aus dem Kino?"}
+ALT_CODEC = {"mpeg4", "msmpeg4v1", "msmpeg4v2", "msmpeg4v3", "wmv1", "wmv2", "wmv3", "mpeg1video", "rv30", "rv40",
+             "flv1", "h263", "vp6f", "theora"}
+SPARSAM_CODEC = {"hevc", "av1", "vp9"}  # brauchen für gleiches Bild nur ca. 60 % der Datenmenge
+# GB pro Stunde (ganze Datei): (darunter gelb, darunter rot) für H.264 – sparsame Codecs mal 0,6
+GRENZEN = {2160: (6.0, 3.0), 1080: (1.5, 0.6), 720: (0.7, 0.3), 576: (0.4, 0.18), 360: (0.25, 0.1)}
+
+
+def gb_pro_stunde(q):
+    m = q.get("min") or 0
+    return (q.get("bytes") or 0) / 1e9 / (m / 60.0) if m > 0 else 0
+
+
+def ampel(e):
+    """(Farbe, Gründe) – rot = wirklich schlecht/kaputt, gelb = ansehen, gruen = ok, grau = nicht gemessen."""
+    q = e.get("q") or {}
+    rot, gelb = [], []
+    if q.get("kaputt"):
+        rot.append("lässt sich nicht lesen (%s)" % (q.get("fehler") or "?")[:80])
+    ende = str(q.get("ende") or "")
+    if ende.startswith("kaputt"):
+        rot.append("Ende fehlt – Datei vermutlich unvollständig")
+    elif ende.startswith("fehler"):
+        gelb.append("Fehler beim Abspielen am Ende")
+    name = os.path.splitext(" / ".join(e["pfad"].split(os.sep)[-2:]))[0]
+    m = ROT_NAME.search(name)
+    if m:
+        rot.append("im Kino abgefilmt? („%s“ im Namen)" % m.group(1))
+    else:
+        m = GELB_NAME.search(name)
+        if m:
+            gelb.append("%s („%s“ im Namen)" % (GELB_TEXT.get(m.group(1).lower(), "Vorab-Fassung?"), m.group(1)))
+    k = klasse(q)
+    if k == 360:
+        rot.append("sehr niedrige Auflösung")
+    elif k == 576:
+        gelb.append("nur DVD-/SD-Auflösung")
+    codec = (q.get("codec") or "").lower()
+    if codec in ALT_CODEC:
+        gelb.append("alter Codec (%s, z. B. XviD/DivX)" % codec)
+    gbh = gb_pro_stunde(q)
+    if gbh and k and not q.get("kaputt"):
+        g, r = GRENZEN[k]
+        f = 0.6 if codec in SPARSAM_CODEC else 1.0
+        if gbh < r * f:
+            rot.append("sehr stark komprimiert (%s GB pro Stunde)" % zahl(gbh))
+        elif gbh < g * f:
+            gelb.append("stark komprimiert (%s GB pro Stunde)" % zahl(gbh))
+    if e.get("art") == "film" and q.get("min") and q["min"] < 50 and not q.get("kaputt"):
+        gelb.append("nur %d Min. – Ausschnitt oder unvollständig?" % q["min"])
+    farbe = "rot" if rot else "gelb" if gelb else ("gruen" if q.get("quelle") == "ffprobe" else "grau")
+    return farbe, rot + gelb
 
 
 def q_text(q):
     if not q:
         return "?"
     t = []
-    if q.get("h"):
-        t.append("%dp" % q["h"])
+    if q.get("kaputt") or str(q.get("ende") or "").startswith("kaputt"):
+        t.append("KAPUTT")
+    if klasse(q):
+        t.append({2160: "4K", 576: "SD", 360: "<SD"}.get(klasse(q), "%dp" % klasse(q)))
+    if q.get("codec"):
+        t.append(q["codec"])
     if q.get("hdr"):
         t.append("HDR")
     t.append("Deutsch" if q.get("deutsch") else "ohne dt. Ton" if q.get("quelle") == "ffprobe" else "Ton ?")
@@ -622,7 +769,8 @@ def bibliothek():
         if not i["tmdb"]:
             continue
         h = int(i["bild"].split("x")[1]) if "x" in (i["bild"] or "") and i["bild"].split("x")[1].isdigit() else 0
-        q = {"deutsch": any(t.split(" ")[0] in ("ger", "deu") for t in i["ton"]), "h": h, "hdr": False,
+        w = int(i["bild"].split("x")[0]) if "x" in (i["bild"] or "") and i["bild"].split("x")[0].isdigit() else 0
+        q = {"deutsch": any(t.split(" ")[0] in ("ger", "deu") for t in i["ton"]), "h": h, "w": w, "hdr": False,
              "kanaele": max([int(re.sub(r"\D", "", t.split(" ")[-1]) or 0) for t in i["ton"]] or [0]),
              "bytes": i["bytes"], "quelle": "jellyfin"}
         lib.setdefault(str(i["tmdb"]), []).append((i["pfad"], q))
@@ -701,8 +849,11 @@ def ziel_setzen(e):
         e["ziel"] = None
 
 
-def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False):
+def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False, ohne=(), mit_musik=False):
+    """OHNE = Ordner, die gar nicht betreten werden (Musik-Ordner aus bereiche.json). Ohne MIT_MUSIK bleibt jede
+    Musik-Datei liegen (Runde 1 = nur Filme)."""
     d = sdir(quelle)
+    del NICHT_LESBAR[:]
     tcache = lade(os.path.join(d, "tmdb_cache.json"), {})
     icache = lade(os.path.join(d, "info_cache.json"), {})
     hcache = lade(os.path.join(d, "hash_cache.json"), {})
@@ -710,17 +861,20 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False):
     if not shutil.which("ffprobe"):
         ohne_ff = True
     plan = []
-    for rel, g, mt in dateien(quelle):
-        plan.append({"nr": len(plan) + 1, "pfad": rel, "bytes": g, "art": art_grob(rel)})
-    ordner_inhalt = {}
-    for e in plan:
-        ordner_inhalt.setdefault(os.path.dirname(e["pfad"]), set()).add(e["art"])
 
     def fortschritt(t):
         try:
             open(os.path.join(d, "fortschritt.txt"), "w", encoding="utf-8").write(time.strftime("%H:%M:%S ") + t + "\n")
         except OSError:
             pass
+
+    fortschritt("Liste der Dateien …")
+    for rel, g, mt in dateien(quelle, ohne=ohne):
+        plan.append({"nr": len(plan) + 1, "pfad": rel, "bytes": g, "art": art_grob(rel)})
+    fortschritt("Liste fertig: %d Dateien" % len(plan))
+    ordner_inhalt = {}
+    for e in plan:
+        ordner_inhalt.setdefault(os.path.dirname(e["pfad"]), set()).add(e["art"])
 
     # wie viele echte Filme (ohne Samples/Extras) liegen in jedem Ordner?
     filmordner = {}
@@ -754,11 +908,17 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False):
                     e.update(art="film", aktion="film", vorschlag=n, vorschlag_jahr=j, herkunft=herkunft,
                              teil=int(tm.group(2)) if tm else None)
         elif a == "audio":
-            e.update(aktion="musik", grund="Musik (Ordnung bleibt)")
+            if mit_musik:
+                e.update(aktion="musik", grund="Musik (Ordnung bleibt)")
+            else:
+                e.update(aktion="lassen", grund="Musik – kommt in Runde 2")
         elif a in ("bild", "neben", "system"):
             arten = ordner_inhalt.get(os.path.dirname(rel), set())
             if "audio" in arten and "video" not in arten and a != "system":
-                e.update(aktion="musik", grund="gehört zum Album (Cover/Liste)")
+                if mit_musik:
+                    e.update(aktion="musik", grund="gehört zum Album (Cover/Liste)")
+                else:
+                    e.update(aktion="lassen", grund="gehört zu Musik – Runde 2")
             elif "video" in arten or a == "system":
                 e.update(aktion="beiseite", grund="Zusatzdatei neben Film (%s)" % a if a != "system" else "Systemdatei")
             else:
@@ -781,6 +941,7 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False):
                 fortschritt("ffprobe %d/%d" % (i, len(vids)))
                 speichere(os.path.join(d, "info_cache.json"), icache, True)
         e["q"] = q or qualitaet_aus_name(e["pfad"], e["bytes"])
+        e["ampel"], e["probleme"] = ampel(e)
     speichere(os.path.join(d, "info_cache.json"), icache, True)
 
     # 3) Filme bei TMDB erkennen (über Jellyfin, gecacht)
@@ -818,7 +979,7 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False):
     # 5) Doppelte: a) exakt gleiche Dateien (gleiche Größe, dann Prüfsumme)
     nach_groesse = {}
     for e in plan:
-        if e["art"] in ("film", "folge", "audio", "zusatz", "disc") and e["bytes"] > 1 << 20:
+        if (e["art"] in ("film", "folge", "zusatz", "disc") or (mit_musik and e["art"] == "audio")) and e["bytes"] > 1 << 20:
             nach_groesse.setdefault(e["bytes"], []).append(e)
     for g, es in nach_groesse.items():
         if len(es) < 2:
@@ -835,7 +996,7 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False):
         for es2 in gruppen.values():
             if len(es2) < 2:
                 continue
-            es2.sort(key=lambda x: (0 if x.get("sicher") else 1, len(x["pfad"]), x["pfad"]))
+            es2.sort(key=lambda x: (0 if x.get("sicher") else 1, 0 if x.get("vorschlag_jahr") or x.get("jahr") else 1, len(x["pfad"]), x["pfad"]))
             for x in es2[1:]:
                 if x.get("entschieden"):
                     continue
@@ -938,6 +1099,63 @@ def plan_bauen(quelle, ohne_tmdb=False, ohne_ff=False, ohne_bib=False):
     return plan
 
 
+def filmname(e):
+    if e.get("aktion") == "serie" or e.get("art") == "folge":
+        return "%s S%02dE%02d" % (e.get("serie") or "?", e.get("staffel") or 0, e.get("folge") or 0)
+    return "%s (%s)" % (e.get("titel") or e.get("vorschlag") or "?", e.get("jahr") or e.get("vorschlag_jahr") or "?")
+
+
+def zahl(x, stellen=1):
+    return ("%%.%df" % stellen % x).replace(".", ",")  # Komma, damit Excel (deutsch) es als Zahl liest
+
+
+def qualitaet_schreiben(d, plan):
+    """qualitaet.tsv (alle Filme und Folgen, schlechteste zuerst) und die Überblicks-Zeilen für Bericht und Ausgabe."""
+    filme_l = [e for e in plan if e["art"] == "film" and e["aktion"] == "film"]
+    folgen_l = [e for e in plan if e["art"] == "folge" and e["aktion"] == "serie"]
+    doppelt_l = [e for e in plan if e["art"] in ("film", "folge") and e["aktion"] == "doppelt"]
+    amp = {"rot": [], "gelb": [], "gruen": [], "grau": []}
+    for e in filme_l + folgen_l:
+        amp[e.get("ampel") or "grau"].append(e)
+    reihe = {"rot": 0, "gelb": 1, "grau": 2, "gruen": 3}
+    alle = sorted(filme_l + folgen_l + doppelt_l, key=lambda e: (reihe.get(e.get("ampel") or "grau", 2), filmname(e)))
+    with open(os.path.join(d, "qualitaet.tsv"), "w", encoding="utf-8") as f:
+        f.write("nr\tampel\ttitel\taufloesung\tcodec\thdr\tdeutsch\tkanaele\tgb\tminuten\tgb_pro_stunde\taktion\tsicher\tprobleme\tpfad\n")
+        for e in alle:
+            q = e.get("q") or {}
+            k = klasse(q)
+            f.write("\t".join(str(x) for x in (
+                e["nr"], e.get("ampel") or "grau", filmname(e), {2160: "4K", 576: "SD", 360: "<SD", 0: "?"}.get(k, "%dp" % k),
+                q.get("codec") or "", "ja" if q.get("hdr") else "", "ja" if q.get("deutsch") else "nein",
+                q.get("kanaele") or "", zahl(e["bytes"] / 1e9), zahl(q.get("min") or 0, 0), zahl(gb_pro_stunde(q)),
+                e["aktion"], "ja" if e.get("sicher") else "nein", "; ".join(e.get("probleme") or []), e["pfad"])) + "\n")
+    kl = {}
+    for e in filme_l:
+        k = klasse(e.get("q") or {})
+        kl[k] = kl.get(k, 0) + 1
+    gemessen = [e for e in filme_l if (e.get("q") or {}).get("quelle") == "ffprobe" and not (e.get("q") or {}).get("kaputt")]
+    zeilen = [
+        "Filme: %d (%s TB), davon noch unsicher: %d" % (len(filme_l), zahl(sum(e["bytes"] for e in filme_l) / 1e12),
+                                                     len([e for e in filme_l if not e.get("sicher")])),
+        "Auflösung: 4K %d · 1080p %d · 720p %d · SD %d · darunter %d · unbekannt %d" % (
+            kl.get(2160, 0), kl.get(1080, 0), kl.get(720, 0), kl.get(576, 0), kl.get(360, 0), kl.get(0, 0)),
+        "Ohne deutschen Ton (gemessen): %d · mit HDR: %d" % (
+            len([e for e in gemessen if not e["q"].get("deutsch")]), len([e for e in gemessen if e["q"].get("hdr")])),
+        "Qualität (Filme und Folgen): grün %d · gelb %d · rot %d · nicht gemessen %d" % (
+            len(amp["gruen"]), len(amp["gelb"]), len(amp["rot"]), len(amp["grau"])),
+        "Doppelt (schlechtere Fassungen, kommen nach _Pruefen/Doppelt): %d (%s GB)" % (
+            len(doppelt_l), zahl(sum(e["bytes"] for e in doppelt_l) / 1e9)),
+    ]
+    if folgen_l:
+        zeilen.append("Serien: %d Folgen in %d Serien" % (len(folgen_l), len({normal(e.get("serie")) for e in folgen_l})))
+    musik = [e for e in plan if e["art"] == "audio"]
+    if musik:
+        zeilen.append("Musik-Dateien außerhalb der Musik-Ordner: %d (%s GB) – %s" % (
+            len(musik), zahl(sum(e["bytes"] for e in musik) / 1e9),
+            "bleiben liegen (Runde 2)" if all(e["aktion"] == "lassen" for e in musik) else "werden einsortiert"))
+    return {"ampel": amp, "zeilen": zeilen}
+
+
 def bericht_schreiben(quelle, plan, besser):
     d = sdir(quelle)
     zaehl = {}
@@ -954,6 +1172,7 @@ def bericht_schreiben(quelle, plan, besser):
     for e in plan:
         if e["aktion"] == "serie" and e.get("sicher") and e["art"] == "folge":
             serien[e["serie"]] = serien.get(e["serie"], 0) + 1
+    info = qualitaet_schreiben(d, plan)
     with open(os.path.join(d, "unsicher.tsv"), "w", encoding="utf-8") as f:
         f.write("nr\tpfad\tgb\tqualitaet\tvorschlag\tgrund\tkandidaten\n")
         for e in unsicher:
@@ -965,12 +1184,21 @@ def bericht_schreiben(quelle, plan, besser):
              "lassen": "bleibt liegen", "unsicher": "unsicher (bleibt liegen, bis entschieden)"}
     z = ["# Bericht Filmsortierer – %s" % time.strftime("%d.%m.%Y %H:%M"), "",
          "Quelle: `%s` · Ziel: `%s` · Es wird nichts gelöscht und nichts überschrieben." % (quelle, ausgabe(quelle)), "",
+         "## Überblick", ""] + ["- " + x for x in info["zeilen"]] + ["",
          "| Was | Dateien | GB |", "|---|---:|---:|"]
     for k in ("film", "serie", "musik", "doppelt", "beiseite", "unsicher", "lassen"):
         if k in zaehl:
             z.append("| %s | %d | %s |" % (namen[k], zaehl[k][0], gb(zaehl[k][1])))
     if serien:
         z += ["", "## Serien", ""] + ["- %s: %d Folgen" % (n, c) for n, c in sorted(serien.items())]
+    for farbe, titel in (("rot", "Qualität ROT – wirklich schlecht oder kaputt, bitte ansehen"),
+                         ("gelb", "Qualität GELB – mal reinschauen, oft trotzdem ok")):
+        es = info["ampel"][farbe]
+        z += ["", "## %s (%d) – Liste auch in qualitaet.tsv" % (titel, len(es)), ""]
+        z += ["- %s · %s · `%s` – %s" % (e["nr"], filmname(e), e["pfad"], "; ".join(e.get("probleme") or [])) for e in es]
+    if NICHT_LESBAR:
+        z += ["", "## Nicht lesbar (%d) – NICHT geprüft, bitte am PC ansehen" % len(NICHT_LESBAR), ""]
+        z += ["- `%s` – %s" % (p_, f_) for p_, f_ in NICHT_LESBAR]
     z += ["", "## Doppelt (%d) – wandert nach _Pruefen/Doppelt, die bessere Fassung kommt in die Bibliothek" % len(doppelt), ""]
     z += ["- `%s` (%s GB) – %s" % (e["pfad"], gb(e["bytes"]), e["grund"]) for e in doppelt]
     if besser:
@@ -988,47 +1216,228 @@ def bericht_schreiben(quelle, plan, besser):
         z += ["  - `%s`" % x["pfad"] for x in es]
     z += ["", "## Bleibt liegen (%d)" % len(lassen), ""] + ["- `%s` – %s" % (e["pfad"], e["grund"]) for e in lassen]
     open(os.path.join(d, "bericht.md"), "w", encoding="utf-8").write("\n".join(z) + "\n")
-    return zaehl, unsicher
+    return zaehl, unsicher, info
 
 
 def zusammenfassung(quelle, plan):
     d = sdir(quelle)
-    zaehl, unsicher = bericht_schreiben(quelle, plan, [e for e in plan if e.get("besser_als")])
+    zaehl, unsicher, info = bericht_schreiben(quelle, plan, [e for e in plan if e.get("besser_als")])
     gesamt = sum(e["bytes"] for e in plan)
     print("Geprüft: %d Dateien, %s GB" % (len(plan), gb(gesamt)))
     print("  " + " · ".join("%s %d (%s GB)" % (k, v[0], gb(v[1])) for k, v in sorted(zaehl.items())))
+    for x in info["zeilen"]:
+        print("  " + x)
+    print("Qualitäts-Liste:", os.path.join(d, "qualitaet.tsv"))
+    if NICHT_LESBAR:
+        print("ACHTUNG nicht lesbar: %d (nicht geprüft), z. B. %s – %s" % (len(NICHT_LESBAR), NICHT_LESBAR[0][0], NICHT_LESBAR[0][1]))
     print("Bericht für Lukas:", os.path.join(d, "bericht.md"))
     print("Unsichere für Claude:", os.path.join(d, "unsicher.tsv"), "(%d)" % len(unsicher))
     print("Weiter: entscheiden QUELLE NR=tmdb:… | dann ausfuehren QUELLE (Vorschau) | dann ausfuehren QUELLE --los")
 
 
-def cmd_bestand(a):
+FILM_MIN = 300e6  # Videos ab 300 MB zählen in der Karte als Film (kleiner = Clip, Sample, Musikvideo)
+
+
+def ist_musik(z):
+    """Ordner-Summe z = [filme_n, filme_b, klein_n, klein_b, audio_n, audio_b, sonst_n, sonst_b]:
+    kein Film, mindestens 5 Lieder, höchstens 1 kleines Video auf 5 Lieder (Musikvideos dürfen dabei sein)."""
+    return z[0] == 0 and z[4] >= 5 and z[2] * 5 <= z[4]
+
+
+def musik_ordner(quelle):
+    """Ordner, die in Runde 1 gar nicht betreten werden: automatisch erkannte plus von Hand (bereich)."""
+    b = lade(os.path.join(sdir(quelle), "bereiche.json"), None) or {}
+    eigen = b.get("eigen") or {}
+    m = set(b.get("auto") or []) | {p for p, art in eigen.items() if art == "musik"}
+    return sorted(p for p in m if eigen.get(p) != "filme")
+
+
+def lauf_optionen(quelle, neu=False):
+    """Optionen von pruefen werden gemerkt (optionen.json), damit entscheiden und endtest denselben Plan bauen."""
+    pfad = os.path.join(sdir(quelle), "optionen.json")
+    if neu:
+        o = {"ohne_tmdb": "--ohne-tmdb" in sys.argv, "ohne_bib": "--ohne-bibliothek" in sys.argv,
+             "mit_musik": "--mit-musik" in sys.argv,
+             "ohne_extra": [x.strip().strip('"') for x in (opt("ohne") or "").split(";") if x.strip()]}
+        speichere(pfad, o)
+    else:
+        o = lade(pfad, None) or {"ohne_tmdb": False, "ohne_bib": "--ohne-bibliothek" in sys.argv,
+                                 "mit_musik": "--mit-musik" in sys.argv, "ohne_extra": []}
+    ohne = list(o.get("ohne_extra") or [])
+    if not o.get("mit_musik"):
+        ohne += musik_ordner(quelle)
+    return {"ohne_tmdb": bool(o.get("ohne_tmdb")), "ohne_bib": bool(o.get("ohne_bib")), "ohne": ohne,
+            "mit_musik": bool(o.get("mit_musik"))}
+
+
+def cmd_karte(a):
+    """Schneller Überblick: nur Ordnereinträge lesen (Namen, Größen), keine Datei öffnen. Sichert dabei den Bestand."""
     a, _ = optionen(a)
     quelle = os.path.abspath(a[0])
+    if not os.path.isdir(L(quelle)):
+        sys.exit("Ordner gibt es nicht: " + quelle)
     d = sdir(quelle)
+    tiefe = int(opt("tiefe", "3"))
+    del NICHT_LESBAR[:]
     name = os.path.join(d, "bestand_%s.tsv" % time.strftime("%Y-%m-%d_%H%M"))
-    arten, n, summe = {}, 0, 0
+    agg, ges, n, t0 = {}, [0] * 8, 0, time.time()
     with open(name, "w", encoding="utf-8") as f:
         f.write("pfad\tbytes\tgeaendert\n")
         for rel, g, mt in dateien(quelle):
             f.write("%s\t%d\t%s\n" % (rel, g, time.strftime("%Y-%m-%d %H:%M", time.localtime(mt))))
-            k = art_grob(rel)
-            z = arten.setdefault(k, [0, 0])
-            z[0] += 1
-            z[1] += g
+            art = art_grob(rel)
+            i = 0 if art == "video" and g >= FILM_MIN else 2 if art == "video" else 4 if art == "audio" else 6
+            ges[i] += 1
+            ges[i + 1] += g
+            teile = rel.split(os.sep)[:-1]
+            for j in range(len(teile) + 1):
+                z = agg.setdefault(os.sep.join(teile[:j]), [0] * 8)
+                z[i] += 1
+                z[i + 1] += g
             n += 1
-            summe += g
-    print("Bestand gesichert:", name)
-    print("%d Dateien, %s GB:" % (n, gb(summe)), " · ".join("%s %d (%s GB)" % (k, v[0], gb(v[1])) for k, v in sorted(arten.items())))
+            if n % 20000 == 0:
+                open(os.path.join(d, "fortschritt.txt"), "w", encoding="utf-8").write(
+                    time.strftime("%H:%M:%S ") + "karte: %d Dateien gelesen\n" % n)
+
+    def art_von(z):
+        if ist_musik(z):
+            return "musik"
+        if z[0] and z[4] >= 50:
+            return "gemischt"
+        if z[0]:
+            return "filme"
+        return "kleine Videos" if z[2] else "sonst"
+
+    auto = sorted(k for k, z in agg.items() if k and ist_musik(z)
+                  and not (os.path.dirname(k) and ist_musik(agg[os.path.dirname(k)])))
+    alt = lade(os.path.join(d, "bereiche.json"), None) or {}
+    speichere(os.path.join(d, "bereiche.json"), {"auto": auto, "eigen": alt.get("eigen") or {},
+                                                  "stand": time.strftime("%Y-%m-%d %H:%M")})
+    with open(os.path.join(d, "karte.tsv"), "w", encoding="utf-8") as f:
+        f.write("ordner\ttiefe\tfilme\tfilme_gb\tkleine_videos\tmusik_dateien\tmusik_gb\tsonstige\tgesamt_gb\tart\n")
+        for k in sorted(agg):
+            t = k.count(os.sep) + 1 if k else 0
+            if t > tiefe:
+                continue
+            z = agg[k]
+            f.write("%s\t%d\t%d\t%s\t%d\t%d\t%s\t%d\t%s\t%s\n" % (k or ".", t, z[0], zahl(z[1] / 1e9), z[2], z[4],
+                                                               zahl(z[5] / 1e9), z[6], zahl((z[1] + z[3] + z[5] + z[7]) / 1e9), art_von(z)))
+    open(os.path.join(d, "fortschritt.txt"), "w", encoding="utf-8").write(time.strftime("%H:%M:%S ") + "karte fertig\n")
+    m = musik_ordner(quelle)
+    print("Bestand gesichert: %s (%d Dateien, %s GB, %d s)" % (name, n, gb(sum(ges[1::2])), time.time() - t0))
+    print("Ganze Platte: Filme (Videos ab 300 MB) %d (%s GB) · kleine Videos %d (%s GB) · Musik %d (%s GB) · Sonstiges %d (%s GB)" % (
+        ges[0], gb(ges[1]), ges[2], gb(ges[3]), ges[4], gb(ges[5]), ges[6], gb(ges[7])))
+    mz = [agg[k] for k in m if k in agg]
+    print("Reine Musik-Ordner: %d (%s GB, %d Lieder) – werden bei pruefen gar nicht betreten:" % (
+        len(m), gb(sum(z[5] + z[3] + z[7] for z in mz)), sum(z[4] for z in mz)))
+    for k in sorted(m, key=lambda k: -(agg.get(k) or [0] * 8)[5])[:8]:
+        z = agg.get(k) or [0] * 8
+        print("   %s (%s GB, %d Lieder%s)" % (k, gb(z[5]), z[4], ", %d kleine Videos" % z[2] if z[2] else ""))
+    klein = sum(agg[k][2] for k in m if k in agg)
+    if klein:
+        print("   darin %d kleine Videos unter 300 MB (Musikvideos?) – werden mit übersprungen; falls Filme: bereich ...=filme" % klein)
+    oben = sorted((k for k in agg if k and os.sep not in k), key=lambda k: -sum(agg[k][1::2]))
+    print("Oberste Ordner (%d, größte zuerst):" % len(oben))
+    for k in oben[:30]:
+        z = agg[k]
+        print("   %-40s Filme %5d · Musik %6d · %8s GB · %s" % (k[:40], z[0], z[4], gb(sum(z[1::2])), art_von(z)))
+    gem =[k for k in sorted(agg) if k and k.count(os.sep) < 2 and art_von(agg[k]) == "gemischt"]
+    if gem:
+        print("Gemischt (Filme und viel Musik zusammen – Musik darin wird in Runde 1 nur liegen gelassen): %s" % ", ".join(gem[:10]))
+    if NICHT_LESBAR:
+        print("ACHTUNG nicht lesbar: %d, z. B. %s – %s" % (len(NICHT_LESBAR), NICHT_LESBAR[0][0], NICHT_LESBAR[0][1]))
+    print("Liste je Ordner: %s" % os.path.join(d, "karte.tsv"))
+    print('Weiter: pruefen QUELLE --ohne-bibliothek   (Korrektur vorher: bereich QUELLE "Ordner"=filme|musik)')
+
+
+def cmd_bereich(a):
+    a, _ = optionen(a)
+    quelle = os.path.abspath(a[0])
+    d = sdir(quelle)
+    b = lade(os.path.join(d, "bereiche.json"), None) or {"auto": [], "eigen": {}}
+    for x in a[1:]:
+        pfad, _, art = x.rpartition("=")
+        art = art.strip().lower()
+        pfad = os.path.normpath(pfad.strip().strip('"').strip("/\\"))
+        if art not in ("musik", "filme") or not pfad or pfad == ".":
+            print("übersprungen:", x)
+            continue
+        if not os.path.isdir(L(os.path.join(quelle, pfad))):
+            print("Ordner gibt es nicht:", pfad)
+            continue
+        b.setdefault("eigen", {})[pfad] = art
+        print(pfad, "->", art)
+    speichere(os.path.join(d, "bereiche.json"), b)
+    print("Musik-Ordner, die in Runde 1 übersprungen werden: %d" % len(musik_ordner(quelle)))
 
 
 def cmd_pruefen(a):
     a, _ = optionen(a)
     quelle = os.path.abspath(a[0])
-    if not os.path.isdir(quelle):
+    if not os.path.isdir(L(quelle)):
         sys.exit("Ordner gibt es nicht: " + quelle)
-    plan = plan_bauen(quelle, ohne_tmdb="--ohne-tmdb" in sys.argv, ohne_ff="--ohne-ffprobe" in sys.argv,
-                      ohne_bib="--ohne-bibliothek" in sys.argv)
+    lo = lauf_optionen(quelle, neu=True)
+    if not lo["mit_musik"]:
+        tipp = "" if os.path.exists(os.path.join(sdir(quelle), "bereiche.json")) else " (Tipp: vorher karte laufen lassen)"
+        print("Runde 1 – nur Filme: %d Musik-Ordner werden übersprungen, Musik-Dateien bleiben liegen%s" % (
+            len(musik_ordner(quelle)), tipp))
+    plan = plan_bauen(quelle, ohne_ff="--ohne-ffprobe" in sys.argv, **lo)
+    zusammenfassung(quelle, plan)
+
+
+def ende_pruefen(ff, pfad):
+    """Spielt die letzten Sekunden ab (nur lesen). Abgebrochene MKV-Kopien zeigen sonst die volle Laufzeit."""
+    try:
+        r = subprocess.run([ff, "-v", "error", "-nostdin", "-sseof", "-25", "-i", L(pfad), "-t", "10", "-map", "0:V:0",
+                            "-f", "null", "-progress", "pipe:1", "-nostats", "-"], capture_output=True, timeout=240)
+    except subprocess.TimeoutExpired:
+        return "fehler: Zeitüberschreitung beim Abspielen"
+    frames = [int(x.split("=", 1)[1]) for x in r.stdout.decode("utf-8", "replace").splitlines()
+              if x.startswith("frame=") and x.split("=", 1)[1].strip().isdigit()]
+    zeilen = [z.strip() for z in r.stderr.decode("utf-8", "replace").splitlines() if z.strip() and "Last message repeated" not in z]
+    abgebrochen = [z for z in zeilen if re.search(r"(?i)ended prematurely|truncat|end of file|unexpected eof", z)]
+    if r.returncode != 0 or not frames or frames[-1] == 0 or abgebrochen:
+        return "kaputt: " + ((abgebrochen or zeilen or ["am Ende kein Bild"])[0])[:120]
+    if len(zeilen) >= 5:
+        return "fehler: %d Meldungen, z. B. %s" % (len(zeilen), zeilen[0][:80])
+    return "ok"
+
+
+def cmd_endtest(a):
+    a, o = optionen(a)
+    quelle = os.path.abspath(a[0])
+    d = sdir(quelle)
+    plan = lade(os.path.join(d, "plan.json"), None)
+    if not plan:
+        sys.exit("erst pruefen laufen lassen")
+    ff = shutil.which("ffmpeg")
+    if not ff:
+        sys.exit("ffmpeg fehlt")
+    icache = lade(os.path.join(d, "info_cache.json"), {})
+    alle, neu_ = "--alle" in sys.argv, "--neu" in sys.argv
+    jobs = [e for e in plan if e["art"] in ("film", "folge") and (alle or e["aktion"] in ("film", "serie"))]
+    geprueft = kaputt = fehler = 0
+    t0 = time.time()
+    for i, e in enumerate(jobs):
+        k = "%s|%s" % (e["pfad"], e["bytes"])
+        q = icache.get(k)
+        if not q or q.get("quelle") != "ffprobe" or q.get("kaputt") or (q.get("ende") and not neu_):
+            continue
+        if not os.path.exists(L(os.path.join(quelle, e["pfad"]))):
+            continue
+        q["ende"] = ende_pruefen(ff, os.path.join(quelle, e["pfad"]))
+        geprueft += 1
+        kaputt += q["ende"].startswith("kaputt")
+        fehler += q["ende"].startswith("fehler")
+        if geprueft % 20 == 0:
+            speichere(os.path.join(d, "info_cache.json"), icache, True)
+            rest = (time.time() - t0) / geprueft * (len(jobs) - i - 1)
+            open(os.path.join(d, "fortschritt.txt"), "w", encoding="utf-8").write(
+                time.strftime("%H:%M:%S ") + "endtest %d/%d, noch ca. %d min, kaputt %d\n" % (i + 1, len(jobs), rest / 60, kaputt))
+    speichere(os.path.join(d, "info_cache.json"), icache, True)
+    print("Endtest: %d geprüft in %d min – Ende fehlt (kaputt): %d · Fehlermeldungen: %d" % (
+        geprueft, (time.time() - t0) / 60, kaputt, fehler))
+    plan = plan_bauen(quelle, ohne_ff=True, **lauf_optionen(quelle))
     zusammenfassung(quelle, plan)
 
 
@@ -1049,8 +1458,7 @@ def cmd_entscheiden(a):
         entsch[nach_nr[nr]["pfad"]] = aktion
         print(nr, nach_nr[nr]["pfad"], "->", aktion)
     speichere(os.path.join(d, "entscheidungen.json"), entsch)
-    plan = plan_bauen(quelle, ohne_tmdb="--ohne-tmdb" in sys.argv, ohne_ff=True,
-                      ohne_bib="--ohne-bibliothek" in sys.argv)  # Caches machen das schnell
+    plan = plan_bauen(quelle, ohne_ff=True, **lauf_optionen(quelle))  # gleiche Optionen wie pruefen, Caches machen es schnell
     for x in a[1:]:
         nr = x.partition("=")[0]
         alt = nach_nr.get(nr)
@@ -1073,7 +1481,7 @@ def cmd_vorschau(a):
         if not e:
             print(nr, "gibt es nicht")
             continue
-        pfad = os.path.join(quelle, e["pfad"])
+        pfad = L(os.path.join(quelle, e["pfad"]))
         dauer = ((e.get("q") or {}).get("min") or 0) * 60
         if not dauer and fp:
             r = subprocess.run([fp, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", pfad], capture_output=True, timeout=60)
@@ -1112,9 +1520,9 @@ def cmd_ausfuehren(a):
     fehlt, besetzt, ok = [], [], []
     for e in jobs:
         src, dst = os.path.join(quelle, e["pfad"]), os.path.join(aus, e["ziel"])
-        if not os.path.exists(src):
+        if not os.path.exists(L(src)):
             fehlt.append(e)
-        elif os.path.exists(dst):
+        elif os.path.exists(L(dst)):
             besetzt.append(e)
         else:
             ok.append(e)
@@ -1140,21 +1548,26 @@ def cmd_ausfuehren(a):
         for i, e in enumerate(ok):
             src, dst = os.path.join(quelle, e["pfad"]), os.path.join(aus, e["ziel"])
             try:
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                if os.path.exists(dst):
+                os.makedirs(L(os.path.dirname(dst)), exist_ok=True)
+                if os.path.exists(L(dst)):
                     continue
+                zeile = {"alt": e["pfad"], "neu": e["ziel"], "aktion": e["aktion"]}
+                # erst ins Protokoll (sofort auf die Platte), dann verschieben: auch bei Stromausfall mitten im Lauf
+                # weiß zurueck-lauf, was wo liegt (es schiebt nur zurück, was wirklich am neuen Platz liegt)
+                lg.write(json.dumps(dict(zeile, art="verschoben"), ensure_ascii=False) + "\n")
+                lg.flush()
+                os.fsync(lg.fileno())
                 try:
-                    os.rename(src, dst)
-                    art = "verschoben"
+                    os.rename(L(src), L(dst))
                 except OSError as x:
                     if x.errno != errno.EXDEV and getattr(x, "winerror", 0) != 17:  # andere Platte -> kopieren
                         raise
-                    shutil.copy2(src, dst)
-                    if os.path.getsize(dst) != e["bytes"] or fingerabdruck(dst, e["bytes"]) != fingerabdruck(src, e["bytes"]):
+                    shutil.copy2(L(src), L(dst))
+                    if os.path.getsize(L(dst)) != e["bytes"] or fingerabdruck(dst, e["bytes"]) != fingerabdruck(src, e["bytes"]):
                         raise IOError("Kopie stimmt nicht: " + dst)
-                    art = "kopiert (Quelle bleibt, andere Platte)"
+                    lg.write(json.dumps(dict(zeile, art="kopiert (Quelle bleibt, andere Platte)"), ensure_ascii=False) + "\n")
+                    lg.flush()
                     kopiert += 1
-                lg.write(json.dumps({"alt": e["pfad"], "neu": e["ziel"], "art": art, "aktion": e["aktion"]}, ensure_ascii=False) + "\n")
                 n += 1
             except Exception as x:
                 fehler += 1
@@ -1183,9 +1596,9 @@ def cmd_zurueck_lauf(a):
         src, dst = os.path.join(aus, z["neu"]), os.path.join(quelle, z["alt"])
         if z["art"].startswith("kopiert"):
             continue  # Quelle liegt noch da, die Kopie bleibt einfach stehen
-        if os.path.exists(src) and not os.path.exists(dst):
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            os.rename(src, dst)
+        if os.path.exists(L(src)) and not os.path.exists(L(dst)):
+            os.makedirs(L(os.path.dirname(dst)), exist_ok=True)
+            os.rename(L(src), L(dst))
             n += 1
     os.replace(log, log + ".zurueckgenommen")
     print("zurückgeschoben:", n)
@@ -1202,8 +1615,8 @@ def cmd_kopieren(a):
     lg = open(os.path.join(nach, ".kopierprotokoll_%s.jsonl" % lauf), "a", encoding="utf-8") if o["los"] else None
     for rel, g, mt in dateien(von, ohne_ausgabe=False):
         dst = os.path.join(nach, rel)
-        if os.path.exists(dst):
-            if os.path.getsize(dst) == g and fingerabdruck(dst, g) == fingerabdruck(os.path.join(von, rel), g):
+        if os.path.exists(L(dst)):
+            if os.path.getsize(L(dst)) == g and fingerabdruck(dst, g) == fingerabdruck(os.path.join(von, rel), g):
                 gleich += 1
             else:
                 konflikt += 1
@@ -1214,12 +1627,13 @@ def cmd_kopieren(a):
         if not o["los"]:
             continue
         try:
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(os.path.join(von, rel), dst)
-            if os.path.getsize(dst) != g or fingerabdruck(dst, g) != fingerabdruck(os.path.join(von, rel), g):
+            os.makedirs(L(os.path.dirname(dst)), exist_ok=True)
+            shutil.copy2(L(os.path.join(von, rel)), L(dst))
+            if os.path.getsize(L(dst)) != g or fingerabdruck(dst, g) != fingerabdruck(os.path.join(von, rel), g):
                 raise IOError("Prüfsumme stimmt nicht")
             if lg:
                 lg.write(json.dumps({"datei": rel, "bytes": g}, ensure_ascii=False) + "\n")
+                lg.flush()
         except Exception as x:
             fehler += 1
             print("Fehler:", rel, x)
@@ -1229,7 +1643,7 @@ def cmd_kopieren(a):
         print("(nur Vorschau – mit --los ausführen)")
 
 
-BEFEHLE = {"bestand": cmd_bestand, "pruefen": cmd_pruefen, "entscheiden": cmd_entscheiden, "vorschau": cmd_vorschau,
+BEFEHLE = {"karte": cmd_karte, "bestand": cmd_karte, "bereich": cmd_bereich, "endtest": cmd_endtest, "pruefen": cmd_pruefen, "entscheiden": cmd_entscheiden, "vorschau": cmd_vorschau,
            "ausfuehren": cmd_ausfuehren, "zurueck-lauf": cmd_zurueck_lauf, "kopieren": cmd_kopieren,
            "inventar": cmd_inventar, "offen": cmd_offen, "suche": cmd_suche, "bilder": cmd_bilder,
            "doppelte": cmd_doppelte, "umbenennen": cmd_umbenennen, "stapel": cmd_stapel, "scan": cmd_scan, "titel": cmd_titel, "zurueck": cmd_zurueck}

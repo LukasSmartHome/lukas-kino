@@ -11,7 +11,44 @@ Braucht nur Python. Der Jellyfin-Schlüssel kommt aus `jellyfin_schluessel.txt` 
 am PC: `--schluessel=\\192.168.178.44\config\jellyfin_schluessel.txt`). Filme werden über Jellyfin bei TMDB erkannt –
 es braucht keinen eigenen TMDB-Schlüssel. ffprobe/ffmpeg sind optional (genauere Qualität, Kontaktbögen).
 
-Holen und starten (File editor, `/api/exec_command` mit `sh -c "…"`):
+### Runde 1 – nur Filme, am PC (v3, Konto B, 20.11.2026)
+
+Lukas' Vorgaben für Filme4 (14 TB vom Kollegen): erst nur die Filme, Musik bleibt komplett liegen (Runde 2 später);
+nichts darf verloren gehen; sortiert wird am PC dicke-berta (Windows kann NTFS am sichersten), dann kommt die Platte an den Pi.
+
+Neu in v3:
+- `karte` – schneller Überblick, öffnet keine Datei (nur Namen und Größen), sichert dabei den Bestand. Reine Musik-Ordner
+  (kein Video ab 300 MB, mindestens 5 Lieder) landen in `bereiche.json` und werden von `pruefen` gar nicht betreten.
+  Korrektur von Hand: `bereich QUELLE "Ordner"=musik|filme`.
+- `pruefen` ist standardmäßig „nur Filme“: Musik-Dateien bleiben liegen, auch außerhalb der Musik-Ordner (`--mit-musik` für Runde 2).
+  Die Optionen von `pruefen` werden gemerkt (`optionen.json`), `entscheiden` und `endtest` bauen denselben Plan.
+- **Qualitäts-Ampel** (nur Anzeige, es wird deswegen nichts verschoben): rot = kaputt/unlesbar, Ende fehlt, im Kino abgefilmt
+  (CAM/TS/Telesync im Namen), unter SD oder extrem komprimiert; gelb = SD/DVD, alter Codec (XviD/DivX), stark komprimiert,
+  Vorab-/Kino-Ton (TS, LD, MD im Namen), unter 50 Minuten. Maß: GB pro Filmstunde je Auflösung (HEVC/AV1 brauchen 60 %).
+  Grenzen in `GRENZEN`. Liste für Lukas: `qualitaet.tsv` (Excel, schlechteste zuerst), Überblick oben in `bericht.md`.
+- `endtest` spielt bei jedem Film die letzten Sekunden ab → findet abgebrochene Kopien (MKV zeigt sonst die volle Laufzeit).
+  Nur lesen, ca. 1–3 s pro Film, mit `fortschritt.txt`.
+- Bei Doppelten zählt jetzt zuerst „heil“, dann deutscher Ton, Auflösung (nach Breite, Breitbild = 1080p), HDR, Kanäle, Größe.
+- Windows: lange Pfade (ab 240 Zeichen) gehen über `\\?\`; was nicht lesbar ist, wird gemeldet statt still übersprungen.
+- `ausfuehren --los` schreibt jede Zeile ins Protokoll, bevor verschoben wird (sofort auf die Platte) – auch nach einem
+  Stromausfall kann `zurueck-lauf` alles zurückschieben.
+
+Ablauf am PC (Platte z. B. `E:`; Pfad immer als `E:/` schreiben, `"E:\"` verschluckt das Anführungszeichen):
+
+| Schritt | Befehl | Dauer (ca. 1.500 Filme) |
+|---|---|---|
+| 0 | CrystalDiskInfo ansehen, `chkdsk E:` **ohne /f** (nur lesen). „Scannen und reparieren“ nicht ohne Rückfrage | 15 min |
+| 1 | `python fs.py karte E:/` | Minuten |
+| 2 | `python fs.py pruefen E:/ --ohne-bibliothek` | 1–3 h |
+| 3 | `python fs.py endtest E:/` | 1–2 h |
+| 4 | Unsichere: `suche …`, `vorschau E:/ NR …`, `entscheiden E:/ NR=… …` | je nach Dateinamen |
+| 5 | `python fs.py ausfuehren E:/`, dann `… --los` | Minuten |
+| 6 | Lukas liest `E:/Kino/_sortierer/bericht.md` und `qualitaet.tsv` | – |
+
+Vorbereitung einmalig: Python 3 und ffmpeg (winget), Skript von raw.githubusercontent.com (Zweig filme) nach `C:\Kino\fs.py`.
+Der Jellyfin-Schlüssel kommt über `\\192.168.178.44\config\jellyfin_schluessel.txt` (Samba), wird nie ausgegeben.
+
+Holen und starten auf dem Pi (File editor, `/api/exec_command` mit `sh -c "…"`):
 
 ```
 wget -q -O /tmp/fs.py https://raw.githubusercontent.com/LukasSmartHome/lukas-kino/filme/werkzeuge/filmsortierer.py
