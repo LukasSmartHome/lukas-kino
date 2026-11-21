@@ -107,8 +107,10 @@ final class Jellyfin {
     }
 
     JSONArray neu() throws Exception {
+        // nur Filme in guter Qualität (Jellyfin-Tag „Blu-ray“, ab Full HD – setzt kino_pflege.py qualitaet): DVDs stehen
+        // weiter in ihren Kategorien, aber nicht mehr vorne bei „Neu“ (Wunsch Lukas 21.11.2026)
         return liste("/Items?userId=" + benutzer + "&includeItemTypes=Movie&recursive=true&sortBy=DateCreated&sortOrder=Descending"
-                + "&limit=40&fields=" + FELDER);
+                + "&tags=Blu-ray&limit=40&fields=" + FELDER);
     }
 
     JSONArray sammlungen() throws Exception {

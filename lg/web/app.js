@@ -279,8 +279,10 @@
       });
     },
     neu: function () {
+      // nur Filme in guter Qualität (Jellyfin-Tag „Blu-ray“, ab Full HD – setzt kino_pflege.py qualitaet): DVDs stehen
+      // weiter in ihren Kategorien, aber nicht mehr vorne bei „Neu“ (Wunsch Lukas 21.11.2026)
       return this.liste('/Items?userId=' + this.benutzer + '&includeItemTypes=Movie&recursive=true&sortBy=DateCreated'
-        + '&sortOrder=Descending&limit=40&fields=' + FELDER);
+        + '&sortOrder=Descending&tags=Blu-ray&limit=40&fields=' + FELDER);
     },
     sammlungen: function () {
       return this.liste('/Items?userId=' + this.benutzer + '&includeItemTypes=BoxSet&recursive=true&sortBy=SortName&fields=ChildCount');
@@ -733,27 +735,8 @@
 
   /** Merkliste geändert: Reihe auf der Filme-Startseite und die Merkliste-Seite nachziehen. */
   function merklisteGeaendert() {
-    const l = merk.liste();
-    const start = startseiten.filme;
-    if (start) {
-      let i = -1;
-      start.reihen.forEach(function (r, k) { if (r.titel === 'Merkliste' && r._merk) i = k; });
-      if (l.length && i >= 0) {
-        const r = start.reihen[i];
-        r.eintraege = l.slice();
-        r.fokus = Math.min(r.fokus, l.length - 1);
-        r.version++;
-      } else if (l.length) {
-        const r = reiheAus('Merkliste', l, POSTER);
-        r._merk = true;
-        const pos = start.reihen.length && start.reihen[0].titel === 'Weiterschauen' ? 1 : 0;
-        start.reihen.splice(pos, 0, r);
-        if (start.akt >= pos && start.reihen.length > 1) start.akt++;
-      } else if (i >= 0) {
-        start.reihen.splice(i, 1);
-        if (start.akt > i || start.akt >= start.reihen.length) start.akt = Math.max(0, start.akt - 1);
-      }
-    }
+    // Filme-Startseite: die Merkliste steht hinten in der Reihe Weiterschauen (seit 21.11.2026)
+    liveEinsetzen(null);
     const alt = startseiten.merkliste;
     const neu = merklisteSeite();
     startseiten.merkliste = neu;
@@ -1040,6 +1023,12 @@
     }
   }
 
+  /** Merkliste als hinterer Teil der Reihe Weiterschauen (ohne Filme, die vorne schon stehen), als Kopien mit „_merk“. */
+  function merkTeil(ohne) {
+    return merk.liste().filter(function (o) { return o && ohne.indexOf(o.Id) < 0; })
+      .map(function (o) { return Object.assign({}, o, { _merk: true }); });
+  }
+
   /** Live-Kacheln vorne in die Reihe Weiterschauen der Filme-Startseite (weiter = frische Liste von Jellyfin oder null). */
   function liveEinsetzen(weiter) {
     const start = startseiten.filme;
@@ -1048,9 +1037,10 @@
     const da = !!w && w.titel === 'Weiterschauen';
     const alt = da ? (w.live || 0) : 0;
     const liveIds = live.liste.map(function (e) { return e.Id; });
-    let regulaer = weiter ? weiter.slice() : (da ? w.eintraege.filter(function (e) { return e && !e._live; }) : []);
+    let regulaer = weiter ? weiter.slice() : (da ? w.eintraege.filter(function (e) { return e && !e._live && !e._merk; }) : []);
     regulaer = regulaer.filter(function (e) { return e && liveIds.indexOf(e.Id) < 0; });
-    const alle = live.liste.concat(regulaer);
+    const mt = merkTeil(liveIds.concat(regulaer.map(function (e) { return e.Id; })));
+    const alle = live.liste.concat(regulaer, mt);
     if (!alle.length) {
       if (da && start.reihen.length > 1) {
         start.reihen.shift();
@@ -1064,6 +1054,7 @@
       }
       w.eintraege = alle;
       w.live = live.liste.length;
+      w.merkN = mt.length;
       w.version++;
       // stand man ganz vorne, bleibt man vorne (Live zuerst sehen), sonst bleibt der Fokus auf demselben Film
       w.fokus = begrenzen(alt === 0 && w.fokus === 0 ? 0 : w.fokus + w.live - alt, 0, alle.length - 1);
@@ -1381,7 +1372,7 @@
         // Weiterschauen: Gesehenes fliegt auch hier raus (seit 16.11.2026), die Live-Kacheln vorne bleiben
         const wr = r.titel === 'Weiterschauen';
         const vorher = r.eintraege.length;
-        r.eintraege = r.eintraege.filter(function (e) { return !istGesehen(e) || (wr && e && e._live); });
+        r.eintraege = r.eintraege.filter(function (e) { return !istGesehen(e) || (wr && e && (e._live || e._merk)); });
         if (r.eintraege.length === vorher) continue;
         r.version++;
         r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.length - 1));
@@ -2295,13 +2286,13 @@
     const s = neueSeite('Filme');
     const l = await Promise.all([jf.weiterschauen(), jf.neu(), jf.sammlungen()]);
     const weiter = l[0], neu = l[1], samml = l[2];
-    if (weiter.length) s.reihen.push(reiheAus('Weiterschauen', weiter, POSTER));
-    const gemerkt = merk.liste();
-    if (gemerkt.length) {
-      const r = reiheAus('Merkliste', gemerkt, POSTER);
-      r._merk = true;
-      s.reihen.push(r);
-    }
+    // Weiterschauen und Merkliste in einer Reihe (Wunsch Lukas 21.11.2026): links was man weiterschauen kann,
+    // rechts daneben die Merkliste. Den Merkliste-Teil setzt liveEinsetzen() neu zusammen (auch nach jeder Änderung).
+    const wr = reiheAus('Weiterschauen', weiter, POSTER);
+    const mt = merkTeil(weiter.map(function (e) { return e.Id; }));
+    wr.eintraege = wr.eintraege.concat(mt);
+    wr.merkN = mt.length;
+    if (wr.eintraege.length) s.reihen.push(wr);
     s.reihen.push(reiheAus('Neu', neu.filter(function (e) { return !istGesehen(e); }), POSTER));
     // Genre-Kategorien und Filmreihen trennen; die Filmreihen stecken hinter der Kachel „Sammlungen“
     const genres = samml.filter(istGenre);
@@ -2463,7 +2454,9 @@
         if (detailEintrag && frisch.Id === detailEintrag.Id) detailEintrag = frisch;
       }
       const start = startseiten[b];
-      if (start && b !== 'fotos') {
+      if (b === 'filme') {
+        liveEinsetzen(weiter);   // Weiterschauen + Live + Merkliste in einer Reihe
+      } else if (start && b !== 'fotos') {
         const w = start.reihen[0];
         if (w && w.titel === 'Weiterschauen') {
           w.eintraege = weiter.slice();
@@ -2477,7 +2470,6 @@
           start.reihen.unshift(reiheAus('Weiterschauen', weiter, b === 'serien' ? QUER : POSTER));
           if (seite === start) start.akt++;
         }
-        if (b === 'filme') liveEinsetzen(null);
       }
       fokusGeaendert();
     } catch (e) { /* nicht schlimm */ }
@@ -2489,7 +2481,7 @@
       s.reihen.forEach(function (r) {
         for (let i = 0; i < r.eintraege.length; i++) {
           if (r.eintraege[i] && r.eintraege[i].Id === neu.Id && !r.eintraege[i]._live) {
-            r.eintraege[i] = neu;
+            r.eintraege[i] = r.eintraege[i]._merk ? Object.assign({}, neu, { _merk: true }) : neu;
             r.version++;
           }
         }
@@ -2637,8 +2629,10 @@
     }
     const h = hintergrundTag(e);
     if (h) return hintergrundBild(id, h);
+    // Film ohne Szenenbild (z. B. „AUFTRAG“): nicht das kleine Poster riesig und verpixelt über den ganzen Bildschirm
+    // ziehen, sondern weichgezeichnet (macht Jellyfin) – abgedunkelt wird in hintergrundSetzen (Meldung Lukas 21.11.2026)
     const pr = tag(e, 'Primary');
-    return pr ? posterUrl(id, pr, 1080) : null;
+    return pr ? posterUrl(id, pr, 240) + '&blur=40' : null;
   }
 
   function logoUrlFuer(e) {
@@ -2757,7 +2751,8 @@
       neu.classList.remove('an');
       neu.style.zIndex = '2';
       alt.style.zIndex = '1';
-      neu.style.backgroundImage = url ? 'url("' + url + '")' : farbVerlauf(farbe);
+      neu.style.backgroundImage = url ? (url.indexOf('&blur=') >= 0 ? 'linear-gradient(rgba(5,6,8,.45),rgba(5,6,8,.45)),' : '')
+        + 'url("' + url + '")' : farbVerlauf(farbe);
       sofortEnde(neu);
       neu.classList.add('an');
       bgOben = 1 - bgOben;
@@ -2917,7 +2912,7 @@
       const obenAmSchirm = REIHE_Y + versatz(s, i) - versatz(s, s.akt);
       const sicht = (1080 - obenAmSchirm) / (r.form === QUER ? QH : PH);
       r.streifen.style.opacity = i > s.akt ? String(Math.max(0, Math.min(1, (sicht - 0.55) / 0.35))) : '1';
-      r.titelEl.textContent = r.live ? '' : r.titel;
+      r.titelEl.textContent = r.live || r.merkN ? '' : r.titel;
       kartenZeichnen(r, i === s.akt);
     }
     if (neu) sofortEnde(cont);
@@ -2941,9 +2936,11 @@
 
   /** x-Position einer Karte; in Weiterschauen stehen vorne die breiteren Live-Kacheln mit Abstand. */
   function kartenX(r, k) {
-    const n = r.live || 0, sw = (r.form === QUER ? QW : PW) + ABSTAND;
-    if (!n) return k * sw;
-    return k < n ? k * (LIVE_W + ABSTAND) : n * (LIVE_W + ABSTAND) + LIVE_LUECKE + (k - n) * sw;
+    const n = r.live || 0, sw = (r.form === QUER ? QW : PW) + ABSTAND, m = r.merkN || 0, m0 = r.eintraege.length - m;
+    let x = !n ? k * sw : (k < n ? k * (LIVE_W + ABSTAND) : n * (LIVE_W + ABSTAND) + LIVE_LUECKE + (k - n) * sw);
+    // vor der Merkliste dieselbe Lücke wie hinter den Live-Kacheln (wenn davor etwas steht)
+    if (m && m0 > 0 && k >= m0) x += LIVE_LUECKE;
+    return x;
   }
 
   function kartenZeichnen(r, aktiv) {
@@ -2953,16 +2950,25 @@
       r.karten = {};
       r.platzhalter = false;
       r.gebaut = r.version;
-      if (r.live) {
-        // Überschriften wandern mit: „Läuft gerade“ über den Live-Kacheln, „Weiterschauen“ über dem Rest
-        const t1 = div('live-titel');
-        t1.innerHTML = '<i></i>Läuft gerade';
-        t1.style.left = '0px';
-        r.streifen.appendChild(t1);
-        if (r.eintraege.length > r.live) {
+      if (r.live || r.merkN) {
+        // Überschriften wandern mit: „Läuft gerade“ über den Live-Kacheln, „Weiterschauen“ über den angefangenen
+        // Filmen, „Merkliste“ über den gemerkten (seit 21.11.2026 in derselben Reihe)
+        const m0 = r.eintraege.length - (r.merkN || 0);
+        if (r.live) {
+          const t1 = div('live-titel');
+          t1.innerHTML = '<i></i>Läuft gerade';
+          t1.style.left = '0px';
+          r.streifen.appendChild(t1);
+        }
+        if (m0 > (r.live || 0)) {
           const t2 = div('live-titel', 'Weiterschauen');
-          t2.style.left = kartenX(r, r.live) + 'px';
+          t2.style.left = kartenX(r, r.live || 0) + 'px';
           r.streifen.appendChild(t2);
+        }
+        if (r.merkN) {
+          const t3 = div('live-titel', 'Merkliste');
+          t3.style.left = kartenX(r, m0) + 'px';
+          r.streifen.appendChild(t3);
         }
       }
     }
@@ -3038,6 +3044,10 @@
       img.alt = '';
       img.decoding = 'async';
       img.onerror = function () { if (img.parentNode) img.parentNode.removeChild(img); };
+      if (form !== QUER && (t === 'Movie' || t === 'Series')) {
+        // Film ohne echtes Poster (nur ein Standbild im Querformat, z. B. „AUFTRAG“): ganzes Bild oben, Name darunter
+        img.onload = function () { if (img.naturalWidth > img.naturalHeight * 1.05) c.classList.add('k-querbild'); };
+      }
       img.src = url;
       c.appendChild(img);
     }
@@ -3183,11 +3193,14 @@
       sp.textContent = f;
       meta.appendChild(sp);
     }
-    if ((e.Tags || []).some(function (t) { return String(t).toUpperCase() === 'DVD'; })) {
-      // Film nur in DVD-Qualität (Jellyfin-Tag „DVD“): kleine rote Kachel
+    const tags = (e.Tags || []).map(function (t) { return String(t).toUpperCase(); });
+    if (tags.indexOf('DVD') >= 0 || tags.indexOf('BLU-RAY') >= 0) {
+      // Qualität als kleine Kachel: rot „DVD“ (Tag „DVD“, nach „ [DVD]“ im Dateinamen), blau „Blu-ray“
+      // (Tag „Blu-ray“: ab Full HD, keine Kino-Mitschnitte – seit 21.11.2026), beide von kino_pflege.py qualitaet
+      const dvd = tags.indexOf('DVD') >= 0;
       const sp = document.createElement('span');
-      sp.className = 'dvd';
-      sp.textContent = 'DVD';
+      sp.className = dvd ? 'dvd' : 'dvd bluray';
+      sp.textContent = dvd ? 'DVD' : 'Blu-ray';
       meta.appendChild(sp);
     }
     if (e.CommunityRating > 0) {

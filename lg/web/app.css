@@ -197,6 +197,8 @@ body {
   margin: 0 16px 0 2px;
 }
 
+.i-meta .dvd.bluray { background: #1565C0; }
+
 .i-meta .stern { color: #F2B705; margin-right: 14px; }
 .i-meta .teil { margin-right: 14px; }
 
@@ -431,6 +433,11 @@ body {
 }
 
 .karte.vorher { opacity: .25; }
+
+/* Film ohne echtes Poster (nur Standbild im Querformat): ganzes Bild oben, Name darunter (21.11.2026) */
+.karte.k-querbild { background: #15171C; }
+.karte.k-querbild img { object-fit: contain; object-position: 50% 22%; }
+.karte.k-querbild .k-name { top: auto; bottom: 20px; z-index: 1; color: #fff; -webkit-line-clamp: 3; }
 
 .karte img {
   position: absolute;

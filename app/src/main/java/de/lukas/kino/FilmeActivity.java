@@ -96,6 +96,7 @@ public class FilmeActivity extends Activity {
         final List<JSONObject> eintraege = new ArrayList<>();
         int fokus;
         int live;            // so viele Live-Kacheln stehen vorne (nur Weiterschauen)
+        int merk;            // so viele Merkliste-Filme stehen hinten (nur Weiterschauen, seit 21.11.2026)
         boolean geladen, laedt;
 
         Reihe(String titel, String quelle, int form) {
@@ -486,9 +487,11 @@ public class FilmeActivity extends Activity {
         JSONArray weiter = jf.weiterschauen();
         JSONArray neu = jf.neu();
         JSONArray samml = jf.sammlungen();
-        if (weiter.length() > 0) s.reihen.add(reihe("Weiterschauen", weiter, POSTER));
-        List<JSONObject> gemerkt = merkliste.liste();
-        if (!gemerkt.isEmpty()) s.reihen.add(reiheAus("Merkliste", gemerkt, POSTER));
+        // Weiterschauen und Merkliste in einer Reihe (Wunsch Lukas 21.11.2026): links was man weiterschauen kann,
+        // rechts daneben die Merkliste. Den Merkliste-Teil hängt liveEinsetzen() an (auch nach jeder Änderung).
+        Reihe wr = reihe("Weiterschauen", weiter, POSTER);
+        merkAnhaengen(wr);
+        if (!wr.eintraege.isEmpty()) s.reihen.add(wr);
         s.reihen.add(ohneGesehenes(reihe("Neu", neu, POSTER)));
         boolean qk = Qualitaet.nurLukas() && Qualitaet.anzahl() > 0;
         // Genre-Kategorien und Filmreihen (Star Wars, Eberhofer …) trennen – beides sind in Jellyfin Sammlungen
@@ -530,29 +533,8 @@ public class FilmeActivity extends Activity {
 
     /** Merkliste geändert: Reihe auf der Filme-Startseite und die Merkliste-Seite nachziehen. */
     private void merklisteGeaendert() {
-        List<JSONObject> l = merkliste.liste();
-        Seite start = startseiten.get(Bereich.FILME);
-        if (start != null) {
-            int i = -1;
-            for (int k = 0; k < start.reihen.size(); k++) if ("Merkliste".equals(start.reihen.get(k).titel)) i = k;
-            if (!l.isEmpty() && i >= 0) {
-                Reihe r = start.reihen.get(i);
-                r.eintraege.clear();
-                r.eintraege.addAll(l);
-                r.fokus = Math.min(r.fokus, l.size() - 1);
-            } else if (!l.isEmpty()) {
-                int pos = !start.reihen.isEmpty() && "Weiterschauen".equals(start.reihen.get(0).titel) ? 1 : 0;
-                start.reihen.add(pos, reiheAus("Merkliste", l, POSTER));
-                if (start.akt >= pos && start.reihen.size() > 1) {
-                    start.akt++;
-                    start.anim = start.akt;
-                }
-            } else if (i >= 0) {
-                start.reihen.remove(i);
-                if (start.akt > i || start.akt >= start.reihen.size()) start.akt = Math.max(0, start.akt - 1);
-                start.anim = start.akt;
-            }
-        }
+        // Filme-Startseite: die Merkliste steht hinten in der Reihe Weiterschauen (seit 21.11.2026)
+        liveEinsetzen();
         Seite alt = startseiten.get(Bereich.MERKLISTE);
         Seite neu = merklisteSeite();
         startseiten.put(Bereich.MERKLISTE, neu);
@@ -745,10 +727,14 @@ public class FilmeActivity extends Activity {
         for (JSONObject e : liveListe) liveIds.add(e.optString("Id"));
         List<JSONObject> regulaer = new ArrayList<>();
         if (weiter != null) regulaer.addAll(weiter);
-        else if (da) for (JSONObject e : w.eintraege) if (!e.has("_live")) regulaer.add(e);
+        else if (da) for (JSONObject e : w.eintraege) if (!e.has("_live") && !e.has("_merk")) regulaer.add(e);
         regulaer.removeIf(e -> liveIds.contains(e.optString("Id")));
         List<JSONObject> alle = new ArrayList<>(liveListe);
         alle.addAll(regulaer);
+        Set<String> vorne = new HashSet<>(liveIds);
+        for (JSONObject e : regulaer) vorne.add(e.optString("Id"));
+        List<JSONObject> merk = merkTeil(vorne);
+        alle.addAll(merk);
         if (alle.isEmpty()) {
             if (da && start.reihen.size() > 1) {
                 start.reihen.remove(0);
@@ -770,9 +756,33 @@ public class FilmeActivity extends Activity {
         w.eintraege.clear();
         w.eintraege.addAll(alle);
         w.live = liveListe.size();
+        w.merk = merk.size();
         // stand man ganz vorne, bleibt man vorne (Live zuerst sehen), sonst bleibt der Fokus auf demselben Film
         w.fokus = Math.max(0, Math.min(alt == 0 && w.fokus == 0 ? 0 : w.fokus + w.live - alt, w.eintraege.size() - 1));
         buehne.invalidate();
+    }
+
+    /** Merkliste als hinterer Teil der Reihe Weiterschauen (ohne Filme, die vorne schon stehen), als Kopien mit „_merk“. */
+    private List<JSONObject> merkTeil(Set<String> ohne) {
+        List<JSONObject> out = new ArrayList<>();
+        for (JSONObject o : merkliste.liste()) {
+            if (o == null || ohne.contains(o.optString("Id"))) continue;
+            try {
+                JSONObject k = new JSONObject(o.toString());
+                k.put("_merk", true);
+                out.add(k);
+            } catch (Exception ignored) {
+            }
+        }
+        return out;
+    }
+
+    private void merkAnhaengen(Reihe r) {
+        Set<String> vorne = new HashSet<>();
+        for (JSONObject e : r.eintraege) vorne.add(e.optString("Id"));
+        List<JSONObject> m = merkTeil(vorne);
+        r.eintraege.addAll(m);
+        r.merk = m.size();
     }
 
     /** „Mama und Papa · Wohnzimmer“, „Jonas · in seinem Zimmer“, „Du · dein Zimmer“. */
@@ -897,7 +907,7 @@ public class FilmeActivity extends Activity {
                 if ("Merkliste".equals(r.titel)) continue;
                 // Weiterschauen: Gesehenes fliegt auch hier raus (seit 16.11.2026), die Live-Kacheln vorne bleiben
                 final boolean wr = "Weiterschauen".equals(r.titel);
-                if (!r.eintraege.removeIf(o -> Gesehen.hat(o) && !(wr && o.has("_live")))) continue;
+                if (!r.eintraege.removeIf(o -> Gesehen.hat(o) && !(wr && (o.has("_live") || o.has("_merk"))))) continue;
                 r.fokus = Math.min(r.fokus, Math.max(0, r.eintraege.size() - 1));
                 if (r.eintraege.isEmpty() && r.geladen && s.reihen.size() > 1) {
                     s.reihen.remove(i);
@@ -1494,7 +1504,12 @@ public class FilmeActivity extends Activity {
                             detailEintrag = frisch;
                     }
                     Seite start = startseiten.get(b);
-                    if (start != null) {
+                    if (b == Bereich.FILME) {
+                        // Filme: Weiterschauen + Live + Merkliste in einer Reihe, das setzt liveEinsetzen zusammen
+                        List<JSONObject> wl = new ArrayList<>();
+                        for (int i = 0; i < weiter.length(); i++) wl.add(weiter.optJSONObject(i));
+                        liveEinsetzen(wl);
+                    } else if (start != null) {
                         Reihe w = start.reihen.isEmpty() ? null : start.reihen.get(0);
                         if (w != null && "Weiterschauen".equals(w.titel)) {
                             w.eintraege.clear();
@@ -1513,7 +1528,6 @@ public class FilmeActivity extends Activity {
                             }
                         }
                     }
-                    if (b == Bereich.FILME) liveEinsetzen();
                     if (frisch != null && "Movie".equals(typ(frisch)) && quote >= Gesehen.GRENZE) gesehenGeaendert();
                     fokusGeaendert();
                 });
@@ -1529,8 +1543,21 @@ public class FilmeActivity extends Activity {
         alle.add(seite);
         for (Seite s : alle)
             for (Reihe r : s.reihen)
-                for (int i = 0; i < r.eintraege.size(); i++)
-                    if (id.equals(r.eintraege.get(i).optString("Id")) && !r.eintraege.get(i).has("_live")) r.eintraege.set(i, neu);
+                for (int i = 0; i < r.eintraege.size(); i++) {
+                    JSONObject alt = r.eintraege.get(i);
+                    if (!id.equals(alt.optString("Id")) || alt.has("_live")) continue;
+                    if (!alt.has("_merk")) {
+                        r.eintraege.set(i, neu);
+                        continue;
+                    }
+                    try {
+                        // Merkliste-Teil der Reihe Weiterschauen: Kopie mit Kennzeichen, sonst rutscht der Film nach vorne
+                        JSONObject k = new JSONObject(neu.toString());
+                        k.put("_merk", true);
+                        r.eintraege.set(i, k);
+                    } catch (Exception ignored) {
+                    }
+                }
     }
 
     // ------------------------------------------------------------------ Fokus und Hintergrund
@@ -1573,6 +1600,9 @@ public class FilmeActivity extends Activity {
     private final Map<String, String> titelbilder = new HashMap<>(); // Ordner-Id -> Bild-URL
     private final Set<String> titelbildLaedt = new HashSet<>();
 
+    private String weichUrl;      // letzter weichgezeichneter Hintergrund (Film ohne Szenenbild)
+    private Bitmap weichBild;
+
     private final Runnable hintergrundLaden = () -> {
         // In der Foto-Wand bleibt der Hintergrund ruhig: Titelbild des Ordners (Startseite: dunkel)
         boolean wand = seite.raster && ansicht == Ansicht.LISTE;
@@ -1595,11 +1625,51 @@ public class FilmeActivity extends Activity {
             setzeHintergrund(null, 0xFF1D2027);
             return;
         }
+        // Film ohne Szenenbild (z. B. „AUFTRAG“): nicht das kleine Poster riesig und verpixelt über den ganzen Bildschirm
+        // ziehen, sondern eine weiche, abgedunkelte Farbwolke daraus machen (Meldung Lukas 21.11.2026)
+        final boolean weich = genre == null && posterStattSzene(e);
         bildUrl = url;
+        if (weich && url.equals(weichUrl) && weichBild != null) {
+            setzeHintergrund(weichBild, 0);
+            return;
+        }
         bilder.laden(url, (u, bm) -> {
-            if (u.equals(bildUrl) && bm != null) setzeHintergrund(bm, 0, genre);
+            if (!u.equals(bildUrl) || bm == null) return;
+            if (!weich) {
+                setzeHintergrund(bm, 0, genre);
+                return;
+            }
+            netz.execute(() -> {
+                Bitmap w;
+                try {
+                    w = Glas.verwischen(bm);
+                    Canvas dc = new Canvas(w);
+                    dc.drawColor(0x66000000);   // abdunkeln, damit Titel und Text gut lesbar bleiben
+                } catch (Throwable x) {
+                    w = null;
+                }
+                final Bitmap fertig = w;
+                h.post(() -> {
+                    if (!u.equals(bildUrl)) return;
+                    if (fertig == null) {
+                        setzeHintergrund(null, 0xFF1D2027);
+                        return;
+                    }
+                    weichUrl = u;
+                    weichBild = fertig;
+                    setzeHintergrund(fertig, 0);
+                });
+            });
         });
     };
+
+    /** Film/Folge ohne eigenes Szenenbild, bei dem hintergrundUrl aufs Poster ausweicht. */
+    private boolean posterStattSzene(JSONObject e) {
+        String t = typ(e);
+        if ("Episode".equals(t) || "Photo".equals(t) || "Video".equals(t) || "Folder".equals(t) || "PhotoAlbum".equals(t)
+                || "CollectionFolder".equals(t)) return false;
+        return Jellyfin.hintergrundTag(e) == null && Jellyfin.tag(e, "Primary") != null;
+    }
 
     private String hintergrundUrl(JSONObject e) {
         String t = typ(e), id = e.optString("Id");
@@ -1626,8 +1696,9 @@ public class FilmeActivity extends Activity {
             default: {
                 String tag = Jellyfin.hintergrundTag(e);
                 if (tag != null) return Jellyfin.hintergrund(id, tag);
+                // nur fürs Weichzeichnen (posterStattSzene): ein kleines Poster reicht und spart Speicher
                 String pr = Jellyfin.tag(e, "Primary");
-                return pr != null ? Jellyfin.poster(id, pr, 1080) : null;
+                return pr != null ? Jellyfin.poster(id, pr, 360) : null;
             }
         }
     }
@@ -2542,9 +2613,13 @@ public class FilmeActivity extends Activity {
 
     /** Film nur in DVD-Qualität? (Jellyfin-Tag „DVD“) */
     static boolean dvd(JSONObject e) {
+        return tag(e, "DVD");
+    }
+
+    static boolean tag(JSONObject e, String name) {
         JSONArray t = e.optJSONArray("Tags");
         if (t == null) return false;
-        for (int i = 0; i < t.length(); i++) if ("DVD".equalsIgnoreCase(t.optString(i))) return true;
+        for (int i = 0; i < t.length(); i++) if (name.equalsIgnoreCase(t.optString(i))) return true;
         return false;
     }
 
@@ -3100,7 +3175,7 @@ public class FilmeActivity extends Activity {
             float sc = ist == null ? soll : naeher(ist, soll, dt, 80);
             scrolls.put(rh, sc);
             if (sc != soll) weiter = true;
-            if (rh.live > 0 && rh.form == POSTER) return liveReiheZeichnen(c, rh, y, aktiv, alpha * kachelA, sc) | weiter;
+            if ((rh.live > 0 || rh.merk > 0) && rh.form == POSTER) return liveReiheZeichnen(c, rh, y, aktiv, alpha * kachelA, sc) | weiter;
             if (!rh.titel.isEmpty()) {
                 reiheText.setAlpha(Math.round((aktiv ? 230 : 170) * alpha));
                 c.drawText(rh.titel, LINKS, y - 24, reiheText);
@@ -3155,25 +3230,32 @@ public class FilmeActivity extends Activity {
         }
 
         private float livePunkt(Reihe rh, int k) {
-            int n = rh.live;
+            int n = rh.live, m0 = rh.eintraege.size() - rh.merk;
             float lw = LIVE_W + ABSTAND, sw = PW + ABSTAND;
-            return k < n ? k * lw : n * lw + LIVE_LUECKE + (k - n) * sw;
+            float x = k < n ? k * lw : n * lw + (n > 0 ? LIVE_LUECKE : 0) + (k - n) * sw;
+            // vor der Merkliste dieselbe Lücke wie hinter den Live-Kacheln (wenn davor etwas steht)
+            if (rh.merk > 0 && m0 > 0 && k >= m0) x += LIVE_LUECKE;
+            return x;
         }
 
         private boolean liveReiheZeichnen(Canvas c, Reihe rh, float y, boolean aktiv, float alpha, float sc) {
             int al = Math.round(255 * alpha);
             float basis = liveX(rh, sc);
-            // zwei Überschriften, die mitwandern: „Läuft gerade“ über den Live-Kacheln, „Weiterschauen“ darüber
+            // Überschriften, die mitwandern: „Läuft gerade“ über den Live-Kacheln, „Weiterschauen“ über den
+            // angefangenen Filmen, „Merkliste“ über den gemerkten (seit 21.11.2026 in derselben Reihe)
             reiheText.setAlpha(Math.round((aktiv ? 230 : 170) * alpha));
             float tx = LINKS + livePunkt(rh, 0) - basis;
-            if (tx > -400) {
+            int m0 = rh.eintraege.size() - rh.merk;
+            if (rh.live > 0 && tx > -400) {
                 p.setColor(0xFFE5484D);
                 p.setAlpha(al);
                 c.drawCircle(Math.max(tx, -300) + 8, y - 34, 8, p);
                 c.drawText("Läuft gerade", tx + 26, y - 24, reiheText);
             }
-            if (rh.eintraege.size() > rh.live)
+            if (m0 > rh.live)
                 c.drawText("Weiterschauen", LINKS + livePunkt(rh, rh.live) - basis, y - 24, reiheText);
+            if (rh.merk > 0)
+                c.drawText("Merkliste", LINKS + livePunkt(rh, m0) - basis, y - 24, reiheText);
             int erster = Math.max(0, (int) Math.floor(sc) - 1);
             int letzter = Math.min(rh.eintraege.size() - 1, (int) Math.ceil(sc) + 10);
             for (int k = erster; k <= letzter; k++) {
@@ -3603,7 +3685,32 @@ public class FilmeActivity extends Activity {
             Bitmap b = url != null ? bilder.sofort(url) : null;
             if (b == null && url != null && !bilder.fehlgeschlagen(url)) bilder.laden(url, (u, bm) -> invalidate());
             boolean ordner = "Folder".equals(t) || "PhotoAlbum".equals(t) || "CollectionFolder".equals(t);
-            if (b != null) {
+            boolean querBild = b != null && form == POSTER && b.getWidth() > b.getHeight() * 1.05f
+                    && ("Movie".equals(t) || "Series".equals(t));
+            if (querBild) {
+                // Film ohne echtes Poster (Jellyfin hat nur ein Standbild im Querformat, z. B. „AUFTRAG“): nicht mittig
+                // abgeschnitten, sondern das ganze Bild oben und der Name darunter (Meldung Lukas 21.11.2026)
+                p.setColor(0xFF15171C);
+                p.setAlpha(al);
+                c.drawRoundRect(r, rad, rad, p);
+                c.save();
+                Path clip = new Path();
+                clip.addRoundRect(r, rad, rad, Path.Direction.CW);
+                c.clipPath(clip);
+                float sk = r.width() / b.getWidth();
+                m.setScale(sk, sk);
+                m.postTranslate(r.left, r.top + r.height() * 0.14f);
+                p.setAlpha(al);
+                c.drawBitmap(b, m, p);
+                c.restore();
+                klein.setAlpha(al);
+                StaticLayout sl = umbruch(e.optString("Name"), klein, (int) (r.width() - 32), 3);
+                c.save();
+                c.translate(r.left + 16, r.bottom - sl.getHeight() - 22 * zoom);
+                sl.draw(c);
+                c.restore();
+                klein.setAlpha(0xB3);
+            } else if (b != null) {
                 BitmapShader sh = new BitmapShader(b, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
                 float sk = Math.max(r.width() / b.getWidth(), r.height() / b.getHeight());
                 m.setScale(sk, sk);
@@ -3905,13 +4012,15 @@ public class FilmeActivity extends Activity {
                 c.drawText(f, x + 12, y, meta);
                 x += w + 16;
             }
-            if (dvd(e)) {
-                // Film nur in DVD-Qualität (Jellyfin-Tag „DVD“, gesetzt nach „ [DVD]“ im Dateinamen): kleine rote Kachel
-                String t = "DVD";
+            boolean istDvd = dvd(e), istBd = !istDvd && tag(e, "Blu-ray");
+            if (istDvd || istBd) {
+                // Qualität als kleine Kachel: rot „DVD“ (Tag „DVD“, nach „ [DVD]“ im Dateinamen), blau „Blu-ray“
+                // (Tag „Blu-ray“: ab Full HD, keine Kino-Mitschnitte – seit 21.11.2026), beide von kino_pflege.py qualitaet
+                String t = istDvd ? "DVD" : "Blu-ray";
                 float w = meta.measureText(t) + 24;
                 r.set(x, y - 30, x + w, y + 10);
                 p.setStyle(Paint.Style.FILL);
-                p.setColor(0xFFC62828);
+                p.setColor(istDvd ? 0xFFC62828 : 0xFF1565C0);
                 c.drawRoundRect(r, 9, 9, p);
                 c.drawText(t, x + 12, y, meta);
                 x += w + 16;
