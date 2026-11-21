@@ -133,6 +133,10 @@ def befehl_plan():
                         stamm += " [DVD]"
                     eintrag.update(art="ersetzen", ziel=os.path.join(os.path.dirname(o["Path"]), stamm + ext),
                                    weg=o["Path"], weg_ziel=os.path.join(DOPPELT, "von Filme4", os.path.basename(o["Path"])))
+                elif os.path.exists(o["Path"]) and os.path.getsize(o["Path"]) == groesse:
+                    # gleich groß wie die Fassung auf Filme4: vermutlich dieselbe Datei. Beim Kopieren wird das per
+                    # SHA-256 beider Dateien bestätigt – dann keine zweite Kopie nötig (sonst doch nach Doppelt).
+                    eintrag.update(art="gleich", ziel=o["Path"], ersatz_ziel=os.path.join(DOPPELT, d))
                 else:
                     eintrag.update(art="doppelt", ziel=os.path.join(DOPPELT, d))
             else:
@@ -151,6 +155,9 @@ def befehl_plan():
     # Kollisionen: nie auf etwas Vorhandenes oder doppelt geplantes
     for e in plan:
         z = e["ziel"]
+        if e["art"] == "gleich":
+            e["status"] = "offen"
+            continue
         if os.path.exists(z) or z in belegt:
             s, x = os.path.splitext(z)
             z = "{} [tmdbid-{}]{}".format(s, e.get("tmdb") or "x", x) if e.get("tmdb") else "{} (SSD){}".format(s, x)
@@ -168,7 +175,7 @@ def befehl_plan():
     gb = sum(e["groesse"] for e in plan) / 1e9
     print("Dateien:", len(plan), "| GB:", round(gb, 1), "|", zahl)
     for e in plan:
-        if e["art"] in ("ersetzen", "doppelt"):
+        if e["art"] in ("ersetzen", "doppelt", "gleich"):
             print(" ", e["art"], "|", e["name"], e["q"]["hoehe"], "p de" if e["q"]["deutsch"] else "p", "<->",
                   e["filme4"]["q"]["hoehe"], "p de" if e["filme4"]["q"]["deutsch"] else "p", "|", os.path.basename(e["ziel"]))
     print("neu, Beispiele:")
@@ -177,6 +184,28 @@ def befehl_plan():
     for e in plan:
         if e["art"] == "beiseite":
             print("  beiseite:", e["quelle"])
+
+
+def pruefsumme(p, mbs=None):
+    """SHA-256 einer Datei; mit mbs gebremst (schont die HA-SSD ohne eigenes Netzteil)."""
+    h = hashlib.sha256()
+    n, t0 = 0, time.time()
+    with open(p, "rb") as f:
+        while True:
+            b = f.read(8 << 20)
+            if not b:
+                break
+            h.update(b)
+            n += len(b)
+            if mbs:
+                soll = n / (mbs * 1e6) - (time.time() - t0)
+                if soll > 0:
+                    time.sleep(soll)
+        try:
+            os.posix_fadvise(f.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+        except Exception:
+            pass
+    return h.hexdigest()
 
 
 def kopie(q, z, mbs):
@@ -265,6 +294,17 @@ def befehl_kopieren(los, mbs):
                             if not os.path.exists(ziel):
                                 os.rename(p, ziel)
                                 prot(schritt="beiseite_filme4", alt=p, neu=ziel)
+            if e["art"] == "gleich":
+                sq, sz = pruefsumme(e["quelle"], mbs), pruefsumme(e["ziel"])
+                if sq == sz:
+                    e["status"], e["sha256"] = "kopiert", sq
+                    prot(schritt="gleich", quelle=e["quelle"], ziel=e["ziel"], groesse=e["groesse"], sha256=sq)
+                    fertig_gb += e["groesse"] / 1e9
+                    json.dump(plan, open(PLAN + ".tmp", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+                    os.replace(PLAN + ".tmp", PLAN)
+                    continue
+                prot(schritt="nicht_gleich", quelle=e["quelle"], ziel=e["ziel"], sha_quelle=sq, sha_ziel=sz)
+                e["art"], e["ziel"] = "doppelt", e["ersatz_ziel"]
             sha = kopie(e["quelle"], e["ziel"], mbs)
             e["status"], e["sha256"] = "kopiert", sha
             prot(schritt="kopiert", art=e["art"], quelle=e["quelle"], ziel=e["ziel"], groesse=e["groesse"], sha256=sha)
@@ -289,7 +329,7 @@ def befehl_daten(los):
     for e in plan:
         if e.get("status") not in ("kopiert", "geloescht") or not e.get("alt_id"):
             continue
-        neu = e["filme4"]["id"] if e["art"] == "doppelt" else nach_pfad.get(e["ziel"])
+        neu = e["filme4"]["id"] if e["art"] in ("doppelt", "gleich") else nach_pfad.get(e["ziel"])
         if not neu:
             print("  noch nicht in Jellyfin:", os.path.basename(e["ziel"]))
             continue
