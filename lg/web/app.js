@@ -2685,6 +2685,7 @@
       return h ? hintergrundBild(id, h) : null;
     }
     const ri = istFilmreihe(e) ? reiheInfo(e) : null;
+    if (ri && ri.kachel) return '../' + ri.kachel;   // eigene, gezeichnete Kachel vom Pi (Name steht schon drin)
     if (ri && ri.bild) return posterUrl(ri.bild.id, ri.bild.tag, 330);
     const pr = tag(e, 'Primary');
     if (pr && t === 'BoxSet' && istGenre(e)) return genreKachel(id, pr);
@@ -3124,12 +3125,20 @@
       img.onerror = function () { if (img.parentNode) img.parentNode.removeChild(img); };
       img.src = url;
       h.appendChild(img);
-      const band = div('k-band');
-      band.style.backgroundImage = 'url("' + url.replace(/fillHeight=\d+/, 'fillHeight=200') + '&blur=30")';
-      h.appendChild(band);
+      if (!(ri && ri.kachel)) {
+        const band = div('k-band');
+        band.style.backgroundImage = 'url("' + url.replace(/fillHeight=\d+/, 'fillHeight=200') + '&blur=30")';
+        h.appendChild(band);
+      }
     }
     const t = div('k-rtext');
     t.appendChild(div('k-rzahl', 'Sammlung' + (n > 0 ? ' · ' + n + (n === 1 ? ' Film' : ' Filme') : '')));
+    if (ri && ri.kachel && url) {
+      c.classList.add('k-eigen');   // eigene Kachel: Name steht schon im Bild
+      h.appendChild(t);
+      c.appendChild(h);
+      return c;
+    }
     const lang = Math.max.apply(null, name.split(/\s+/).map(function (w) { return w.length; }));
     t.appendChild(div('k-rname ' + (name.length <= 11 && lang <= 10 ? 'g1' : name.length <= 20 && lang <= 12 ? 'g2' : lang <= 14 ? 'g3' : 'g4'), name));
     h.appendChild(t);

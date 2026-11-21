@@ -1834,6 +1834,8 @@ public class FilmeActivity extends Activity {
         }
         if (istFilmreihe(e)) {
             JSONObject ri = reiheInfo(e), bi = ri != null ? ri.optJSONObject("bild") : null;
+            // eigene Kachel vom Pi (gezeichnet, Name steht schon drin) – volle Farbtiefe wegen der Verläufe
+            if (ri != null && !ri.optString("kachel").isEmpty()) return Familie.BASIS + ri.optString("kachel") + "&" + Jellyfin.FEIN;
             if (bi != null) return Jellyfin.poster(bi.optString("id"), bi.optString("tag"), 330);
         }
         String pr = Jellyfin.tag(e, "Primary");
@@ -3906,7 +3908,17 @@ public class FilmeActivity extends Activity {
             c.drawRect(h, p);
             float bh = h.height() * 0.42f;
             RectF band = new RectF(h.left, h.bottom - bh, h.right, h.bottom);
-            if (b != null) {
+            JSONObject ri = reiheInfo(e);
+            boolean eigen = ri != null && !ri.optString("kachel").isEmpty();
+            if (b != null && eigen) {
+                // eigene Kachel: Bild füllt die Karte, Name ist schon im Bild (unten dunkel für die Zeile „SAMMLUNG“)
+                Matrix bm = new Matrix();
+                float sk = Math.max(h.width() / b.getWidth(), h.height() / b.getHeight());
+                bm.setScale(sk, sk);
+                bm.postTranslate(h.left + (h.width() - b.getWidth() * sk) / 2f, h.top + (h.height() - b.getHeight() * sk) / 2f);
+                p.setAlpha(al);
+                c.drawBitmap(b, bm, p);
+            } else if (b != null) {
                 Matrix bm = new Matrix();
                 float sk = Math.max(h.width() / b.getWidth(), h.height() / b.getHeight());
                 bm.setScale(sk, sk);
@@ -3932,10 +3944,12 @@ public class FilmeActivity extends Activity {
                 }
             }
             // leicht abdunkeln, damit die Schrift auf jedem Bild lesbar ist
-            p.setShader(new LinearGradient(0, band.top, 0, band.bottom, 0x00000000, 0x99000000, Shader.TileMode.CLAMP));
-            p.setAlpha(al);
-            c.drawRect(band, p);
-            p.setShader(null);
+            if (!eigen) {
+                p.setShader(new LinearGradient(0, band.top, 0, band.bottom, 0x00000000, 0x99000000, Shader.TileMode.CLAMP));
+                p.setAlpha(al);
+                c.drawRect(band, p);
+                p.setShader(null);
+            }
             c.restore();
             // feiner heller Rand: hebt die Sammlung von normalen Postern ab
             p.setStyle(Paint.Style.STROKE);
@@ -3944,8 +3958,12 @@ public class FilmeActivity extends Activity {
             p.setAlpha(Math.round(0x66 * al / 255f));
             c.drawRoundRect(new RectF(h.left + 1, h.top + 1, h.right - 1, h.bottom - 1), rad, rad, p);
             p.setStyle(Paint.Style.FILL);
-            JSONObject ri = reiheInfo(e);
             int n = ri != null ? ri.optInt("n", 0) : e.optInt("ChildCount", 0);
+            if (eigen && b != null) {
+                reiheKlein.setAlpha(al);
+                c.drawText("SAMMLUNG" + (n > 0 ? " · " + n + (n == 1 ? " FILM" : " FILME") : ""), h.left + 15, h.bottom - 16, reiheKlein);
+                return;
+            }
             String name = reihenName(e);
             StaticLayout sl = reiheLayouts.get(name);
             if (sl == null) {

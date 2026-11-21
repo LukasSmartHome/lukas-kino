@@ -548,6 +548,7 @@ def befehl_filmreihen(los=False, still=False):
 # ------------------------------------------------------------------ reihen (Kacheln und Reihenfolge der Filmreihen)
 
 REIHEN_ZIEL = "/share/kino/reihen.json"
+KACHELN = "/share/kino/reihen"   # eigene Sammlungs-Kacheln (werkzeuge/sammlungen/bilder, seit 21.11.2026)
 # schöne Namen für die Kacheln (sonst fällt nur „Filmreihe“/„Collection“ weg) – Wunsch Lukas 21.11.2026: sinnige Titel
 REIHEN_NAMEN = {
     "spider-man (avengers)": "Spider-Man",
@@ -618,6 +619,7 @@ def befehl_reihen(los=False, still=False):
     user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
     da = anfrage("/Items?" + q(userId=user, includeItemTypes="BoxSet", recursive="true"), key).get("Items") or []
     daten, umbenannt = {}, 0
+    kacheln = lesen(os.path.join(KACHELN, "index.json"))
     for b in da:
         if b.get("Name") in genres:
             continue
@@ -632,6 +634,10 @@ def befehl_reihen(los=False, still=False):
         schoen = reihen_name(b["Name"])
         daten[b["Id"]] = {"name": schoen, "filme": [f["Id"] for f in ordnung], "n": len(ordnung),
                           "bild": {"id": bild["Id"], "tag": bild["ImageTags"]["Primary"]} if bild else None}
+        # eigene Kachel (werkzeuge/sammlungen, auf dem Pi in /share/kino/reihen/), Version = Änderungszeit
+        datei = kacheln.get(schoen)
+        if datei and os.path.isfile(os.path.join(KACHELN, datei)):
+            daten[b["Id"]]["kachel"] = "reihen/{}?v={}".format(datei, int(os.path.getmtime(os.path.join(KACHELN, datei))))
         if not still:
             print("  {} -> {} | {}".format(b["Name"], schoen, " · ".join(f.get("Name") for f in ordnung)))
         if schoen != b["Name"]:
