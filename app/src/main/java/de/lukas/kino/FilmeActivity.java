@@ -2540,6 +2540,14 @@ public class FilmeActivity extends Activity {
         return std > 0 ? std + " Std. " + rest + " Min." : rest + " Min.";
     }
 
+    /** Film nur in DVD-Qualität? (Jellyfin-Tag „DVD“) */
+    static boolean dvd(JSONObject e) {
+        JSONArray t = e.optJSONArray("Tags");
+        if (t == null) return false;
+        for (int i = 0; i < t.length(); i++) if ("DVD".equalsIgnoreCase(t.optString(i))) return true;
+        return false;
+    }
+
     static String fsk(String r) {
         if (r == null || r.isEmpty()) return null;
         String z = r.replaceAll("[^0-9]", "");
@@ -3895,6 +3903,17 @@ public class FilmeActivity extends Activity {
                 c.drawRoundRect(r, 9, 9, p);
                 p.setStyle(Paint.Style.FILL);
                 c.drawText(f, x + 12, y, meta);
+                x += w + 16;
+            }
+            if (dvd(e)) {
+                // Film nur in DVD-Qualität (Jellyfin-Tag „DVD“, gesetzt nach „ [DVD]“ im Dateinamen): kleine rote Kachel
+                String t = "DVD";
+                float w = meta.measureText(t) + 24;
+                r.set(x, y - 30, x + w, y + 10);
+                p.setStyle(Paint.Style.FILL);
+                p.setColor(0xFFC62828);
+                c.drawRoundRect(r, 9, 9, p);
+                c.drawText(t, x + 12, y, meta);
                 x += w + 16;
             }
             double bew = e.optDouble("CommunityRating", 0);

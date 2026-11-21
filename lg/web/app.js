@@ -59,7 +59,7 @@
   const POSTER = 0, QUER = 1;
 
   const FELDER = 'Overview,Genres,OfficialRating,CommunityRating,ProductionYear,RunTimeTicks,'
-    + 'ImageTags,BackdropImageTags,UserData,ChildCount,OriginalTitle,ParentBackdropImageTags,DateCreated,PremiereDate,EndDate,ProviderIds,RemoteTrailers';
+    + 'ImageTags,BackdropImageTags,UserData,ChildCount,OriginalTitle,ParentBackdropImageTags,DateCreated,PremiereDate,EndDate,ProviderIds,RemoteTrailers,Tags';
   const FELDER_FOTO = 'ImageTags,ChildCount,DateCreated,PremiereDate,RunTimeTicks,UserData,Width,Height';
 
   const FARBEN = {
@@ -3181,6 +3181,13 @@
       const sp = document.createElement('span');
       sp.className = 'fsk';
       sp.textContent = f;
+      meta.appendChild(sp);
+    }
+    if ((e.Tags || []).some(function (t) { return String(t).toUpperCase() === 'DVD'; })) {
+      // Film nur in DVD-Qualität (Jellyfin-Tag „DVD“): kleine rote Kachel
+      const sp = document.createElement('span');
+      sp.className = 'dvd';
+      sp.textContent = 'DVD';
       meta.appendChild(sp);
     }
     if (e.CommunityRating > 0) {

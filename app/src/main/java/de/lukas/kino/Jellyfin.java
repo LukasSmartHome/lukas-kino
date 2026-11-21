@@ -28,7 +28,7 @@ final class Jellyfin {
     static String VERSION = "1";
 
     static final String FELDER = "Overview,Genres,OfficialRating,CommunityRating,ProductionYear,RunTimeTicks,"
-            + "ImageTags,BackdropImageTags,UserData,ChildCount,OriginalTitle,ParentBackdropImageTags,DateCreated,PremiereDate,EndDate,ProviderIds,RemoteTrailers";
+            + "ImageTags,BackdropImageTags,UserData,ChildCount,OriginalTitle,ParentBackdropImageTags,DateCreated,PremiereDate,EndDate,ProviderIds,RemoteTrailers,Tags";
     static final String FELDER_FOTO = "ImageTags,ChildCount,DateCreated,PremiereDate,RunTimeTicks,UserData,Width,Height";
 
     private static Jellyfin instanz;
