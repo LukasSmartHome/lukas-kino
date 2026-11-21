@@ -1834,8 +1834,9 @@ public class FilmeActivity extends Activity {
         }
         if (istFilmreihe(e)) {
             JSONObject ri = reiheInfo(e), bi = ri != null ? ri.optJSONObject("bild") : null;
-            // eigene Kachel vom Pi (gezeichnet, Name steht schon drin) – volle Farbtiefe wegen der Verläufe
-            if (ri != null && !ri.optString("kachel").isEmpty()) return Familie.BASIS + ri.optString("kachel") + "&" + Jellyfin.FEIN;
+            JSONObject sz = ri != null ? ri.optJSONObject("szene") : null;
+            // echtes, schlichtes Szenenbild aus der Reihe (ohne Schrift, kino_pflege legt es an der Sammlung ab)
+            if (sz != null && !sz.optString("id").isEmpty()) return Jellyfin.szene(sz.optString("id"), sz.optString("tag", null));
             if (bi != null) return Jellyfin.poster(bi.optString("id"), bi.optString("tag"), 330);
         }
         String pr = Jellyfin.tag(e, "Primary");
@@ -2726,11 +2727,11 @@ public class FilmeActivity extends Activity {
             meta = stift(c, 28, 600, 0xE6FFFFFF);
             text = stift(c, 28, 450, 0xC8FFFFFF);
             reiheText = stift(c, 30, 650, 0xE6FFFFFF);
-            reiheName = stift(c, 30, 750, 0xFFFFFFFF);
+            reiheName = stift(c, 25, 700, 0xFFFFFFFF);
             reiheName.setShadowLayer(6, 0, 2, 0xA6000000);
-            reiheKlein = stift(c, 13, 750, GELB);
-            reiheKlein.setLetterSpacing(0.05f);
-            reiheKlein.setShadowLayer(4, 0, 1, 0xA6000000);
+            reiheKlein = stift(c, 12.5f, 600, 0xF2FFFFFF);   // Schildchen „Sammlung · 3 Filme“ (gläsern, kein Gelb)
+            reiheKlein.setLetterSpacing(0.02f);
+            reiheKlein.setShadowLayer(2, 0, 1, 0x59000000);
             knopf = stift(c, 30, 650, 0xFFFFFFFF);
             gross = stift(c, 130, 800, 0xFFFFFFFF);
             klein = stift(c, 26, 500, 0xB3FFFFFF);
@@ -3882,9 +3883,10 @@ public class FilmeActivity extends Activity {
         private final Map<String, StaticLayout> reiheLayouts = new HashMap<>();
 
         /**
-         * Filmreihe als eigene Kachel (Wunsch Lukas 21.11.2026): Poster des ersten Films, oben zwei Kanten von Karten
-         * dahinter (ein Stapel = Sammlung), unten das Bild selbst weichgezeichnet als Streifen (Farbe passt von allein),
-         * darauf „SAMMLUNG · 6 FILME“ und der Name groß und ganz – mehrzeilig, notfalls kleiner, nie abgeschnitten.
+         * Filmreihe als eigene Kachel (Wunsch Lukas 21.11.2026 abends): ein echtes, schlichtes Szenenbild aus der Reihe
+         * ohne Schrift (kino_pflege legt es an der Sammlung in Jellyfin ab), oben zwei Kanten von Karten dahinter
+         * (Stapel = Sammlung), oben links ein gläsernes Schildchen „Sammlung · 6 Filme“, unten der Name weiß und ganz –
+         * mehrzeilig, notfalls kleiner, nie abgeschnitten. Querbilder werden auf „fokus“ (0 links … 1 rechts) zugeschnitten.
          * Gezeichnet in Kachel-Koordinaten (PW x PH), der Zoom kommt von außen.
          */
         private void reiheKarte(Canvas c, JSONObject e, Bitmap b, int al) {
@@ -3906,84 +3908,82 @@ public class FilmeActivity extends Activity {
             p.setColor(0xFF22252C);
             p.setAlpha(al);
             c.drawRect(h, p);
-            float bh = h.height() * 0.42f;
-            RectF band = new RectF(h.left, h.bottom - bh, h.right, h.bottom);
             JSONObject ri = reiheInfo(e);
-            boolean eigen = ri != null && !ri.optString("kachel").isEmpty();
-            if (b != null && eigen) {
-                // eigene Kachel: Bild füllt die Karte, Name ist schon im Bild (unten dunkel für die Zeile „SAMMLUNG“)
-                Matrix bm = new Matrix();
+            Matrix bm = null;
+            if (b != null) {
+                bm = new Matrix();
                 float sk = Math.max(h.width() / b.getWidth(), h.height() / b.getHeight());
+                float fokus = ri != null ? (float) Math.max(0, Math.min(1, ri.optDouble("fokus", 0.5))) : 0.5f;
                 bm.setScale(sk, sk);
-                bm.postTranslate(h.left + (h.width() - b.getWidth() * sk) / 2f, h.top + (h.height() - b.getHeight() * sk) / 2f);
+                bm.postTranslate(h.left - (b.getWidth() * sk - h.width()) * fokus, h.top + (h.height() - b.getHeight() * sk) / 2f);
                 p.setAlpha(al);
                 c.drawBitmap(b, bm, p);
-            } else if (b != null) {
-                Matrix bm = new Matrix();
-                float sk = Math.max(h.width() / b.getWidth(), h.height() / b.getHeight());
-                bm.setScale(sk, sk);
-                bm.postTranslate(h.left + (h.width() - b.getWidth() * sk) / 2f, h.top + (h.height() - b.getHeight() * sk) / 2f);
-                p.setAlpha(al);
-                c.drawBitmap(b, bm, p);
+            }
+            // unten sanft abdunkeln, damit der Name auf jedem Bild lesbar ist
+            float bh = h.height() * 0.52f;
+            p.setShader(new LinearGradient(0, h.bottom - bh, 0, h.bottom, new int[]{0x00000000, 0x4D000000, 0xC2000000},
+                    new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP));
+            p.setAlpha(al);
+            c.drawRect(h.left, h.bottom - bh, h.right, h.bottom, p);
+            p.setShader(null);
+            // gläsernes Schildchen oben links: das Bild darunter weichgezeichnet, hell überlagert, feiner Rand
+            int n = ri != null ? ri.optInt("n", 0) : e.optInt("ChildCount", 0);
+            String schild = "Sammlung" + (n > 0 ? " · " + n + (n == 1 ? " Film" : " Filme") : "");
+            reiheKlein.setAlpha(al);
+            RectF g = new RectF(h.left + 10, h.top + 10, h.left + 10 + reiheKlein.measureText(schild) + 20, h.top + 34);
+            Path gp = new Path();
+            gp.addRoundRect(g, 12, 12, Path.Direction.CW);
+            c.save();
+            c.clipPath(gp);
+            if (b != null) {
                 Bitmap w = bandWeich.get(b);
                 if (w == null) {
-                    w = weichStreifen(b);
+                    w = weichGanz(b);
                     if (w != null) bandWeich.put(b, w);
                 }
                 if (w != null) {
-                    BitmapShader bs = new BitmapShader(w, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-                    Matrix wm = new Matrix();
-                    wm.setScale(band.width() / w.getWidth(), band.height() / w.getHeight());
-                    wm.postTranslate(band.left, band.top);
-                    bs.setLocalMatrix(wm);
-                    LinearGradient lg = new LinearGradient(0, band.top, 0, band.top + bh * 0.45f, 0x00FFFFFF, 0xFFFFFFFF, Shader.TileMode.CLAMP);
-                    p.setShader(new ComposeShader(bs, lg, PorterDuff.Mode.DST_IN));
+                    Matrix wm = new Matrix(bm);
+                    wm.preScale(b.getWidth() / (float) w.getWidth(), b.getHeight() / (float) w.getHeight());
                     p.setAlpha(al);
-                    c.drawRect(band, p);
-                    p.setShader(null);
+                    c.drawBitmap(w, wm, p);
                 }
             }
-            // leicht abdunkeln, damit die Schrift auf jedem Bild lesbar ist
-            if (!eigen) {
-                p.setShader(new LinearGradient(0, band.top, 0, band.bottom, 0x00000000, 0x99000000, Shader.TileMode.CLAMP));
-                p.setAlpha(al);
-                c.drawRect(band, p);
-                p.setShader(null);
-            }
+            p.setColor(0x2EFFFFFF);
+            p.setAlpha(Math.round(0x2E * al / 255f));
+            c.drawRect(g, p);
+            c.restore();
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(1f);
+            p.setColor(0x5CFFFFFF);
+            p.setAlpha(Math.round(0x5C * al / 255f));
+            c.drawRoundRect(new RectF(g.left + 0.5f, g.top + 0.5f, g.right - 0.5f, g.bottom - 0.5f), 11.5f, 11.5f, p);
+            p.setStyle(Paint.Style.FILL);
+            c.drawText(schild, g.left + 10, g.centerY() - (reiheKlein.descent() + reiheKlein.ascent()) / 2f, reiheKlein);
             c.restore();
             // feiner heller Rand: hebt die Sammlung von normalen Postern ab
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(2f);
-            p.setColor(0x66FFFFFF);
-            p.setAlpha(Math.round(0x66 * al / 255f));
+            p.setColor(0x59FFFFFF);
+            p.setAlpha(Math.round(0x59 * al / 255f));
             c.drawRoundRect(new RectF(h.left + 1, h.top + 1, h.right - 1, h.bottom - 1), rad, rad, p);
             p.setStyle(Paint.Style.FILL);
-            int n = ri != null ? ri.optInt("n", 0) : e.optInt("ChildCount", 0);
-            if (eigen && b != null) {
-                reiheKlein.setAlpha(al);
-                c.drawText("SAMMLUNG" + (n > 0 ? " · " + n + (n == 1 ? " FILM" : " FILME") : ""), h.left + 15, h.bottom - 16, reiheKlein);
-                return;
-            }
             String name = reihenName(e);
             StaticLayout sl = reiheLayouts.get(name);
             if (sl == null) {
                 sl = reiheSchrift(name, PW - 28);
                 reiheLayouts.put(name, sl);
             }
-            float ty = h.bottom - 16 - sl.getHeight();
             reiheName.setAlpha(al);
             c.save();
-            c.translate(h.left + 14, ty);
+            c.translate(h.left + 14, h.bottom - 14 - sl.getHeight());
             sl.draw(c);
             c.restore();
-            reiheKlein.setAlpha(al);
-            c.drawText("SAMMLUNG" + (n > 0 ? " · " + n + (n == 1 ? " FILM" : " FILME") : ""), h.left + 15, ty - 9, reiheKlein);
         }
 
         /** Name einer Sammlung: bis 3 Zeilen, lieber kleiner als abgeschnitten (auch kein Wort mittendrin getrennt). */
         private StaticLayout reiheSchrift(String t, int breite) {
             StaticLayout sl = null;
-            for (int gr : new int[]{30, 27, 24, 21, 19, 17}) {
+            for (int gr : new int[]{25, 23, 21, 19, 17, 15}) {
                 reiheName.setTextSize(gr);
                 sl = StaticLayout.Builder.obtain(t, 0, t.length(), reiheName, breite).setIncludePad(false)
                         .setLineSpacing(0, 0.92f).build();
@@ -3994,14 +3994,12 @@ public class FilmeActivity extends Activity {
             return sl;
         }
 
-        /** Unterer Teil des Posters, stark verkleinert und wieder vergrößert = weichgezeichnet (für den Namensstreifen). */
-        private Bitmap weichStreifen(Bitmap b) {
+        /** Ganzes Bild stark verkleinert und wieder vergrößert = weichgezeichnet (Milchglas fürs Schildchen). */
+        private Bitmap weichGanz(Bitmap b) {
             try {
-                int y0 = Math.round(b.getHeight() * 0.56f);
-                Bitmap teil = Bitmap.createBitmap(b, 0, y0, b.getWidth(), Math.max(1, b.getHeight() - y0));
-                Bitmap klein = Bitmap.createScaledBitmap(teil, 10, 6, true);
-                Bitmap mittel = Bitmap.createScaledBitmap(klein, 40, 24, true);
-                if (teil != b) teil.recycle();
+                int kh = Math.max(1, Math.round(24f * b.getHeight() / b.getWidth()));
+                Bitmap klein = Bitmap.createScaledBitmap(b, 24, kh, true);
+                Bitmap mittel = Bitmap.createScaledBitmap(klein, 96, kh * 4, true);
                 if (klein != mittel) klein.recycle();
                 return mittel;
             } catch (Throwable t) {

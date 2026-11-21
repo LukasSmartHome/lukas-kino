@@ -548,7 +548,13 @@ def befehl_filmreihen(los=False, still=False):
 # ------------------------------------------------------------------ reihen (Kacheln und Reihenfolge der Filmreihen)
 
 REIHEN_ZIEL = "/share/kino/reihen.json"
-KACHELN = "/share/kino/reihen"   # eigene Sammlungs-Kacheln (werkzeuge/sammlungen/bilder, seit 21.11.2026)
+REIHEN_SZENEN = "/share/kino/reihen_szenen.json"   # {Sammlungs-Id: {"film": Film-Id, "url": TMDB-Bild}} – schon gesetzt
+# Aus welchem Film das Bild der Sammlung kommt, wenn nicht aus dem ersten (Wünsche Lukas 21.11.2026). Schlüssel = Teil
+# des Sammlungsnamens (klein), Wert = Anfänge der Filmtitel in der gewünschten Reihenfolge.
+REIHEN_BILD_FILM = {
+    "james bond": ["skyfall", "casino royale", "spectre", "keine zeit zu sterben", "no time to die", "ein quantum trost"],
+    "unverbesserlich": ["minions", "ich - einfach unverbesserlich", "ich – einfach unverbesserlich", "ich einfach unverbesserlich"],
+}
 # schöne Namen für die Kacheln (sonst fällt nur „Filmreihe“/„Collection“ weg) – Wunsch Lukas 21.11.2026: sinnige Titel
 REIHEN_NAMEN = {
     "spider-man (avengers)": "Spider-Man",
@@ -610,20 +616,44 @@ def reihen_ordnung(filme):
     return sorted(filme, key=schl)
 
 
+def _bild_film(schoen, ordnung):
+    """Film, aus dem das Bild der Sammlung kommt: laut REIHEN_BILD_FILM, sonst der erste der Reihe."""
+    for teil, titel in REIHEN_BILD_FILM.items():
+        if teil in schoen.lower():
+            for t in titel:
+                for f in ordnung:
+                    if any((f.get(x) or "").lower().startswith(t) for x in ("Name", "OriginalTitle")):
+                        return f
+    return ordnung[0]
+
+
+def _szene_suchen(film, key):
+    """Bestes Szenenbild ohne Schrift (TMDB/Fanart, Sprache leer), mindestens 1280 breit, nach Bewertung."""
+    fern = anfrage("/Items/{}/RemoteImages?".format(film["Id"]) + q(type="Backdrop", includeAllLanguages="true"), key) or {}
+    kand = [b for b in (fern.get("Images") or []) if b.get("Url") and (b.get("Width") or 0) >= 1280
+            and b.get("Language") in (None, "")]
+    kand.sort(key=lambda b: (-(b.get("CommunityRating") or 0), -(b.get("VoteCount") or 0), -(b.get("Width") or 0)))
+    return kand[0] if kand else None
+
+
 def befehl_reihen(los=False, still=False):
     """Seit 21.11.2026: für jede Filmreihe (keine Genre-Kategorie) Name aufräumen (Jellyfin, gesperrt), Reihenfolge der
-    Filme und Poster des ersten Films nach /share/kino/reihen.json – daraus bauen TCL und LG die Sammlungs-Kacheln
-    (eigenes Bild statt des Sammlungs-Posters mit „3 Movie Collection“ und doppelter Schrift). Ohne --los nur anzeigen."""
+    Filme und ein schlichtes Szenenbild nach /share/kino/reihen.json – daraus bauen TCL und LG die Sammlungs-Kacheln.
+    Das Szenenbild (ohne Schrift, vom ersten Film bzw. laut REIHEN_BILD_FILM) wird einmal als Hintergrund an der
+    Sammlung in Jellyfin abgelegt (wie „Bild wählen“ in Jellyfin) und in REIHEN_SZENEN gemerkt. Ohne --los nur anzeigen."""
     genres = set((lesen(KATEGORIEN).get("zuordnung") or {}).values())
     key = schluessel()
     user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
-    da = anfrage("/Items?" + q(userId=user, includeItemTypes="BoxSet", recursive="true"), key).get("Items") or []
-    daten, umbenannt = {}, 0
-    kacheln = lesen(os.path.join(KACHELN, "index.json"))
+    da = anfrage("/Items?" + q(userId=user, includeItemTypes="BoxSet", recursive="true", fields="BackdropImageTags"),
+                 key).get("Items") or []
+    daten, umbenannt, neu_bild = {}, 0, 0
+    szenen = lesen(REIHEN_SZENEN)
+    alt = (lesen(REIHEN_ZIEL).get("reihen") or {})
     for b in da:
         if b.get("Name") in genres:
             continue
-        kinder = anfrage("/Items?" + q(userId=user, parentId=b["Id"], fields="OriginalTitle,PremiereDate,PrimaryImageAspectRatio"),
+        kinder = anfrage("/Items?" + q(userId=user, parentId=b["Id"],
+                                       fields="OriginalTitle,PremiereDate,PrimaryImageAspectRatio,BackdropImageTags"),
                          key).get("Items") or []
         kinder = [f for f in kinder if f.get("Type") == "Movie"]
         if not kinder:
@@ -632,12 +662,43 @@ def befehl_reihen(los=False, still=False):
         bild = next((f for f in ordnung if (f.get("ImageTags") or {}).get("Primary")
                      and (f.get("PrimaryImageAspectRatio") or 1) < 1), None)
         schoen = reihen_name(b["Name"])
-        daten[b["Id"]] = {"name": schoen, "filme": [f["Id"] for f in ordnung], "n": len(ordnung),
-                          "bild": {"id": bild["Id"], "tag": bild["ImageTags"]["Primary"]} if bild else None}
-        # eigene Kachel (werkzeuge/sammlungen, auf dem Pi in /share/kino/reihen/), Version = Änderungszeit
-        datei = kacheln.get(schoen)
-        if datei and os.path.isfile(os.path.join(KACHELN, datei)):
-            daten[b["Id"]]["kachel"] = "reihen/{}?v={}".format(datei, int(os.path.getmtime(os.path.join(KACHELN, datei))))
+        d = {"name": schoen, "filme": [f["Id"] for f in ordnung], "n": len(ordnung),
+             "bild": {"id": bild["Id"], "tag": bild["ImageTags"]["Primary"]} if bild else None}
+        if "fokus" in (alt.get(b["Id"]) or {}):
+            d["fokus"] = alt[b["Id"]]["fokus"]
+        quelle = _bild_film(schoen, ordnung)
+        tags = b.get("BackdropImageTags") or []
+        s = szenen.get(b["Id"]) or {}
+        if s.get("film") == quelle["Id"] and tags:
+            d["szene"] = {"id": b["Id"], "tag": tags[0]}
+        else:
+            best = None
+            try:
+                best = _szene_suchen(quelle, key)
+            except Exception as ex:
+                print("  Bildsuche {}: {}".format(schoen, ex))
+            if not still:
+                print("  Bild {}: {} {}".format(schoen, quelle.get("Name"),
+                                                 "{}x{} {}".format(best.get("Width"), best.get("Height"), best.get("ProviderName"))
+                                                 if best else "– kein Bild ohne Schrift, nehme den Hintergrund des Films"))
+            if best and los:
+                try:
+                    for _ in tags:   # alte Hintergründe der Sammlung weg, damit unser Bild an Stelle 0 steht
+                        anfrage("/Items/{}/Images/Backdrop/0".format(b["Id"]), key, "DELETE")
+                    anfrage("/Items/{}/RemoteImages/Download?".format(b["Id"]) + q(type="Backdrop", imageUrl=best["Url"]), key, "POST")
+                    neu = anfrage("/Users/{}/Items/{}".format(user, b["Id"]), key)
+                    nt = neu.get("BackdropImageTags") or []
+                    if nt:
+                        d["szene"] = {"id": b["Id"], "tag": nt[0]}
+                        szenen[b["Id"]] = {"film": quelle["Id"], "url": best["Url"]}
+                        neu_bild += 1
+                except Exception as ex:
+                    print("  Bild ablegen {}: {}".format(schoen, ex))
+            if "szene" not in d:
+                ft = quelle.get("BackdropImageTags") or []
+                if ft:
+                    d["szene"] = {"id": quelle["Id"], "tag": ft[0]}
+        daten[b["Id"]] = d
         if not still:
             print("  {} -> {} | {}".format(b["Name"], schoen, " · ".join(f.get("Name") for f in ordnung)))
         if schoen != b["Name"]:
@@ -648,9 +709,11 @@ def befehl_reihen(los=False, still=False):
                 voll["LockedFields"] = sorted(set((voll.get("LockedFields") or []) + ["Name"]))
                 anfrage("/Items/{}".format(b["Id"]), key, "POST", voll)
     if los:
+        schreiben(REIHEN_SZENEN, szenen)
         schreiben(REIHEN_ZIEL, {"stand": time.strftime("%Y-%m-%d %H:%M"), "hinweis": "kino_pflege.py reihen", "reihen": daten})
     if not still:
-        print("Reihen: {} Filmreihen, {} Namen {}".format(len(daten), umbenannt, "geändert" if los else "zu ändern"))
+        print("Reihen: {} Filmreihen, {} Namen {}, {} neue Bilder".format(len(daten), umbenannt,
+                                                                          "geändert" if los else "zu ändern", neu_bild))
     return len(daten)
 
 

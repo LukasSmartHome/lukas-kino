@@ -267,6 +267,11 @@ final class Jellyfin {
         return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillWidth=1920&quality=85" + (tag != null ? "&tag=" + tag : "");
     }
 
+    /** Szenenbild (Backdrop) einer Sammlung für ihre Kachel: so hoch wie nötig, volle Farbtiefe wegen des Verlaufs. */
+    static String szene(String id, String tag) {
+        return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillHeight=440&" + FEIN + (tag != null ? "&tag=" + tag : "");
+    }
+
     static String logo(String id, String tag) {
         return SERVER + "/Items/" + id + "/Images/Logo?fillHeight=220&quality=90" + (tag != null ? "&tag=" + tag : "");
     }

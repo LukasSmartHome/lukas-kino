@@ -2685,7 +2685,8 @@
       return h ? hintergrundBild(id, h) : null;
     }
     const ri = istFilmreihe(e) ? reiheInfo(e) : null;
-    if (ri && ri.kachel) return '../' + ri.kachel;   // eigene, gezeichnete Kachel vom Pi (Name steht schon drin)
+    // echtes, schlichtes Szenenbild aus der Reihe (ohne Schrift, kino_pflege legt es an der Sammlung ab)
+    if (ri && ri.szene && ri.szene.id) return SERVER + '/Items/' + ri.szene.id + '/Images/Backdrop/0?fillHeight=440&quality=90' + mitTag(ri.szene.tag);
     if (ri && ri.bild) return posterUrl(ri.bild.id, ri.bild.tag, 330);
     const pr = tag(e, 'Primary');
     if (pr && t === 'BoxSet' && istGenre(e)) return genreKachel(id, pr);
@@ -3112,6 +3113,7 @@
    * darauf „SAMMLUNG · 6 FILME“ und der Name groß und ganz (mehrzeilig, je nach Länge kleiner, nie abgeschnitten).
    */
   function reiheKarteBauen(c, e) {
+    // Sammlung (Wunsch Lukas 21.11.2026 abends): echtes Szenenbild, Stapel oben, gläsernes Schildchen, Name unten
     c.classList.add('k-reihe');
     const ri = reiheInfo(e), name = reihenName(e), n = (ri && ri.n) || e.ChildCount || 0;
     c.appendChild(div('k-stapel k-s2'));
@@ -3123,22 +3125,12 @@
       img.alt = '';
       img.decoding = 'async';
       img.onerror = function () { if (img.parentNode) img.parentNode.removeChild(img); };
+      if (ri && ri.szene) img.style.objectPosition = Math.round((ri.fokus != null ? ri.fokus : 0.5) * 100) + '% 50%';
       img.src = url;
       h.appendChild(img);
-      if (!(ri && ri.kachel)) {
-        const band = div('k-band');
-        band.style.backgroundImage = 'url("' + url.replace(/fillHeight=\d+/, 'fillHeight=200') + '&blur=30")';
-        h.appendChild(band);
-      }
     }
+    h.appendChild(div('k-schild', 'Sammlung' + (n > 0 ? ' · ' + n + (n === 1 ? ' Film' : ' Filme') : '')));
     const t = div('k-rtext');
-    t.appendChild(div('k-rzahl', 'Sammlung' + (n > 0 ? ' · ' + n + (n === 1 ? ' Film' : ' Filme') : '')));
-    if (ri && ri.kachel && url) {
-      c.classList.add('k-eigen');   // eigene Kachel: Name steht schon im Bild
-      h.appendChild(t);
-      c.appendChild(h);
-      return c;
-    }
     const lang = Math.max.apply(null, name.split(/\s+/).map(function (w) { return w.length; }));
     t.appendChild(div('k-rname ' + (name.length <= 11 && lang <= 10 ? 'g1' : name.length <= 20 && lang <= 12 ? 'g2' : lang <= 14 ? 'g3' : 'g4'), name));
     h.appendChild(t);
