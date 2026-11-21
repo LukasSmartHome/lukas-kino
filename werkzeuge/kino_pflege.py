@@ -18,6 +18,7 @@
 #                            Ohne --los nur anzeigen, was sich ändern würde.
 #   qualitaet [--los]        Jellyfin-Tags „DVD“ und „Blu-ray“ (ab 1080p, ohne Kino-Mitschnitte) für die Kacheln in der App
 #   filmreihen [--los]       TMDB-Filmreihen (ab 2 Filmen) und „Marvel Cinematic Universe“ als Sammlungen anlegen/ergänzen
+#   reihen [--los]           Filmreihen: Namen aufräumen, Reihenfolge (Episoden), Poster des ersten Films -> /share/kino/reihen.json
 #   luecken [--los]          fehlende Beschreibungen, Hintergründe und Poster (statt Standbild) von TMDB/Fanart nachziehen
 #   taeglich                 alles für den täglichen Lauf (Trailer, Kategorien, Qualität, Filmreihen, Lücken, Logos,
 #                            nur neue Vorschaubilder)
@@ -543,6 +544,110 @@ def befehl_filmreihen(los=False, still=False):
     return neu_n, dazu_n
 
 
+# ------------------------------------------------------------------ reihen (Kacheln und Reihenfolge der Filmreihen)
+
+REIHEN_ZIEL = "/share/kino/reihen.json"
+# schöne Namen für die Kacheln (sonst fällt nur „Filmreihe“/„Collection“ weg) – Wunsch Lukas 21.11.2026: sinnige Titel
+REIHEN_NAMEN = {
+    "spider-man (avengers)": "Spider-Man",
+    "star trek: die kelvin-zeitachse": "Star Trek",
+    "asterix und obelix (animation)": "Asterix & Obelix",
+    "millennium (remake)": "Millennium – Neuverfilmung",
+    "ich - einfach unverbesserlich": "Ich – Einfach unverbesserlich",
+    "winnetou - der mythos lebt": "Winnetou – Der Mythos lebt",
+}
+EPISODE = re.compile(r"(?i)\bEpisode\s+([IVX]+|\d+)\b")
+# Star-Wars-Filme, deren Titel keine Episode nennt (deutsch „Krieg der Sterne“ usw.), nach Originaltitel
+SW_EPISODE = {"star wars": 4, "the empire strikes back": 5, "return of the jedi": 6, "the force awakens": 7,
+              "the last jedi": 8, "the rise of skywalker": 9}
+
+
+def _roemisch(t):
+    if t.isdigit():
+        return int(t)
+    w = {"I": 1, "V": 5, "X": 10}
+    t = t.upper()
+    n = 0
+    for i, ch in enumerate(t):
+        v, nach = w.get(ch, 0), (w.get(t[i + 1], 0) if i + 1 < len(t) else 0)
+        n += -v if v < nach else v
+    return n
+
+
+def reihen_name(n):
+    k = re.sub(r"(?i)[\s-]*\b(Filmreihe|Collection|Sammlung)\b", "", n or "")
+    k = re.sub(r"\s+", " ", k).replace(" :", ":").strip(" -–:")
+    return REIHEN_NAMEN.get(k.lower(), k) or n
+
+
+def _episode(f):
+    for t in (f.get("Name") or "", f.get("OriginalTitle") or ""):
+        m = EPISODE.search(t)
+        if m:
+            return _roemisch(m.group(1))
+    o = (f.get("OriginalTitle") or "").strip().lower()
+    o2 = o[len("star wars: "):] if o.startswith("star wars: ") else o
+    return SW_EPISODE.get(o, SW_EPISODE.get(o2)) if "star wars" in o or o2 in SW_EPISODE else None
+
+
+def reihen_ordnung(filme):
+    """Reihenfolge in einer Filmreihe: nach Episode (Star Wars I, II, III …), sonst nach Erscheinen.
+    Filme ohne Episode kommen hinter die letzte Episode, die vor ihnen erschienen ist."""
+    def datum(f):
+        return f.get("PremiereDate") or "{:04d}".format(f.get("ProductionYear") or 9999)
+    ep = {f["Id"]: _episode(f) for f in filme}
+    if not any(v is not None for v in ep.values()):
+        return sorted(filme, key=datum)
+
+    def schl(f):
+        e = ep[f["Id"]]
+        if e is None:
+            frueher = [ep[g["Id"]] for g in filme if ep[g["Id"]] is not None and datum(g) <= datum(f)]
+            e = (max(frueher) if frueher else 0) + 0.5
+        return (e, datum(f))
+    return sorted(filme, key=schl)
+
+
+def befehl_reihen(los=False, still=False):
+    """Seit 21.11.2026: für jede Filmreihe (keine Genre-Kategorie) Name aufräumen (Jellyfin, gesperrt), Reihenfolge der
+    Filme und Poster des ersten Films nach /share/kino/reihen.json – daraus bauen TCL und LG die Sammlungs-Kacheln
+    (eigenes Bild statt des Sammlungs-Posters mit „3 Movie Collection“ und doppelter Schrift). Ohne --los nur anzeigen."""
+    genres = set((lesen(KATEGORIEN).get("zuordnung") or {}).values())
+    key = schluessel()
+    user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
+    da = anfrage("/Items?" + q(userId=user, includeItemTypes="BoxSet", recursive="true"), key).get("Items") or []
+    daten, umbenannt = {}, 0
+    for b in da:
+        if b.get("Name") in genres:
+            continue
+        kinder = anfrage("/Items?" + q(userId=user, parentId=b["Id"], fields="OriginalTitle,PremiereDate,PrimaryImageAspectRatio"),
+                         key).get("Items") or []
+        kinder = [f for f in kinder if f.get("Type") == "Movie"]
+        if not kinder:
+            continue
+        ordnung = reihen_ordnung(kinder)
+        bild = next((f for f in ordnung if (f.get("ImageTags") or {}).get("Primary")
+                     and (f.get("PrimaryImageAspectRatio") or 1) < 1), None)
+        schoen = reihen_name(b["Name"])
+        daten[b["Id"]] = {"name": schoen, "filme": [f["Id"] for f in ordnung], "n": len(ordnung),
+                          "bild": {"id": bild["Id"], "tag": bild["ImageTags"]["Primary"]} if bild else None}
+        if not still:
+            print("  {} -> {} | {}".format(b["Name"], schoen, " · ".join(f.get("Name") for f in ordnung)))
+        if schoen != b["Name"]:
+            umbenannt += 1
+            if los:
+                voll = anfrage("/Users/{}/Items/{}".format(user, b["Id"]), key)
+                voll["Name"] = schoen
+                voll["LockedFields"] = sorted(set((voll.get("LockedFields") or []) + ["Name"]))
+                anfrage("/Items/{}".format(b["Id"]), key, "POST", voll)
+    if los:
+        schreiben(REIHEN_ZIEL, {"stand": time.strftime("%Y-%m-%d %H:%M"), "hinweis": "kino_pflege.py reihen", "reihen": daten})
+    if not still:
+        print("Reihen: {} Filmreihen, {} Namen {}".format(len(daten), umbenannt, "geändert" if los else "zu ändern"))
+    return len(daten)
+
+
+
 # ------------------------------------------------------------------ lücken (Beschreibung, Hintergrund, Poster)
 
 def befehl_luecken(los=False, still=False):
@@ -791,7 +896,8 @@ if __name__ == "__main__":
             d, w = befehl_kategorien(los=True, still=True)
             teile.append("Kategorien +{} -{}".format(d, w))
             # die drei neuen Schritte (21.11.2026) dürfen den restlichen Lauf nie aufhalten
-            for titel, schritt in (("Qualität", befehl_qualitaet), ("Reihen", befehl_filmreihen), ("Lücken", befehl_luecken)):
+            for titel, schritt in (("Qualität", befehl_qualitaet), ("Reihen", befehl_filmreihen), ("Kacheln", befehl_reihen),
+                                   ("Lücken", befehl_luecken)):
                 try:
                     teile.append("{} {}".format(titel, schritt(los=True, still=True)))
                 except Exception as fx:
@@ -817,6 +923,8 @@ if __name__ == "__main__":
         befehl_qualitaet(los="--los" in a)
     elif a[0] == "filmreihen":
         befehl_filmreihen(los="--los" in a)
+    elif a[0] == "reihen":
+        befehl_reihen(los="--los" in a)
     elif a[0] == "luecken":
         befehl_luecken(los="--los" in a)
     elif a[0] == "auto":
