@@ -509,7 +509,8 @@ def befehl_filmreihen(los=False, still=False):
                     print("  ohne Namen bei TMDB, übersprungen: Reihe", g["tmdb"])
                 continue
         if not b:
-            b = nach_name.get(g["name"].lower())
+            # auch unter dem aufgeräumten Namen suchen (reihen benennt „Star Wars Filmreihe“ in „Star Wars“ um, 21.11.2026)
+            b = nach_name.get(g["name"].lower()) or nach_name.get(reihen_name(g["name"]).lower())
         if b and b.get("Name") in genres:
             continue
         if b:

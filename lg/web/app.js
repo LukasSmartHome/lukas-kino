@@ -1322,12 +1322,18 @@
   // Filmreihen (Star Wars, Eberhofer …) sind in Jellyfin Sammlungen wie die Genre-Kategorien – unterschieden wird am Namen
   // (seit 16.11.2026, wie am TCL): Genre = hat eine Farbe, alles andere ist eine Filmreihe.
   let filmreihen = [], reiheVonFilm = null, reiheVonFilmZeit = 0;
+  // Infos vom Pi (kino_pflege.py reihen -> /share/kino/reihen.json, seit 21.11.2026): sauberer Name, Reihenfolge
+  // der Filme (Star Wars nach Episode) und Poster des ersten Films für die Sammlungs-Kachel
+  let reihenInfo = {};
+  function reiheInfo(e) { return (e && reihenInfo[e.Id]) || null; }
 
   function istGenre(k) { return Object.prototype.hasOwnProperty.call(FARBEN, (k && k.Name) || ''); }
   function istFilmreihe(e) { return typ(e) === 'BoxSet' && !istGenre(e); }
 
   /** Name einer Filmreihe ohne das angehängte „Filmreihe“ bzw. „Collection“ von TMDb. */
   function reihenName(e) {
+    const ri = reiheInfo(e);
+    if (ri && ri.name) return ri.name;
     const voll = String((e && e.Name) || '').trim().replace(/\s+/g, ' ');
     const kurz = voll.replace(/\s*[-–]?\s*(Filmreihe|Collection|Sammlung)$/i, '').trim();
     return kurz || voll;
@@ -2284,7 +2290,10 @@
 
   async function filmeSeite() {
     const s = neueSeite('Filme');
-    const l = await Promise.all([jf.weiterschauen(), jf.neu(), jf.sammlungen()]);
+    const l = await Promise.all([jf.weiterschauen(), jf.neu(), jf.sammlungen(),
+      fetch('../reihen.json?t=' + Date.now()).then(function (r) { return r.json(); }).then(function (j) {
+        reihenInfo = (j && j.reihen) || reihenInfo;
+      }, function () { /* ohne Liste wie bisher */ })]);
     const weiter = l[0], neu = l[1], samml = l[2];
     // Weiterschauen und Merkliste in einer Reihe (Wunsch Lukas 21.11.2026): links was man weiterschauen kann,
     // rechts daneben die Merkliste. Den Merkliste-Teil setzt liveEinsetzen() neu zusammen (auch nach jeder Änderung).
@@ -2527,6 +2536,12 @@
     // Sammlung mit eigenem Bild: Filmreihe (Bild von Jellyfin) oder Kategorie mit gezeichneter Szene (seit 16.11.2026)
     const sammlungMitBild = typ(e) === 'BoxSet' && !!hintergrundTag(e);
     const genre = sammlungMitBild && !istFilmreihe(e) ? e.Name : null;
+    const riH = typ(e) === 'BoxSet' && !sammlungMitBild && istFilmreihe(e) ? reiheInfo(e) : null;
+    if (riH && riH.bild) {
+      // Filmreihe ohne eigenes Bild (z. B. Marvel Cinematic Universe): Szenenbild des ersten Films (21.11.2026)
+      hintergrundSetzen(hintergrundBild(riH.bild.id, null), null);
+      return;
+    }
     if ((typ(e) === 'BoxSet' && !sammlungMitBild) || typ(e) === 'Gesehen' || typ(e) === 'Sammlungen') {
       hintergrundSetzen(null, typ(e) === 'Gesehen' ? '#3E4A5E' : typ(e) === 'Sammlungen' ? '#3A3380' : FARBEN[e.Name] || '#444444');
       return;
@@ -2599,15 +2614,22 @@
     el.fx.innerHTML = h;
   }
 
+  /** Poster-Wand einer Genre-Kategorie mit gezeichneter Szene. Hängt nur an der Seite, nicht am gerade geladenen Bild –
+   *  sonst sprang die Wand beim Öffnen einer Filmreihe aus einer Kategorie erst tief und dann hoch (Meldung Lukas 21.11.2026). */
+  function wandMitSzene(s) {
+    const k = s && s.kopf;
+    return !!(s && s.raster && s.poster && k && typ(k) === 'BoxSet' && !istFilmreihe(k) && hintergrundTag(k));
+  }
+
   /** Klassen für Genre-Szene und Wand setzen (Bild rutscht in der geöffneten Kategorie nach oben). */
   function szeneAnwenden() {
     if (!el.fx) return;
     const liste = ansicht === A.LISTE;
-    const wand = liste && seite.raster && seite.poster && !!bgGenre;
+    const wand = liste && wandMitSzene(seite) && !!bgGenre;
     const hubs = (FX[bgGenre] && FX[bgGenre].hub) || [100, 250];
     const hub = wand ? 'translateY(-' + (seite.akt === 0 ? hubs[0] : hubs[1]) + 'px)' : '';
     el.bgs.style.transform = hub;
-    el.wand.classList.toggle('szene', wand);
+    el.wand.classList.toggle('szene', liste && wandMitSzene(seite));
     fxSetzen(liste && bgGenre ? bgGenre : null);
     el.fx.style.transform = hub;
   }
@@ -2662,6 +2684,8 @@
       const h = hintergrundTag(e);
       return h ? hintergrundBild(id, h) : null;
     }
+    const ri = istFilmreihe(e) ? reiheInfo(e) : null;
+    if (ri && ri.bild) return posterUrl(ri.bild.id, ri.bild.tag, 330);
     const pr = tag(e, 'Primary');
     if (pr && t === 'BoxSet' && istGenre(e)) return genreKachel(id, pr);
     if (pr) return posterUrl(id, pr, 330);
@@ -3037,6 +3061,7 @@
       c.querySelector('.kg-zahl').textContent = n === 1 ? '1 Filmreihe' : n + ' Filmreihen';
       return c;
     }
+    if (form !== QUER && istFilmreihe(e)) return reiheKarteBauen(c, e);
     if (!ordner && t !== 'Photo' && t !== 'Video') c.appendChild(div('k-name', istFilmreihe(e) ? reihenName(e) : e.Name || ''));
     const url = kartenUrl(e, form);
     if (url) {
@@ -3077,6 +3102,38 @@
       c.classList.add('gesehen');
       c.appendChild(div('k-gruen'));
     }
+    return c;
+  }
+
+  /**
+   * Filmreihe als eigene Kachel (Wunsch Lukas 21.11.2026): Poster des ersten Films, oben zwei Kanten von Karten dahinter
+   * (ein Stapel = Sammlung), unten das Bild weichgezeichnet als Streifen (blur von Jellyfin, Farbe passt von allein),
+   * darauf „SAMMLUNG · 6 FILME“ und der Name groß und ganz (mehrzeilig, je nach Länge kleiner, nie abgeschnitten).
+   */
+  function reiheKarteBauen(c, e) {
+    c.classList.add('k-reihe');
+    const ri = reiheInfo(e), name = reihenName(e), n = (ri && ri.n) || e.ChildCount || 0;
+    c.appendChild(div('k-stapel k-s2'));
+    c.appendChild(div('k-stapel k-s1'));
+    const h = div('k-rbild');
+    const url = kartenUrl(e, POSTER);
+    if (url) {
+      const img = document.createElement('img');
+      img.alt = '';
+      img.decoding = 'async';
+      img.onerror = function () { if (img.parentNode) img.parentNode.removeChild(img); };
+      img.src = url;
+      h.appendChild(img);
+      const band = div('k-band');
+      band.style.backgroundImage = 'url("' + url.replace(/fillHeight=\d+/, 'fillHeight=200') + '&blur=30")';
+      h.appendChild(band);
+    }
+    const t = div('k-rtext');
+    t.appendChild(div('k-rzahl', 'Sammlung' + (n > 0 ? '  ·  ' + n + (n === 1 ? ' Film' : ' Filme') : '')));
+    const lang = Math.max.apply(null, name.split(/\s+/).map(function (w) { return w.length; }));
+    t.appendChild(div('k-rname ' + (name.length <= 11 && lang <= 10 ? 'g1' : name.length <= 20 && lang <= 12 ? 'g2' : lang <= 14 ? 'g3' : 'g4'), name));
+    h.appendChild(t);
+    c.appendChild(h);
     return c;
   }
 
@@ -3657,7 +3714,15 @@
       const roh = l[0], zuReihe = l[1] || {};
       const filme = roh.filter(function (e) { return istReihe || !istGesehen(e); });
       let wand = [], reihenN = 0;
-      if (istReihe) wand = filme.slice().reverse();   // Jellyfin liefert die neuesten zuerst – eine Filmreihe beginnt beim ersten Teil
+      const ord = istReihe && reiheInfo(k) ? (reiheInfo(k).filme || []) : [];
+      if (istReihe && ord.length) {
+        // Reihenfolge vom Pi: nach Episode (Star Wars I, II, III …), sonst nach Erscheinen (21.11.2026)
+        wand = filme.slice().reverse();
+        wand.sort(function (x, y) {
+          const a = ord.indexOf(x.Id), b = ord.indexOf(y.Id);
+          return (a < 0 ? 9999 : a) - (b < 0 ? 9999 : b);
+        });
+      } else if (istReihe) wand = filme.slice().reverse();   // Jellyfin liefert die neuesten zuerst – eine Filmreihe beginnt beim ersten Teil
       else {
         const zahl = {};
         filme.forEach(function (o) {
@@ -3876,6 +3941,7 @@
     const gross = s.akt === 0;
     el.wand.classList.toggle('klein', !gross);
     el.wand.classList.toggle('poster', !!s.poster);
+    el.wand.classList.toggle('szene', ansicht === A.LISTE && wandMitSzene(s));
     el.wName.textContent = s.poster ? s.titel : s.kopf ? ordnerName(s.kopf) : s.titel;
     el.wInfo.textContent = s.kopfInfo || '';
     // rechts: Aufnahmedatum und Nummer des Fotos im Fokus; in der Poster-Wand der Film im Fokus (die Poster haben keine Schrift)

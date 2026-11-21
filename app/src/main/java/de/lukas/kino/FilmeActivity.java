@@ -7,10 +7,12 @@ import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
+import android.graphics.ComposeShader;
 import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.PorterDuff;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
@@ -487,6 +489,7 @@ public class FilmeActivity extends Activity {
         JSONArray weiter = jf.weiterschauen();
         JSONArray neu = jf.neu();
         JSONArray samml = jf.sammlungen();
+        reihenInfoLaden();
         // Weiterschauen und Merkliste in einer Reihe (Wunsch Lukas 21.11.2026): links was man weiterschauen kann,
         // rechts daneben die Merkliste. Den Merkliste-Teil hängt liveEinsetzen() an (auch nach jeder Änderung).
         Reihe wr = reihe("Weiterschauen", weiter, POSTER);
@@ -819,8 +822,27 @@ public class FilmeActivity extends Activity {
         return e != null && e.optBoolean("_reihe", false);
     }
 
+    /** Infos zu den Filmreihen vom Pi (kino_pflege.py reihen → /share/kino/reihen.json, seit 21.11.2026): sauberer Name,
+     *  Reihenfolge der Filme (Star Wars nach Episode) und das Poster des ersten Films für die Sammlungs-Kachel. */
+    private static volatile JSONObject reihenInfo = new JSONObject();
+
+    static void reihenInfoLaden() {
+        try {
+            JSONObject j = new JSONObject(Jellyfin.holen(Familie.BASIS + "reihen.json?t=" + System.currentTimeMillis()));
+            JSONObject r = j.optJSONObject("reihen");
+            if (r != null) reihenInfo = r;
+        } catch (Exception ignored) {
+        }
+    }
+
+    static JSONObject reiheInfo(JSONObject e) {
+        return e == null ? null : reihenInfo.optJSONObject(e.optString("Id"));
+    }
+
     /** Name einer Filmreihe ohne das angehängte „Filmreihe“ bzw. „Collection“ von TMDb. */
     static String reihenName(JSONObject e) {
+        JSONObject ri = reiheInfo(e);
+        if (ri != null && !ri.optString("name").isEmpty()) return ri.optString("name");
         String voll = ordnerName(e);
         String kurz = voll.replaceAll("(?i)\\s*[-–]?\\s*(Filmreihe|Collection|Sammlung)$", "").trim();
         return kurz.isEmpty() ? voll : kurz;
@@ -1615,6 +1637,19 @@ public class FilmeActivity extends Activity {
         // Sammlung mit eigenem Bild: Filmreihe (Bild von Jellyfin) oder Kategorie mit gezeichneter Szene (seit 16.11.2026)
         boolean sammlungMitBild = "BoxSet".equals(t) && Jellyfin.hintergrundTag(e) != null;
         final String genre = sammlungMitBild && !istFilmreihe(e) ? e.optString("Name") : null;
+        JSONObject riH = "BoxSet".equals(t) && !sammlungMitBild && istFilmreihe(e) ? reiheInfo(e) : null;
+        JSONObject biH = riH != null ? riH.optJSONObject("bild") : null;
+        if (biH != null) {
+            // Filmreihe ohne eigenes Bild (z. B. Marvel Cinematic Universe): Szenenbild des ersten Films (21.11.2026)
+            final String u2 = Jellyfin.hintergrund(biH.optString("id"), null);
+            bildUrl = u2;
+            bilder.laden(u2, (u, bm) -> {
+                if (!u.equals(bildUrl)) return;
+                if (bm != null) setzeHintergrund(bm, 0);
+                else setzeHintergrund(null, 0xFF2B2550);
+            });
+            return;
+        }
         if (("BoxSet".equals(t) && !sammlungMitBild) || "Gesehen".equals(t) || "Qualitaet".equals(t) || "Sammlungen".equals(t)) {
             Integer f = FARBEN.get(e.optString("Name"));
             setzeHintergrund(null, f != null ? f : 0xFF444444);
@@ -1662,6 +1697,13 @@ public class FilmeActivity extends Activity {
             });
         });
     };
+
+    /** Poster-Wand einer Genre-Kategorie mit gezeichneter Szene. Hängt nur an der Seite, nicht am gerade geladenen Bild –
+     *  sonst sprang die Wand beim Öffnen einer Filmreihe aus einer Kategorie erst tief und dann hoch (Meldung Lukas 21.11.2026). */
+    private boolean wandMitSzene(Seite s) {
+        JSONObject k = s.kopf;
+        return s.poster && k != null && "BoxSet".equals(typ(k)) && !istFilmreihe(k) && Jellyfin.hintergrundTag(k) != null;
+    }
 
     /** Film/Folge ohne eigenes Szenenbild, bei dem hintergrundUrl aufs Poster ausweicht. */
     private boolean posterStattSzene(JSONObject e) {
@@ -1789,6 +1831,10 @@ public class FilmeActivity extends Activity {
             if (pr != null || "Photo".equals(t) || "Video".equals(t)) return Jellyfin.quer(id, pr, QW * 2);
             String tag = Jellyfin.hintergrundTag(e);
             return tag != null ? Jellyfin.hintergrund(id, tag) : null;
+        }
+        if (istFilmreihe(e)) {
+            JSONObject ri = reiheInfo(e), bi = ri != null ? ri.optJSONObject("bild") : null;
+            if (bi != null) return Jellyfin.poster(bi.optString("id"), bi.optString("tag"), 330);
         }
         String pr = Jellyfin.tag(e, "Primary");
         if (pr != null && "BoxSet".equals(t) && istGenre(e)) return Jellyfin.genreKachel(id, pr);   // gezeichnet: volle Farbtiefe
@@ -2205,7 +2251,15 @@ public class FilmeActivity extends Activity {
                     }
                     List<JSONObject> wand = new ArrayList<>();
                     int reihenN = 0;
-                    if (istReihe) {
+                    JSONObject ri = istReihe ? reiheInfo(s) : null;
+                    JSONArray ord = ri != null ? ri.optJSONArray("filme") : null;
+                    if (istReihe && ord != null && ord.length() > 0) {
+                        // Reihenfolge vom Pi: nach Episode (Star Wars I, II, III …), sonst nach Erscheinen (21.11.2026)
+                        Map<String, Integer> pos = new HashMap<>();
+                        for (int k = 0; k < ord.length(); k++) pos.put(ord.optString(k), k);
+                        for (int k = filme.size() - 1; k >= 0; k--) wand.add(filme.get(k));
+                        wand.sort((x, y) -> Integer.compare(pos.getOrDefault(x.optString("Id"), 9999), pos.getOrDefault(y.optString("Id"), 9999)));
+                    } else if (istReihe) {
                         // Jellyfin liefert die neuesten zuerst – eine Filmreihe beginnt man beim ersten Teil
                         for (int k = filme.size() - 1; k >= 0; k--) wand.add(filme.get(k));
                     } else {
@@ -2650,7 +2704,7 @@ public class FilmeActivity extends Activity {
     private final class Buehne extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint symbolStift = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final TextPaint titel, meta, text, reiheText, knopf, gross, klein, karte, leisteText, taste;
+        private final TextPaint titel, meta, text, reiheText, knopf, gross, klein, karte, leisteText, taste, reiheName, reiheKlein;
         private final RectF r = new RectF();
         private final Matrix m = new Matrix();
         private long letzt = SystemClock.uptimeMillis();
@@ -2670,6 +2724,11 @@ public class FilmeActivity extends Activity {
             meta = stift(c, 28, 600, 0xE6FFFFFF);
             text = stift(c, 28, 450, 0xC8FFFFFF);
             reiheText = stift(c, 30, 650, 0xE6FFFFFF);
+            reiheName = stift(c, 30, 750, 0xFFFFFFFF);
+            reiheName.setShadowLayer(6, 0, 2, 0xA6000000);
+            reiheKlein = stift(c, 15, 750, GELB);
+            reiheKlein.setLetterSpacing(0.08f);
+            reiheKlein.setShadowLayer(4, 0, 1, 0xA6000000);
             knopf = stift(c, 30, 650, 0xFFFFFFFF);
             gross = stift(c, 130, 800, 0xFFFFFFFF);
             klein = stift(c, 26, 500, 0xB3FFFFFF);
@@ -3403,7 +3462,7 @@ public class FilmeActivity extends Activity {
         private boolean rasterZeichnen(Canvas c, float dt) {
             boolean weiter = false;
             Seite s = seite;
-            final boolean szene = s.poster && szeneGenre != null && bildNeu != null;
+            final boolean szene = wandMitSzene(s);
             if (szene) {
                 // Kategorie mit gezeichneter Szene: oben bleibt das Motiv gut sichtbar (in der ersten Zeile das obere Drittel),
                 // links hinter dem Namen und ab den Postern wird es ruhig
@@ -3559,6 +3618,7 @@ public class FilmeActivity extends Activity {
                 float w = PW * zoom, hh = PH * zoom;
                 float ein = gesehenRahmen(e) ? -3.5f : 2.5f;
                 r.set(PW / 2f - w / 2 + ein, PH / 2f - hh / 2 + ein, PW / 2f + w / 2 - ein, PH / 2f + hh / 2 - ein);
+                if (istFilmreihe(e)) r.top += 16 * zoom;   // Sammlung: Rahmen um die Karte, nicht um den Stapel
                 p.setShader(null);
                 p.setStyle(Paint.Style.STROKE);
                 p.setStrokeWidth(5f);
@@ -3662,7 +3722,9 @@ public class FilmeActivity extends Activity {
                 p.setColor(0xFF000000);
                 p.setAlpha(al);
                 p.setShadowLayer(Ani.schatten(50), 0, 22, Ani.farbe(0x000000, 0.6f * al / 255f));
-                c.drawRoundRect(r, rad, rad, p);
+                // Sammlung: Schatten nur unter der eigentlichen Karte, nicht unter dem Stapel oben
+                if (form == POSTER && istFilmreihe(e)) c.drawRoundRect(r.left, r.top + 16 * zoom, r.right, r.bottom, rad, rad, p);
+                else c.drawRoundRect(r, rad, rad, p);
                 p.clearShadowLayer();
             }
             String t = typ(e);
@@ -3678,6 +3740,19 @@ public class FilmeActivity extends Activity {
             }
             if ("Sammlungen".equals(t)) {
                 sammlungenKarte(c, e, rad, al);
+                p.setAlpha(255);
+                return;
+            }
+            if (form == POSTER && istFilmreihe(e)) {
+                String u0 = kartenUrl(e, form);
+                Bitmap b0 = u0 != null ? bilder.sofort(u0) : null;
+                if (b0 == null && u0 != null && !bilder.fehlgeschlagen(u0)) bilder.laden(u0, (u, bm) -> invalidate());
+                c.save();
+                c.translate(cx, cy);
+                c.scale(zoom, zoom);
+                c.translate(-w0 / 2f, -h0 / 2f);
+                reiheKarte(c, e, b0, al);
+                c.restore();
                 p.setAlpha(255);
                 return;
             }
@@ -3797,6 +3872,123 @@ public class FilmeActivity extends Activity {
                 p.setStyle(Paint.Style.FILL);
             }
             p.setAlpha(255);
+        }
+
+        // -------------------------------------------------- Sammlungs-Kachel (Filmreihe), seit 21.11.2026
+
+        private final java.util.WeakHashMap<Bitmap, Bitmap> bandWeich = new java.util.WeakHashMap<>();
+        private final Map<String, StaticLayout> reiheLayouts = new HashMap<>();
+
+        /**
+         * Filmreihe als eigene Kachel (Wunsch Lukas 21.11.2026): Poster des ersten Films, oben zwei Kanten von Karten
+         * dahinter (ein Stapel = Sammlung), unten das Bild selbst weichgezeichnet als Streifen (Farbe passt von allein),
+         * darauf „SAMMLUNG · 6 FILME“ und der Name groß und ganz – mehrzeilig, notfalls kleiner, nie abgeschnitten.
+         * Gezeichnet in Kachel-Koordinaten (PW x PH), der Zoom kommt von außen.
+         */
+        private void reiheKarte(Canvas c, JSONObject e, Bitmap b, int al) {
+            float rad = 18, st = 16;
+            RectF k = new RectF(24, 0, PW - 24, 40);
+            p.setShader(null);
+            p.setColor(0xFF2E323B);
+            p.setAlpha(Math.round(al * 0.75f));
+            c.drawRoundRect(k, 14, 14, p);
+            k.set(12, 8, PW - 12, 48);
+            p.setColor(0xFF4C515E);
+            p.setAlpha(Math.round(al * 0.95f));
+            c.drawRoundRect(k, 16, 16, p);
+            RectF h = new RectF(0, st, PW, PH);
+            c.save();
+            Path clip = new Path();
+            clip.addRoundRect(h, rad, rad, Path.Direction.CW);
+            c.clipPath(clip);
+            p.setColor(0xFF22252C);
+            p.setAlpha(al);
+            c.drawRect(h, p);
+            float bh = h.height() * 0.42f;
+            RectF band = new RectF(h.left, h.bottom - bh, h.right, h.bottom);
+            if (b != null) {
+                Matrix bm = new Matrix();
+                float sk = Math.max(h.width() / b.getWidth(), h.height() / b.getHeight());
+                bm.setScale(sk, sk);
+                bm.postTranslate(h.left + (h.width() - b.getWidth() * sk) / 2f, h.top + (h.height() - b.getHeight() * sk) / 2f);
+                p.setAlpha(al);
+                c.drawBitmap(b, bm, p);
+                Bitmap w = bandWeich.get(b);
+                if (w == null) {
+                    w = weichStreifen(b);
+                    if (w != null) bandWeich.put(b, w);
+                }
+                if (w != null) {
+                    BitmapShader bs = new BitmapShader(w, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                    Matrix wm = new Matrix();
+                    wm.setScale(band.width() / w.getWidth(), band.height() / w.getHeight());
+                    wm.postTranslate(band.left, band.top);
+                    bs.setLocalMatrix(wm);
+                    LinearGradient lg = new LinearGradient(0, band.top, 0, band.top + bh * 0.45f, 0x00FFFFFF, 0xFFFFFFFF, Shader.TileMode.CLAMP);
+                    p.setShader(new ComposeShader(bs, lg, PorterDuff.Mode.DST_IN));
+                    p.setAlpha(al);
+                    c.drawRect(band, p);
+                    p.setShader(null);
+                }
+            }
+            // leicht abdunkeln, damit die Schrift auf jedem Bild lesbar ist
+            p.setShader(new LinearGradient(0, band.top, 0, band.bottom, 0x00000000, 0x99000000, Shader.TileMode.CLAMP));
+            p.setAlpha(al);
+            c.drawRect(band, p);
+            p.setShader(null);
+            c.restore();
+            // feiner heller Rand: hebt die Sammlung von normalen Postern ab
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(2f);
+            p.setColor(0x66FFFFFF);
+            p.setAlpha(Math.round(0x66 * al / 255f));
+            c.drawRoundRect(new RectF(h.left + 1, h.top + 1, h.right - 1, h.bottom - 1), rad, rad, p);
+            p.setStyle(Paint.Style.FILL);
+            JSONObject ri = reiheInfo(e);
+            int n = ri != null ? ri.optInt("n", 0) : e.optInt("ChildCount", 0);
+            String name = reihenName(e);
+            StaticLayout sl = reiheLayouts.get(name);
+            if (sl == null) {
+                sl = reiheSchrift(name, PW - 28);
+                reiheLayouts.put(name, sl);
+            }
+            float ty = h.bottom - 16 - sl.getHeight();
+            reiheName.setAlpha(al);
+            c.save();
+            c.translate(h.left + 14, ty);
+            sl.draw(c);
+            c.restore();
+            reiheKlein.setAlpha(al);
+            c.drawText("SAMMLUNG" + (n > 0 ? "  ·  " + n + (n == 1 ? " FILM" : " FILME") : ""), h.left + 15, ty - 9, reiheKlein);
+        }
+
+        /** Name einer Sammlung: bis 3 Zeilen, lieber kleiner als abgeschnitten (auch kein Wort mittendrin getrennt). */
+        private StaticLayout reiheSchrift(String t, int breite) {
+            StaticLayout sl = null;
+            for (int gr : new int[]{30, 27, 24, 21, 19, 17}) {
+                reiheName.setTextSize(gr);
+                sl = StaticLayout.Builder.obtain(t, 0, t.length(), reiheName, breite).setIncludePad(false)
+                        .setLineSpacing(0, 0.92f).build();
+                boolean passt = sl.getLineCount() <= 3;
+                if (passt) for (String wort : t.split("\\s+")) if (reiheName.measureText(wort) > breite) passt = false;
+                if (passt) return sl;
+            }
+            return sl;
+        }
+
+        /** Unterer Teil des Posters, stark verkleinert und wieder vergrößert = weichgezeichnet (für den Namensstreifen). */
+        private Bitmap weichStreifen(Bitmap b) {
+            try {
+                int y0 = Math.round(b.getHeight() * 0.56f);
+                Bitmap teil = Bitmap.createBitmap(b, 0, y0, b.getWidth(), Math.max(1, b.getHeight() - y0));
+                Bitmap klein = Bitmap.createScaledBitmap(teil, 10, 6, true);
+                Bitmap mittel = Bitmap.createScaledBitmap(klein, 40, 24, true);
+                if (teil != b) teil.recycle();
+                if (klein != mittel) klein.recycle();
+                return mittel;
+            } catch (Throwable t) {
+                return null;
+            }
         }
 
         /** Kachel „Gesehen“ in den Kategorien: ruhiges Blaugrau, Auge mit Haken, Anzahl. */
