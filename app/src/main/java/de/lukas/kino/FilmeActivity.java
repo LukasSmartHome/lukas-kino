@@ -2726,8 +2726,8 @@ public class FilmeActivity extends Activity {
             reiheText = stift(c, 30, 650, 0xE6FFFFFF);
             reiheName = stift(c, 30, 750, 0xFFFFFFFF);
             reiheName.setShadowLayer(6, 0, 2, 0xA6000000);
-            reiheKlein = stift(c, 15, 750, GELB);
-            reiheKlein.setLetterSpacing(0.08f);
+            reiheKlein = stift(c, 13, 750, GELB);
+            reiheKlein.setLetterSpacing(0.05f);
             reiheKlein.setShadowLayer(4, 0, 1, 0xA6000000);
             knopf = stift(c, 30, 650, 0xFFFFFFFF);
             gross = stift(c, 130, 800, 0xFFFFFFFF);
@@ -3959,7 +3959,7 @@ public class FilmeActivity extends Activity {
             sl.draw(c);
             c.restore();
             reiheKlein.setAlpha(al);
-            c.drawText("SAMMLUNG" + (n > 0 ? "  ·  " + n + (n == 1 ? " FILM" : " FILME") : ""), h.left + 15, ty - 9, reiheKlein);
+            c.drawText("SAMMLUNG" + (n > 0 ? " · " + n + (n == 1 ? " FILM" : " FILME") : ""), h.left + 15, ty - 9, reiheKlein);
         }
 
         /** Name einer Sammlung: bis 3 Zeilen, lieber kleiner als abgeschnitten (auch kein Wort mittendrin getrennt). */

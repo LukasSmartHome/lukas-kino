@@ -1689,7 +1689,7 @@ body {
 .k-rbild::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 42%; pointer-events: none;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, .6)); border-radius: 0 0 18px 18px; }
 .k-rtext { position: absolute; left: 14px; right: 14px; bottom: 16px; z-index: 1; text-shadow: 0 2px 6px rgba(0, 0, 0, .65); }
-.k-rzahl { color: #F2B705; font-size: 15px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 4px; }
+.k-rzahl { color: #F2B705; font-size: 13px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; margin-bottom: 4px; white-space: nowrap; }
 .k-rname { color: #fff; font-weight: 750; line-height: 1.02; overflow-wrap: normal; word-break: normal; }
 .k-rname.g1 { font-size: 30px; }
 .k-rname.g2 { font-size: 26px; }

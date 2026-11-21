@@ -3129,7 +3129,7 @@
       h.appendChild(band);
     }
     const t = div('k-rtext');
-    t.appendChild(div('k-rzahl', 'Sammlung' + (n > 0 ? '  ·  ' + n + (n === 1 ? ' Film' : ' Filme') : '')));
+    t.appendChild(div('k-rzahl', 'Sammlung' + (n > 0 ? ' · ' + n + (n === 1 ? ' Film' : ' Filme') : '')));
     const lang = Math.max.apply(null, name.split(/\s+/).map(function (w) { return w.length; }));
     t.appendChild(div('k-rname ' + (name.length <= 11 && lang <= 10 ? 'g1' : name.length <= 20 && lang <= 12 ? 'g2' : lang <= 14 ? 'g3' : 'g4'), name));
     h.appendChild(t);
