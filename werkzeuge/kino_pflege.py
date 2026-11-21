@@ -16,7 +16,11 @@
 #                            Ohne --alle nur Filme, die noch nicht in der Liste stehen oder ohne Trailer älter als 7 Tage.
 #   kategorien [--los]       Sammlungen in Jellyfin nach kategorien.json (Genres plus Ausnahmen je Film) abgleichen.
 #                            Ohne --los nur anzeigen, was sich ändern würde.
-#   taeglich                 alles für den täglichen Lauf (Trailer, Kategorien, Logos, nur neue Vorschaubilder)
+#   qualitaet [--los]        Jellyfin-Tags „DVD“ und „Blu-ray“ (ab 1080p, ohne Kino-Mitschnitte) für die Kacheln in der App
+#   filmreihen [--los]       TMDB-Filmreihen (ab 2 Filmen) und „Marvel Cinematic Universe“ als Sammlungen anlegen/ergänzen
+#   luecken [--los]          fehlende Beschreibungen, Hintergründe und Poster (statt Standbild) von TMDB/Fanart nachziehen
+#   taeglich                 alles für den täglichen Lauf (Trailer, Kategorien, Qualität, Filmreihen, Lücken, Logos,
+#                            nur neue Vorschaubilder)
 #   auto                     trailer (höchstens 60 neue Filme je Lauf) und kategorien --los (für den Sensor, kurze Ausgabe)
 import json, os, re, sys, time, unicodedata, urllib.request, urllib.parse, urllib.error
 
@@ -423,6 +427,188 @@ def befehl_logos(los=False):
 
 
 
+# ------------------------------------------------------------------ qualitaet (Tags „DVD“ und „Blu-ray“)
+
+KINO_MITSCHNITT = re.compile(r"(?i)(^|[ ._\-\[(])(cam|hdcam|camrip|ts|hdts|telesync|tc|hdtc|telecine|scr|screener|dvdscr)([ ._\-\])]|$)")
+
+
+def befehl_qualitaet(los=False, still=False):
+    """Jellyfin-Tags für die Qualitäts-Kacheln in Lukas Kino (seit 21.11.2026):
+    „DVD“ (rote Kachel) für Dateien mit „ [DVD]“ im Namen, „Blu-ray“ (blaue Kachel) für alles ab Full HD
+    (1080p und 4K) – außer DVDs und Kino-Mitschnitten (CAM, TS …). Die Reihe „Neu“ zeigt nur Filme mit „Blu-ray“.
+    Ändert nur die Jellyfin-Datenbank, nichts auf der Platte. Ohne --los nur anzeigen."""
+    key = schluessel()
+    user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
+    filme = anfrage("/Items?" + q(userId=user, includeItemTypes="Movie", recursive="true", fields="Path,Tags,Width,Height"),
+                    key).get("Items") or []
+    eigen = ("DVD", "Blu-ray")
+    n, zahl = 0, {"DVD": 0, "Blu-ray": 0}
+    for e in filme:
+        datei = os.path.basename(e.get("Path") or "")
+        tags = list(e.get("Tags") or [])
+        dvd = " [DVD]" in datei
+        w, h = e.get("Width") or 0, e.get("Height") or 0
+        bd = not dvd and (h >= 1000 or w >= 1900) and not KINO_MITSCHNITT.search(os.path.splitext(datei)[0])
+        soll = (["DVD"] if dvd else []) + (["Blu-ray"] if bd else [])
+        for t in soll:
+            zahl[t] += 1
+        if sorted(t for t in tags if t in eigen) == sorted(soll):
+            continue
+        n += 1
+        if not still:
+            print("  {} {}: {} -> {}".format("ändere" if los else "würde ändern", e.get("Name"),
+                                             [t for t in tags if t in eigen] or "-", soll or "-"))
+        if los:
+            voll = anfrage("/Users/{}/Items/{}".format(user, e["Id"]), key)
+            voll["Tags"] = [t for t in (voll.get("Tags") or []) if t not in eigen] + soll
+            anfrage("/Items/{}".format(e["Id"]), key, "POST", voll)
+    if not still:
+        print("Qualität: {} DVD, {} Blu-ray, {} {}".format(zahl["DVD"], zahl["Blu-ray"], n, "geändert" if los else "zu ändern"))
+    return n
+
+
+# ------------------------------------------------------------------ filmreihen
+
+def befehl_filmreihen(los=False, still=False):
+    """Filmreihen als Jellyfin-Sammlungen (seit 21.11.2026): jede TMDB-Filmreihe, von der mindestens 2 verschiedene
+    Filme da sind (Star Wars, Mission: Impossible, Deadpool …), dazu „Marvel Cinematic Universe“ (Studio „Marvel
+    Studios“, ab 2008). Name und Bilder holt Jellyfin selbst von TMDB (Fernsuche, kein eigener TMDB-Schlüssel).
+    Legt nur an und fügt nur hinzu, nimmt nie etwas heraus. Die Genre-Kategorien bleiben unberührt."""
+    genres = set((lesen(KATEGORIEN).get("zuordnung") or {}).values())
+    key = schluessel()
+    user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
+    filme = anfrage("/Items?" + q(userId=user, includeItemTypes="Movie", recursive="true",
+                                  fields="ProviderIds,Studios,ProductionYear"), key).get("Items") or []
+    gruppen = {}
+    for e in filme:
+        p = e.get("ProviderIds") or {}
+        film = p.get("Tmdb") or e["Id"]
+        if p.get("TmdbCollection"):
+            g = gruppen.setdefault("c" + p["TmdbCollection"], {"tmdb": p["TmdbCollection"], "name": None, "ids": set(), "filme": set()})
+            g["ids"].add(e["Id"])
+            g["filme"].add(film)
+        if (e.get("ProductionYear") or 0) >= 2008 and any((s.get("Name") or "") == "Marvel Studios" for s in (e.get("Studios") or [])):
+            g = gruppen.setdefault("mcu", {"tmdb": None, "name": "Marvel Cinematic Universe", "ids": set(), "filme": set()})
+            g["ids"].add(e["Id"])
+            g["filme"].add(film)
+    da = anfrage("/Items?" + q(userId=user, includeItemTypes="BoxSet", recursive="true", fields="ProviderIds"), key).get("Items") or []
+    nach_tmdb = {(b.get("ProviderIds") or {}).get("Tmdb"): b for b in da if b.get("Name") not in genres}
+    nach_name = {(b.get("Name") or "").lower(): b for b in da}
+    neu_n = dazu_n = 0
+    for g in sorted(gruppen.values(), key=lambda x: -len(x["filme"])):
+        if len(g["filme"]) < 2:
+            continue
+        b = nach_tmdb.get(g["tmdb"]) if g["tmdb"] else None
+        if not b and not g["name"]:
+            r = anfrage("/Items/RemoteSearch/BoxSet", key, "POST",
+                        {"SearchInfo": {"ProviderIds": {"Tmdb": g["tmdb"]}, "MetadataLanguage": "de", "MetadataCountryCode": "DE"}}) or []
+            g["name"] = (r[0].get("Name") or "").strip() if r else ""
+            if not g["name"]:
+                if not still:
+                    print("  ohne Namen bei TMDB, übersprungen: Reihe", g["tmdb"])
+                continue
+        if not b:
+            b = nach_name.get(g["name"].lower())
+        if b and b.get("Name") in genres:
+            continue
+        if b:
+            ist = {x["Id"] for x in anfrage("/Items?" + q(userId=user, parentId=b["Id"]), key).get("Items") or []}
+            dazu = sorted(g["ids"] - ist)
+            if not dazu:
+                continue
+            dazu_n += len(dazu)
+            if not still:
+                print("  {}: +{}".format(b.get("Name"), len(dazu)))
+            if los:
+                anfrage("/Collections/{}/Items?{}".format(b["Id"], q(ids=",".join(dazu))), key, "POST")
+            continue
+        neu_n += 1
+        if not still:
+            print("  neu: {} ({} Filme)".format(g["name"], len(g["filme"])))
+        if not los:
+            continue
+        c = anfrage("/Collections?" + q(name=g["name"], ids=",".join(sorted(g["ids"]))), key, "POST") or {}
+        cid = c.get("Id")
+        if cid and g["tmdb"]:
+            # TMDB-Nummer eintragen, damit Jellyfin Poster, Hintergrund und Text der Reihe holt; Name bleibt fest
+            voll = anfrage("/Users/{}/Items/{}".format(user, cid), key)
+            voll["ProviderIds"] = dict(voll.get("ProviderIds") or {}, Tmdb=g["tmdb"])
+            voll["LockedFields"] = sorted(set((voll.get("LockedFields") or []) + ["Name"]))
+            anfrage("/Items/{}".format(cid), key, "POST", voll)
+            anfrage("/Items/{}/Refresh?{}".format(cid, q(metadataRefreshMode="FullRefresh", imageRefreshMode="FullRefresh",
+                                                          replaceAllMetadata="false", replaceAllImages="false")), key, "POST")
+    if not still:
+        print("Filmreihen: {} {}, {} Filme {}".format(neu_n, "neu angelegt" if los else "würden neu angelegt",
+                                                       dazu_n, "hinzugefügt" if los else "würden hinzugefügt"))
+    return neu_n, dazu_n
+
+
+# ------------------------------------------------------------------ lücken (Beschreibung, Hintergrund, Poster)
+
+def befehl_luecken(los=False, still=False):
+    """Seit 21.11.2026: Filme ohne Beschreibung bekommen den Text von TMDB (deutsch, sonst englisch) über die
+    Jellyfin-Fernsuche. Filme ohne Hintergrundbild bekommen das größte von TMDB/Fanart (am liebsten ohne Schrift).
+    Hat ein Film statt eines Posters nur ein querformatiges Standbild aus dem Film (so macht es Jellyfin, wenn TMDB
+    kein Poster hat), wird es gegen ein echtes Poster getauscht, falls es eins gibt. Ohne --los nur anzeigen."""
+    key = schluessel()
+    user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
+    filme = anfrage("/Items?" + q(userId=user, includeItemTypes="Movie", recursive="true",
+                                  fields="Overview,ProviderIds,BackdropImageTags,PrimaryImageAspectRatio"), key).get("Items") or []
+    n_text = n_hg = n_poster = 0
+    rest = []
+    for e in filme:
+        name = e.get("Name")
+        tmdb = (e.get("ProviderIds") or {}).get("Tmdb")
+        if not (e.get("Overview") or "").strip() and tmdb:
+            txt, spr = "", ""
+            for spr, land in (("de", "DE"), ("en", "US")):
+                r = anfrage("/Items/RemoteSearch/Movie", key, "POST",
+                            {"SearchInfo": {"ProviderIds": {"Tmdb": tmdb}, "MetadataLanguage": spr, "MetadataCountryCode": land}}) or []
+                txt = ((r[0].get("Overview") if r else "") or "").strip()
+                if txt:
+                    break
+            if txt:
+                n_text += 1
+                if not still:
+                    print("  Beschreibung ({}): {}".format(spr, name))
+                if los:
+                    voll = anfrage("/Users/{}/Items/{}".format(user, e["Id"]), key)
+                    voll["Overview"] = txt
+                    anfrage("/Items/{}".format(e["Id"]), key, "POST", voll)
+            else:
+                rest.append("{} (keine Beschreibung bei TMDB)".format(name))
+        for typ, fehlt, mind in (("Backdrop", not e.get("BackdropImageTags"), 1280),
+                                 ("Primary", (e.get("PrimaryImageAspectRatio") or 0) > 1.0, 500)):
+            if not fehlt:
+                continue
+            fern = anfrage("/Items/{}/RemoteImages?".format(e["Id"]) + q(type=typ, includeAllLanguages="true"), key) or {}
+            kand = [b for b in (fern.get("Images") or []) if b.get("Url") and (b.get("Width") or 0) >= mind]
+            if typ == "Backdrop":
+                kand.sort(key=lambda b: (b.get("Language") not in (None, ""), -(b.get("Width") or 0)))
+            else:
+                kand = [b for b in kand if (b.get("Height") or 0) > (b.get("Width") or 0)]
+                kand.sort(key=lambda b: (SPRACHE_RANG.get(b.get("Language"), 3), -(b.get("Height") or 0)))
+            if not kand:
+                rest.append("{} (kein {} gefunden)".format(name, "Hintergrund" if typ == "Backdrop" else "Poster"))
+                continue
+            if typ == "Backdrop":
+                n_hg += 1
+            else:
+                n_poster += 1
+            if not still:
+                print("  {}: {} {}x{} {}".format("Hintergrund" if typ == "Backdrop" else "Poster", name,
+                                                 kand[0].get("Width"), kand[0].get("Height"), kand[0].get("ProviderName")))
+            if los:
+                anfrage("/Items/{}/RemoteImages/Download?".format(e["Id"]) + q(type=typ, imageUrl=kand[0]["Url"]), key, "POST")
+    if not still:
+        print("Lücken: {} Beschreibungen, {} Hintergründe, {} Poster {}".format(n_text, n_hg, n_poster,
+                                                                                "ergänzt" if los else "ergänzbar"))
+        for x in rest:
+            print("  offen:", x)
+    return n_text + n_hg + n_poster
+
+
+
 # ------------------------------------------------------------------ vorwaermen
 
 WEBP = "image/webp,image/apng,image/*,*/*;q=0.8"   # so fragt der Browser der LG-Fernseher (bekommt WebP)
@@ -444,6 +630,7 @@ def befehl_vorwaermen(teil="alles", faeden=2, nur_neue=False):
     key = schluessel()
     user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
     stand = {"phase": "start", "fertig": 0, "fehler": 0, "bytes": 0, "angefragt": 0}
+    kaputt = set()   # Abrufe mit Fehler – werden NICHT als erledigt gemerkt (04.11.2026)
     sperre = threading.Lock()
     beginn = time.time()
 
@@ -471,6 +658,7 @@ def befehl_vorwaermen(teil="alles", faeden=2, nur_neue=False):
             stand["bytes"] += n
             if not ok:
                 stand["fehler"] += 1
+                kaputt.add(pfad)
             melden()
 
     ex = concurrent.futures.ThreadPoolExecutor(max_workers=faeden)
@@ -572,9 +760,10 @@ def befehl_vorwaermen(teil="alles", faeden=2, nur_neue=False):
     for f in offen:
         f.result()
     ex.shutdown(wait=True)
-    # gemerkt wird alles, was jetzt angefragt wurde (beim ersten Lauf ohne --neue die ganze Liste)
+    # gemerkt wird nur, was geklappt hat (beim ersten Lauf ohne --neue die ganze Liste) – Fehlschläge
+    # (z. B. Jellyfin wegen Speichermangel kurz weg) holt der nächste Tageslauf nach (04.11.2026)
     with open(merk_pfad, "a" if nur_neue else "w", encoding="utf-8") as f:
-        f.write("\n".join(neu_gemerkt if nur_neue else sorted(erledigt)) + "\n")
+        f.write("\n".join(x for x in (neu_gemerkt if nur_neue else sorted(erledigt)) if x not in kaputt) + "\n")
     stand["phase"] = "fertig"
     melden(True)
     print("vorgewärmt: {} Abrufe, Fehler {}, {} MB, {} Minuten".format(stand["fertig"], stand["fehler"],
@@ -601,13 +790,19 @@ if __name__ == "__main__":
             teile.append("{} ohne Trailer".format(befehl_trailer(still=True, max_neu=60)))
             d, w = befehl_kategorien(los=True, still=True)
             teile.append("Kategorien +{} -{}".format(d, w))
+            # die drei neuen Schritte (21.11.2026) dürfen den restlichen Lauf nie aufhalten
+            for titel, schritt in (("Qualität", befehl_qualitaet), ("Reihen", befehl_filmreihen), ("Lücken", befehl_luecken)):
+                try:
+                    teile.append("{} {}".format(titel, schritt(los=True, still=True)))
+                except Exception as fx:
+                    teile.append("{} fehler {}".format(titel, str(fx)[:40]))
             befehl_logos(los=True)
             if os.path.exists(os.path.join(WERK, "vorwaermen_pause")):
                 # pausiert (Lukas 03.11.2026): Vorwärmen füllt über Jellyfin die Platte, erst nach dem Umzug der Filme
                 # auf die 14-TB-Platte fortsetzen – dann die Datei vorwaermen_pause löschen
                 teile.append("Bilder pausiert")
             else:
-                befehl_vorwaermen("alles", 2, nur_neue=True)
+                befehl_vorwaermen("alles", 1, nur_neue=True)   # 1 Faden: Pi hat nur 4 GB RAM (04.11.2026)
                 teile.append("Bilder ok")
             text = "ok " + time.strftime("%d.%m. %H:%M") + ": " + ", ".join(teile)
         except BaseException as ex:
@@ -618,6 +813,12 @@ if __name__ == "__main__":
         befehl_logos(los="--los" in a)
     elif a[0] == "kategorien":
         befehl_kategorien(los="--los" in a)
+    elif a[0] == "qualitaet":
+        befehl_qualitaet(los="--los" in a)
+    elif a[0] == "filmreihen":
+        befehl_filmreihen(los="--los" in a)
+    elif a[0] == "luecken":
+        befehl_luecken(los="--los" in a)
     elif a[0] == "auto":
         # für den Sensor: kurze Zeile, Fehler als „fehler: …“
         try:
