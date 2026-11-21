@@ -123,7 +123,23 @@ final class Bilder {
             // zeigen mit RGB_565 deutliche waagerechte Streifen (Meldung Lukas 16.11.2026) – sie brauchen die volle Farbtiefe.
             boolean fein = url.contains("/Images/Logo") || url.contains(Jellyfin.FEIN);
             o.inPreferredConfig = fein ? Bitmap.Config.ARGB_8888 : Bitmap.Config.RGB_565;
-            return BitmapFactory.decodeByteArray(daten, 0, daten.length, o);
+            Bitmap b = BitmapFactory.decodeByteArray(daten, 0, daten.length, o);
+            int k = url.indexOf("#karte=");
+            if (b != null && k >= 0 && b.getWidth() > b.getHeight()) {
+                // Szenenbild einer Sammlung: nur den Kachel-Ausschnitt behalten (ca. 280 x 400 statt 711 x 400)
+                float fokus = 0.5f;
+                try {
+                    fokus = Math.max(0f, Math.min(1f, Float.parseFloat(url.substring(k + 7))));
+                } catch (NumberFormatException ignored) {
+                }
+                int ch = b.getHeight();
+                int cw = Math.min(b.getWidth(), Math.round(ch * FilmeActivity.PW / (float) (FilmeActivity.PH - 16)));
+                int x = Math.round((b.getWidth() - cw) * fokus);
+                Bitmap z = Bitmap.createBitmap(b, x, 0, cw, ch);
+                if (z != b) b.recycle();
+                return z;
+            }
+            return b;
         } catch (Throwable t) {
             return null;
         } finally {

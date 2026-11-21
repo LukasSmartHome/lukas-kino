@@ -1836,7 +1836,8 @@ public class FilmeActivity extends Activity {
             JSONObject ri = reiheInfo(e), bi = ri != null ? ri.optJSONObject("bild") : null;
             JSONObject sz = ri != null ? ri.optJSONObject("szene") : null;
             // echtes, schlichtes Szenenbild aus der Reihe (ohne Schrift, kino_pflege legt es an der Sammlung ab)
-            if (sz != null && !sz.optString("id").isEmpty()) return Jellyfin.szene(sz.optString("id"), sz.optString("tag", null));
+            if (sz != null && !sz.optString("id").isEmpty())
+                return Jellyfin.szene(sz.optString("id"), sz.optString("tag", null), ri.optDouble("fokus", 0.5));
             if (bi != null) return Jellyfin.poster(bi.optString("id"), bi.optString("tag"), 330);
         }
         String pr = Jellyfin.tag(e, "Primary");

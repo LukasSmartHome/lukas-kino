@@ -267,9 +267,15 @@ final class Jellyfin {
         return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillWidth=1920&quality=85" + (tag != null ? "&tag=" + tag : "");
     }
 
-    /** Szenenbild (Backdrop) einer Sammlung für ihre Kachel: so hoch wie nötig, volle Farbtiefe wegen des Verlaufs. */
-    static String szene(String id, String tag) {
-        return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillHeight=440&" + FEIN + (tag != null ? "&tag=" + tag : "");
+    /**
+     * Szenenbild (Backdrop) einer Sammlung für ihre Kachel. Hinter „#karte=“ steht der Ausschnitt (0 links … 1 rechts):
+     * Bilder schneidet das Querbild gleich beim Laden auf Kachelgröße zu (der Teil hinter # geht nicht an den Server).
+     * Ganz geladen war jedes Bild 1,4 MB groß – 59 Stück passten nicht in den Zwischenspeicher, die Wand blinkte
+     * (Video Lukas 21.11.2026).
+     */
+    static String szene(String id, String tag, double fokus) {
+        return SERVER + "/Items/" + id + "/Images/Backdrop/0?fillHeight=400&quality=90" + (tag != null ? "&tag=" + tag : "")
+                + "#karte=" + String.format(java.util.Locale.ROOT, "%.2f", Math.max(0, Math.min(1, fokus)));
     }
 
     static String logo(String id, String tag) {
