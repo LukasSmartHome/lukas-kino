@@ -16,7 +16,7 @@
 #                            Ohne --alle nur Filme, die noch nicht in der Liste stehen oder ohne Trailer älter als 7 Tage.
 #   kategorien [--los]       Sammlungen in Jellyfin nach kategorien.json (Genres plus Ausnahmen je Film) abgleichen.
 #                            Ohne --los nur anzeigen, was sich ändern würde.
-#   qualitaet [--los]        Jellyfin-Tags „DVD“ und „Blu-ray“ (ab 1080p, ohne Kino-Mitschnitte) für die Kacheln in der App
+#   qualitaet [--los]        Jellyfin-Tags „DVD“, „Blu-ray“ (ab 1080p, ohne Kino-Mitschnitte) und „Ripping-Station“ für die Kacheln
 #   filmreihen [--los]       TMDB-Filmreihen (ab 2 Filmen) und „Marvel Cinematic Universe“ als Sammlungen anlegen/ergänzen
 #   reihen [--los]           Filmreihen: Namen aufräumen, Reihenfolge (Episoden), Poster des ersten Films -> /share/kino/reihen.json
 #   luecken [--los]          fehlende Beschreibungen, Hintergründe und Poster (statt Standbild) von TMDB/Fanart nachziehen
@@ -442,15 +442,18 @@ def befehl_qualitaet(los=False, still=False):
     user = [u for u in anfrage("/Users", key) if u["Policy"]["IsAdministrator"]][0]["Id"]
     filme = anfrage("/Items?" + q(userId=user, includeItemTypes="Movie", recursive="true", fields="Path,Tags,Width,Height"),
                     key).get("Items") or []
-    eigen = ("DVD", "Blu-ray")
-    n, zahl = 0, {"DVD": 0, "Blu-ray": 0}
+    eigen = ("DVD", "Blu-ray", "Ripping-Station")
+    n, zahl = 0, {"DVD": 0, "Blu-ray": 0, "Ripping-Station": 0}
     for e in filme:
-        datei = os.path.basename(e.get("Path") or "")
+        pfad = e.get("Path") or ""
+        datei = os.path.basename(pfad)
         tags = list(e.get("Tags") or [])
-        dvd = " [DVD]" in datei
         w, h = e.get("Width") or 0, e.get("Height") or 0
+        # selbst gerippt (seit 22.11.2026): Tag „Ripping-Station“, DVD erkennt man dort an der Auflösung (576p/480p)
+        rip = "/Ripping-Station/" in pfad
+        dvd = " [DVD]" in datei or (rip and 0 < h < 700 and w < 1100)
         bd = not dvd and (h >= 1000 or w >= 1900) and not KINO_MITSCHNITT.search(os.path.splitext(datei)[0])
-        soll = (["DVD"] if dvd else []) + (["Blu-ray"] if bd else [])
+        soll = (["DVD"] if dvd else []) + (["Blu-ray"] if bd else []) + (["Ripping-Station"] if rip else [])
         for t in soll:
             zahl[t] += 1
         if sorted(t for t in tags if t in eigen) == sorted(soll):
@@ -464,7 +467,8 @@ def befehl_qualitaet(los=False, still=False):
             voll["Tags"] = [t for t in (voll.get("Tags") or []) if t not in eigen] + soll
             anfrage("/Items/{}".format(e["Id"]), key, "POST", voll)
     if not still:
-        print("Qualität: {} DVD, {} Blu-ray, {} {}".format(zahl["DVD"], zahl["Blu-ray"], n, "geändert" if los else "zu ändern"))
+        print("Qualität: {} DVD, {} Blu-ray, {} Ripping-Station, {} {}".format(zahl["DVD"], zahl["Blu-ray"], zahl["Ripping-Station"],
+                                                                              n, "geändert" if los else "zu ändern"))
     return n
 
 

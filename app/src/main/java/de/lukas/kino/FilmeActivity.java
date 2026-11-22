@@ -2284,6 +2284,9 @@ public class FilmeActivity extends Activity {
                         reihenN = wand.size();
                         wand.sort((x, y) -> reihenName(x).compareToIgnoreCase(reihenName(y)));
                         rest.sort((x, y) -> Double.compare(y.optDouble("CommunityRating", 0), x.optDouble("CommunityRating", 0)));
+                        // Filmreihen ganz unten nach den Filmen, nicht mehr vorne dazwischen (Wunsch Lukas 22.11.2026)
+                        rest.addAll(wand);
+                        wand.clear();
                         wand.addAll(rest);
                     }
                     posterWandFuellen(neu, wand);
@@ -2425,12 +2428,27 @@ public class FilmeActivity extends Activity {
         fokusGeaendert();
     }
 
+    // Doppelte Eingabe verhindern (Meldung Lukas 22.11.2026: jeder Buchstabe kam doppelt, Löschen nahm zwei weg).
+    // Fernbedienungen schicken für einen Druck manchmal zwei Ereignisse; so schnell drückt niemand zweimal.
+    private String letzteEingabe = "";
+    private long letzteEingabeZeit;
+
+    private boolean doppelt(String was) {
+        long jetzt = android.os.SystemClock.uptimeMillis();
+        boolean ja = was.equals(letzteEingabe) && jetzt - letzteEingabeZeit < 180;
+        letzteEingabe = was;
+        letzteEingabeZeit = jetzt;
+        return ja;
+    }
+
     private void tippen(String s) {
+        if (doppelt("t" + s)) return;
         if (suchText.length() < 40) suchText.append(s);
         suchenJetzt();
     }
 
     private void loeschen() {
+        if (doppelt("l")) return;
         if (suchText.length() > 0) suchText.setLength(suchText.length() - 1);
         suchenJetzt();
     }
@@ -4226,6 +4244,8 @@ public class FilmeActivity extends Activity {
                 // Qualität als kleine Kachel: rot „DVD“ (Tag „DVD“, nach „ [DVD]“ im Dateinamen), blau „Blu-ray“
                 // (Tag „Blu-ray“: ab Full HD, keine Kino-Mitschnitte – seit 21.11.2026), beide von kino_pflege.py qualitaet
                 String t = istDvd ? "DVD" : "Blu-ray";
+                // selbst gerippt (Tag „Ripping-Station“, seit 22.11.2026): „Blu-ray · Ripping-Station“ bzw. „DVD · Ripping-Station“
+                if (tag(e, "Ripping-Station")) t += " · Ripping-Station";
                 float w = meta.measureText(t) + 24;
                 r.set(x, y - 30, x + w, y + 10);
                 p.setStyle(Paint.Style.FILL);

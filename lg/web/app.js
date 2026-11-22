@@ -3258,7 +3258,8 @@
       const dvd = tags.indexOf('DVD') >= 0;
       const sp = document.createElement('span');
       sp.className = dvd ? 'dvd' : 'dvd bluray';
-      sp.textContent = dvd ? 'DVD' : 'Blu-ray';
+      // selbst gerippt (Tag „Ripping-Station“, seit 22.11.2026): „Blu-ray · Ripping-Station“ bzw. „DVD · Ripping-Station“
+      sp.textContent = (dvd ? 'DVD' : 'Blu-ray') + (tags.indexOf('RIPPING-STATION') >= 0 ? ' · Ripping-Station' : '');
       meta.appendChild(sp);
     }
     if (e.CommunityRating > 0) {
@@ -3595,12 +3596,26 @@
     suchenJetzt();
   }
 
+  // Doppelte Eingabe verhindern (Meldung Lukas 22.11.2026: jeder Buchstabe kam doppelt, Löschen nahm zwei weg).
+  // Fernbedienungen schicken für einen Druck manchmal zwei Ereignisse (Taste + Klick bzw. OK doppelt);
+  // so schnell hintereinander drückt niemand zweimal.
+  let letzteEingabe = '', letzteEingabeZeit = 0;
+  function doppelt(was) {
+    const jetzt = Date.now();
+    const ja = was === letzteEingabe && jetzt - letzteEingabeZeit < 180;
+    letzteEingabe = was;
+    letzteEingabeZeit = jetzt;
+    return ja;
+  }
+
   function tippen(s) {
+    if (doppelt('t' + s)) return;
     if (suchText.length < 40) suchText += s;
     suchenJetzt();
   }
 
   function loeschen() {
+    if (doppelt('l')) return;
     if (suchText.length) suchText = suchText.slice(0, -1);
     suchenJetzt();
   }
@@ -3743,7 +3758,8 @@
         reihenN = wand.length;
         wand.sort(function (x, y) { return reihenName(x).toLowerCase() < reihenName(y).toLowerCase() ? -1 : 1; });
         rest.sort(function (x, y) { return (Number(y.o.CommunityRating) || 0) - (Number(x.o.CommunityRating) || 0) || x.i - y.i; });
-        wand = wand.concat(rest.map(function (x) { return x.o; }));
+        // Filmreihen ganz unten nach den Filmen, nicht mehr vorne dazwischen (Wunsch Lukas 22.11.2026)
+        wand = rest.map(function (x) { return x.o; }).concat(wand);
       }
       posterWandFuellen(neu, wand);
       const n = wand.length - reihenN;
@@ -4956,7 +4972,7 @@
 
   const TASTE = { LINKS: 37, HOCH: 38, RECHTS: 39, RUNTER: 40, OK: 13, ZURUECK: 461 };
   const MEDIEN = { PLAY: 415, PAUSE: 19, STOP: 413, VOR: 417, RUECK: 412, PLAYPAUSE: 179 };
-  let letzteTaste = 0, letzteZeit = 0, wiederholung = 0, letztesOk = 0;
+  let letzteTaste = 0, letzteZeit = 0, wiederholung = 0, letztesOk = 0, letzterKlick = 0;
 
   function beenden() {
     if (window.top !== window) {
@@ -4997,7 +5013,10 @@
     }
     if (k === 27 || k === 8 || k === 10009) k = TASTE.ZURUECK;
     if (k === 32 && !(ansicht === A.SUCHE && !leiste)) k = TASTE.OK;
-    if (k === TASTE.OK) letztesOk = jetzt;
+    if (k === TASTE.OK) {
+      if (jetzt - letzterKlick < 450) { ev.preventDefault(); return; }   // Klick kam schon (Magic Remote schickt beides)
+      letztesOk = jetzt;
+    }
 
     const bekannt = [TASTE.LINKS, TASTE.HOCH, TASTE.RECHTS, TASTE.RUNTER, TASTE.OK, TASTE.ZURUECK,
       MEDIEN.PLAY, MEDIEN.PAUSE, MEDIEN.STOP, MEDIEN.VOR, MEDIEN.RUECK, MEDIEN.PLAYPAUSE].indexOf(k) >= 0;
@@ -5286,6 +5305,7 @@
 
   document.addEventListener('click', function (ev) {
     if (Date.now() - letztesOk < 450) return; // OK-Taste der Fernbedienung löst manchmal zusätzlich einen Klick aus
+    letzterKlick = Date.now();
     window.focus();
     let t = ev.target;
     while (t && t !== document.body && !(t._reihe || t._treffer != null || t._taste || t._leiste != null || t._knopf != null)) {
