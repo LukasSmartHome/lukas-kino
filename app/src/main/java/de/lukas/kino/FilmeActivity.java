@@ -1903,6 +1903,8 @@ public class FilmeActivity extends Activity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent ev) {
         if (ev.getAction() != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(ev);
+        tasteWdh = ev.getRepeatCount();
+        tasteZeit = ev.getEventTime();
         int k = ev.getKeyCode();
         boolean zurueck = k == KeyEvent.KEYCODE_BACK || k == KeyEvent.KEYCODE_ESCAPE;
         boolean ok = k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER || k == KeyEvent.KEYCODE_NUMPAD_ENTER;
@@ -2429,15 +2431,21 @@ public class FilmeActivity extends Activity {
     }
 
     // Doppelte Eingabe verhindern (Meldung Lukas 22.11.2026: jeder Buchstabe kam doppelt, Löschen nahm zwei weg).
-    // Fernbedienungen schicken für einen Druck manchmal zwei Ereignisse; so schnell drückt niemand zweimal.
+    // Ursache am TCL: Die Fernbedienung meldet das Loslassen spät, Android schickt dann eine Wiederholung
+    // (getRepeatCount > 0) hinterher. Wiederholungen tippen deshalb nie. Zusätzlich zählt die Zeit des
+    // Tastendrucks selbst (getEventTime), nicht wann die App dazu kommt – hängt die App kurz, kommen die
+    // Ereignisse gesammelt an und wurden vorher nicht als doppelt erkannt.
     private String letzteEingabe = "";
     private long letzteEingabeZeit;
+    private int tasteWdh;
+    private long tasteZeit;
 
     private boolean doppelt(String was) {
-        long jetzt = android.os.SystemClock.uptimeMillis();
-        boolean ja = was.equals(letzteEingabe) && jetzt - letzteEingabeZeit < 180;
+        long zeit = tasteZeit > 0 ? tasteZeit : android.os.SystemClock.uptimeMillis();
+        boolean ja = tasteWdh > 0 || (was.equals(letzteEingabe) && zeit - letzteEingabeZeit < 300);
         letzteEingabe = was;
-        letzteEingabeZeit = jetzt;
+        letzteEingabeZeit = zeit;
+        android.util.Log.i("LukasKino", "Suche " + was + " wdh " + tasteWdh + " zeit " + zeit + (ja ? " -> ignoriert" : ""));
         return ja;
     }
 
