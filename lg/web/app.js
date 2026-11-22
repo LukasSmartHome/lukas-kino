@@ -2811,7 +2811,7 @@
   // ganz weiß und waren dann ein weißer Klecks (Meldung Lukas 03.11.2026). Gleiche Regel wie Logo.java am TCL.
 
   let logoArt = {};
-  try { logoArt = JSON.parse(speicherLesen('lk_logos2') || '{}') || {}; } catch (e) { logoArt = {}; }
+  try { logoArt = JSON.parse(speicherLesen('lk_logos3') || '{}') || {}; } catch (e) { logoArt = {}; }
   let logoSpeichern = 0;
 
   function logoKlasse(img, art) {
@@ -2831,12 +2831,13 @@
       const g = c.getContext('2d');
       g.drawImage(img, 0, 0, 64, 32);
       const d = g.getImageData(0, 0, 64, 32).data;
-      let summe = 0, n = 0, hell = 0, bunt = 0;
+      let summe = 0, quadrat = 0, n = 0, hell = 0, bunt = 0;
       for (let i = 0; i < d.length; i += 4) {
         if (d[i + 3] < 128) continue;
         const l = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
         const sat = Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
         summe += l;
+        quadrat += l * l;
         if (l > 160) hell++;
         if (sat > 60 && l > 50) bunt++;
         n++;
@@ -2844,7 +2845,9 @@
       let art = '';
       if (n > 0) {
         const L = summe / n, H = hell / n, B = bunt / n;
-        if (L < 95 && H < 0.10 && B < 0.15) art = 'w';
+        // Logos auf dunklem Schild/Banner nicht weiß färben (wurde ein weißer Fleck, Salazars Rache 22.11.2026)
+        const deckung = n / (d.length / 4), streuung = Math.sqrt(Math.max(0, quadrat / n - L * L));
+        if (L < 95 && H < 0.10 && B < 0.15 && deckung < 0.55 && streuung < 38) art = 'w';
         else if (L < 115) art = 's';
       }
       logoArt[url] = art;
@@ -2852,7 +2855,7 @@
       logoSpeichern = setTimeout(function () {
         const k = Object.keys(logoArt);
         if (k.length > 800) k.slice(0, k.length - 800).forEach(function (x) { delete logoArt[x]; });
-        speicherSetzen('lk_logos2', JSON.stringify(logoArt));
+        speicherSetzen('lk_logos3', JSON.stringify(logoArt));
       }, 3000);
     } catch (e) {
       logoArt[url] = '';

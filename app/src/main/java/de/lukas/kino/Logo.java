@@ -14,7 +14,8 @@ import java.util.WeakHashMap;
 /**
  * Filmlogos zeichnen, damit sie auf dem dunklen Bild lesbar sind.
  * <ul>
- * <li>Fast ganz dunkle, einfarbige Logos (z. B. schwarze Schrift) werden weiß.</li>
+ * <li>Fast ganz dunkle, einfarbige Logos (z. B. schwarze Schrift) werden weiß – aber nur schlichte Schrift, keine
+ *     Logos auf einem dunklen Schild oder Banner (die bekommen den Schein, Meldung Lukas 22.11.2026).</li>
  * <li>Dunkle Logos mit hellen oder bunten Teilen (z. B. Masters of the Universe mit dunklen Kanten und Metall)
  *     bleiben, wie sie sind, und bekommen nur einen hellen Schein dahinter. Früher wurden auch sie ganz weiß
  *     eingefärbt und waren dann nur noch ein weißer Klecks (Meldung Lukas 03.11.2026).</li>
@@ -33,10 +34,11 @@ final class Logo {
     static int art(Bitmap b) {
         Integer d = ART.get(b);
         if (d != null) return d;
-        long summe = 0, n = 0, hell = 0, bunt = 0;
+        long summe = 0, quadrat = 0, n = 0, alle = 0, hell = 0, bunt = 0;
         int sx = Math.max(1, b.getWidth() / 64), sy = Math.max(1, b.getHeight() / 32);
         for (int y = 0; y < b.getHeight(); y += sy) {
             for (int x = 0; x < b.getWidth(); x += sx) {
+                alle++;
                 int px = b.getPixel(x, y);
                 int a = px >>> 24;
                 if (a < 128) continue;
@@ -44,6 +46,7 @@ final class Logo {
                 int l = (r * 299 + g * 587 + bl * 114) / 1000;
                 int s = Math.max(r, Math.max(g, bl)) - Math.min(r, Math.min(g, bl));
                 summe += l;
+                quadrat += (long) l * l;
                 if (l > 160) hell++;
                 if (s > 60 && l > 50) bunt++;
                 n++;
@@ -52,7 +55,12 @@ final class Logo {
         int ergebnis = NORMAL;
         if (n > 0) {
             float L = summe / (float) n, H = hell / (float) n, B = bunt / (float) n;
-            if (L < 95 && H < 0.10f && B < 0.15f) ergebnis = WEISS;
+            // Deckung und Streuung (Meldung Lukas 22.11.2026, Fluch der Karibik – Salazars Rache): Logos auf einem
+            // dunklen Schild oder Banner (Deckung 0,72, Streuung 42) wurden ganz weiß und waren nur noch ein weißer
+            // Fleck. Weiß wird jetzt nur schlichte, einfarbige Schrift (wenig Fläche, kaum Helligkeitsunterschiede).
+            float deckung = n / (float) Math.max(1, alle);
+            float streuung = (float) Math.sqrt(Math.max(0, quadrat / (double) n - L * L));
+            if (L < 95 && H < 0.10f && B < 0.15f && deckung < 0.55f && streuung < 38f) ergebnis = WEISS;
             else if (L < 115) ergebnis = SCHEIN;
         }
         ART.put(b, ergebnis);
