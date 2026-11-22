@@ -2461,25 +2461,50 @@ public class FilmeActivity extends Activity {
         suchenJetzt();
     }
 
+    // Die Suche läuft im Hintergrund (Meldung Lukas 22.11.2026: nach jedem Buchstaben hing die App gut eine
+    // Sekunde, weil der ganze Suchindex auf dem Haupt-Faden durchsucht wurde). Es gilt immer nur das Ergebnis
+    // der neuesten Eingabe.
+    private final ExecutorService suchFaden = Executors.newSingleThreadExecutor();
+    private int suchNr;
+
     private void suchenJetzt() {
-        treffer.clear();
-        if (suchIndex != null) {
-            String q = suchText.toString().trim();
-            if (q.isEmpty()) {
-                // Vorschlaege: zuletzt hinzugefuegt
-                List<JSONObject> l = new ArrayList<>(suchIndex);
-                l.sort((a, b) -> b.optString("DateCreated").compareTo(a.optString("DateCreated")));
-                treffer.addAll(l.subList(0, Math.min(15, l.size())));
-            } else {
-                treffer.addAll(Suche.suchen(q, suchIndex,
-                        e -> new String[]{e.optString("Name"), e.optString("OriginalTitle", null)}, 30));
-            }
+        final int nr = ++suchNr;
+        final List<JSONObject> idx = suchIndex;
+        final String q = suchText.toString().trim();
+        if (idx == null) {
+            suchErgebnis(nr, new ArrayList<>());
+            return;
         }
+        suchFaden.execute(() -> {
+            List<JSONObject> erg;
+            try {
+                if (q.isEmpty()) {
+                    // Vorschlaege: zuletzt hinzugefuegt
+                    List<JSONObject> l = new ArrayList<>(idx);
+                    l.sort((a, b) -> b.optString("DateCreated").compareTo(a.optString("DateCreated")));
+                    erg = new ArrayList<>(l.subList(0, Math.min(15, l.size())));
+                } else {
+                    erg = Suche.suchen(q, idx,
+                            e -> new String[]{e.optString("Name"), e.optString("OriginalTitle", null)}, 30);
+                }
+            } catch (Exception e) {
+                erg = new ArrayList<>();
+            }
+            final List<JSONObject> fertig = erg;
+            h.post(() -> suchErgebnis(nr, fertig));
+        });
+    }
+
+    private void suchErgebnis(int nr, List<JSONObject> erg) {
+        if (nr != suchNr) return; // inzwischen weitergetippt
+        treffer.clear();
+        treffer.addAll(erg);
         trefferFokus = Math.min(trefferFokus, Math.max(0, treffer.size() - 1));
         if (treffer.isEmpty()) inTreffern = false;
         for (int i = 0; i < Math.min(10, treffer.size()); i++)
             bilder.laden(kartenUrl(treffer.get(i), POSTER), (u, b) -> buehne.invalidate());
         fokusGeaendert();
+        buehne.invalidate();
     }
 
     /** Taste der Bildschirmtastatur: Zeile 0 = Leerzeichen/Loeschen, danach das Buchstabenfeld. */
