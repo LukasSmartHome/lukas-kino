@@ -352,7 +352,9 @@ def erkennen_mit_bild(st, job, datei, ist_s, k_alt=None, standbild=None):
     vorschlaege = [{"imdb": x["info"]["imdb"], "titel": x["info"]["titel"], "jahr": x["info"]["jahr"],
                     "bild": x["bild"], "punkte": x["punkte"]} for x in bewertet[:3]]
     if sieger:
-        i = sieger["info"]
+        i = dict(sieger["info"])
+        if "lego" in norm(i.get("englisch")) and "lego" not in norm(i.get("titel")):  # Wikidata: "Star Wars – Die Padawan-Bedrohung"
+            i["titel"] = f"LEGO {i['titel']}"
         return i, "Texterkennung", (f"Texterkennung ({grund}), Titel im Bild {sieger['bild']:.2f}, "
                                     f"Laufzeit {ist_s / 60:.0f}/{sieger['soll']} min"), vorschlaege
     return None, None, grund, vorschlaege

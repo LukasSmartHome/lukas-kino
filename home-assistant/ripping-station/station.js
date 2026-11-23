@@ -1,5 +1,5 @@
 /* Ripping-Station-Karte fuer Home Assistant
-   v2.0.1 (Claude, Konto B, 23.11.2026) - v1.0.1 von Konto A (06.11.2026) liegt als station_v1.0.1.js daneben (Rueckweg)
+   v2.1.0 (Claude, Konto B, 23.11.2026, Frage „Welcher Film ist das?“ mit Standbild und Vorschlag-Knöpfen) - v1.0.1 von Konto A (06.11.2026) liegt als station_v1.0.1.js daneben (Rueckweg)
    type: custom:lukas-station
      ansicht: kachel  - Glas-Pille: Zustand in einer Zeile, beim Rippen/Hochladen gelber Fortschritt im Hintergrund,
                         gruener Punkt = naechste Disc kann rein. Antippen oeffnet das Vollbild (hash).
@@ -182,6 +182,14 @@
     .ein .mi .wo ha-icon { --mdc-icon-size: 13px; vertical-align: -2px; margin-right: 3px; color: #9AA6BA; }
     .ein .re { flex: 0 0 auto; text-align: right; font-size: 12px; font-weight: 700; color: #7A879D; line-height: 1.35; }
     .ein.alt { opacity: 0.55; }
+    .frage { padding: 12px 14px; border-radius: 22px; ${GLAS} background: linear-gradient(135deg, rgba(255,244,214,0.95), rgba(255,231,170,0.7)); border-color: rgba(245,184,0,0.45); }
+    .frage .l { display: block; font-size: 11px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: #8A6A00; }
+    .frage b { display: block; margin-top: 3px; font-size: 15px; font-weight: 800; line-height: 1.3; }
+    .frage img { display: block; width: 100${PRO}; margin-top: 10px; border-radius: 14px; background: #000; }
+    .frage .vor { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+    .frage .vor .kn { justify-content: flex-start; padding: 0 14px; text-align: left; height: auto; min-height: 44px; line-height: 1.25; }
+    .frage .vor .kn small { margin-left: auto; padding-left: 10px; font-size: 11.5px; font-weight: 700; color: #8A6A00; white-space: nowrap; }
+    .frage .h { margin-top: 8px; font-size: 12px; font-weight: 600; color: #6B5A20; line-height: 1.35; }
     .mehr { margin: -4px 8px 0; font-size: 12.5px; font-weight: 750; color: #4A6FB5; cursor: pointer; }
     .reihe { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .reihe.eins { grid-template-columns: 1fr; }
@@ -217,6 +225,7 @@
           if (b === "_oeffnen") { haptic("light"); self._oeffnen(); return; }
           if (b === "_wartung") { haptic("light"); self._wartung = !self._wartung; self._sig = ""; self._render(); return; }
           if (b === "_alt") { haptic("light"); self._alteZeigen = !self._alteZeigen; self._sig = ""; self._render(); return; }
+          if (b.indexOf("_benennen:") === 0) { var t = b.split(":"); self._benennen(t[1], t[2]); return; }
           if (b === "_mehrtage") { haptic("light"); self._alleTage = !self._alleTage; self._sig = ""; self._render(); return; }
           self._befehl(b);
         };
@@ -295,6 +304,7 @@
         einlegen: a.einlegen,
         einlegenText: a.einlegen_text || "",
         nebenbei: a.nebenbei || "",
+        frage: a.frage ? ((a.frage.vorschlaege || []).length ? a.frage : null) : null,
         auftraege: frisch ? (this._st.auftraege || []) : null,
         jellyfin: jf ? ((jf.attributes || {}).dateien || {}) : null
       };
@@ -327,6 +337,7 @@
       if (l.fehler) return l.fehlerInfo ? l.fehlerInfo.text : "Fehler";
       var am = this._ampel(l);
       if (am.an !== "ja") return am.b;
+      if (l.frage) return "Bereit · Welcher Film ist das? Bitte kurz antippen";
       if (l.pr) return `Bereit · ${l.pr} zum Prüfen`;
       if (l.ws) return `Bereit · ${l.ws} ${l.ws === 1 ? "Rip wartet" : "Rips warten"} aufs Hochladen`;
       return "Bereit · Disc kann rein";
@@ -336,7 +347,7 @@
       if (!this._hass || !this._c || !this.shadowRoot) return;
       var l = this._lage();
       var sig = [l.z, l.live, l.prozent, l.rest, l.titel, l.ws, l.pr, l.puffer, l.pufferOk, l.cpu, l.platte, l.laufwerk, l.einlegen, l.einlegenText, l.nebenbei,
-        JSON.stringify(l.fehlerInfo), JSON.stringify(l.meldung), JSON.stringify(l.fertig),
+        JSON.stringify(l.fehlerInfo), JSON.stringify(l.meldung), JSON.stringify(l.fertig), JSON.stringify(l.frage),
         this._c.ansicht === "kachel" ? "" : JSON.stringify(l.auftraege), this._c.ansicht === "kachel" ? "" : JSON.stringify(l.jellyfin),
         this._frage, this._laeuft, this._antwort, this._antwortOk, this._wartung, this._alteZeigen, this._alleTage].join("|");
       if (sig === this._sig) return;
@@ -469,6 +480,22 @@
       var am = this._ampel(l);
       var ampel = `<div class="ampel ${am.an}"><i></i><div><b>${esc(am.b)}</b><span>${esc(am.s)}</span></div></div>`;
 
+      // Frage: nicht sicher erkannter Film mit Vorschlaegen (Erkennung 3)
+      var frage = "";
+      if (l.frage ? !l.aus : false) {
+        var f = l.frage;
+        var basis = String(this._c.status_url || "").replace(/\/status\.json$/, "");
+        var vor = (f.vorschlaege || []).slice(0, 3).map(function (v) {
+          var sicher = v.bild != null ? `Titel im Bild ${Math.round(Number(v.bild) * 100)} von 100` : "";
+          return `<div class="kn kl${self._laeuft ? " zu" : ""}" data-b="_benennen:${esc(f.nr)}:${esc(v.imdb)}"><ha-icon icon="mdi:check"></ha-icon>${esc(v.titel)} (${esc(v.jahr)})<small>${esc(sicher)}</small></div>`;
+        }).join("");
+        frage = `<div class="frage"><span class="l">Welcher Film ist das?</span>
+          <b>Disc „${esc(f.disc || f.titel || "")}“ ist nicht sicher erkannt</b>
+          ${f.bild ? `<img src="${esc(basis)}${esc(f.bild)}" alt="Standbild">` : ""}
+          <div class="vor">${vor}</div>
+          <div class="h">Antippen benennt den Film, er kommt dann von selbst in Jellyfin. Keiner passt? Sag Claude kurz, was es ist.</div></div>`;
+      }
+
       // Laufende Auftraege (oder Rueckfall: Fortschritt aus dem Sensor)
       var au = l.auftraege;
       var laufend = "";
@@ -556,6 +583,7 @@
       this.shadowRoot.innerHTML = `<style>${CSS_MENUE}</style><div class="w">
         <div class="${kl.join(" ")}"><div class="ic"><ha-icon icon="${l.z === "uebertraegt" ? "mdi:upload" : "mdi:disc"}"></ha-icon></div><div class="kt"><b>${esc(titel)}</b><span>${esc(unter)}</span></div></div>
         ${ampel}
+        ${frage}
         ${laufend}
         ${haupt}
         ${antw}
@@ -594,6 +622,25 @@
         var t = zl.length ? zl[zl.length - 1] : String(res.stderr || "").trim();
         var ok = res.returncode == null ? true : res.returncode === 0;
         self._fertig(t || (ok ? "Erledigt." : `Fehler (Code ${res.returncode})`), ok);
+      }).catch(function (e) {
+        self._fertig(`Hat nicht geklappt: ${(e ? (e.message || e.code) : "") || "keine Antwort"}`, false);
+      });
+    }
+
+    _benennen(nr, imdb) {
+      var self = this;
+      if (this._laeuft) return;
+      if (!/^\d{1,5}$/.test(String(nr)) ? true : !/^tt\d{7,10}$/.test(String(imdb))) return;
+      this._laeuft = "benennen";
+      this._antwort = "Wird benannt …";
+      this._antwortOk = true;
+      haptic("medium");
+      this._sig = ""; this._render();
+      this._hass.callService("shell_command", "station_benennen", { nr: String(nr), imdb: String(imdb) }, undefined, false, true).then(function (r) {
+        var res = (r ? r.response : null) || {};
+        var zl = String(res.stdout || "").split("\n").map(function (x) { return x.trim(); }).filter(Boolean);
+        var ok = res.returncode == null ? true : res.returncode === 0;
+        self._fertig(zl.length ? zl[zl.length - 1] : (ok ? "Benannt." : `Fehler (Code ${res.returncode})`), ok);
       }).catch(function (e) {
         self._fertig(`Hat nicht geklappt: ${(e ? (e.message || e.code) : "") || "keine Antwort"}`, false);
       });
