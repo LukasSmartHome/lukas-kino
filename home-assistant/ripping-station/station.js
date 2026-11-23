@@ -1,5 +1,5 @@
 /* Ripping-Station-Karte fuer Home Assistant
-   v2.0.0 (Claude, Konto B, 23.11.2026) - v1.0.1 von Konto A (06.11.2026) liegt als station_v1.0.1.js daneben (Rueckweg)
+   v2.0.1 (Claude, Konto B, 23.11.2026) - v1.0.1 von Konto A (06.11.2026) liegt als station_v1.0.1.js daneben (Rueckweg)
    type: custom:lukas-station
      ansicht: kachel  - Glas-Pille: Zustand in einer Zeile, beim Rippen/Hochladen gelber Fortschritt im Hintergrund,
                         gruener Punkt = naechste Disc kann rein. Antippen oeffnet das Vollbild (hash).
@@ -386,6 +386,8 @@
         if (jf) text = teile(String(jf)) ? `In Jellyfin · seit ${wann(String(jf))}` : "In Jellyfin";
         else if (imJf ? l.jellyfin != null : false) { text = "Fertig · Jellyfin nimmt ihn gerade auf"; sy = "lauf"; icon = "mdi:progress-upload"; klasse = ""; }
         else text = "Fertig";
+        if (/nochmal dr/i.test(String(e.ziel || ""))) { text = "Aussortiert – nicht in Jellyfin (schlechte Kopie)"; sy = "warn"; icon = "mdi:archive-outline"; klasse = "warn"; }
+      } else if (/Daten-Disc.*gesichert/i.test(String(e.meldung || ""))) { sy = "warn"; icon = "mdi:folder-zip-outline"; klasse = "warn"; text = "Daten-Disc gesichert – Claude sortiert sie ein";
       } else if (st.rot) { sy = "rot"; icon = e.stufe === "leer" ? "mdi:disc-alert" : "mdi:close-thick"; klasse = "rot"; }
       else if (st.warn) { sy = "warn"; icon = "mdi:help-circle-outline"; klasse = "warn"; }
       else if (e.stufe === "hochladen") icon = "mdi:upload";
@@ -456,6 +458,11 @@
       else if (!l.pufferOk) unter = "Zwischenspeicher-Platte fehlt oder lässt sich nicht einhängen.";
       else if (l.fehler) unter = l.fehlerInfo ? `${l.fehlerInfo.text} (${wann(l.fehlerInfo.zeit)})` : "Unbekannter Fehler";
       else unter = "Alles erledigt.";
+      var erste = l.auftraege ? l.auftraege.filter(function (e) { var s = STUFE[e.stufe]; return s ? s.lauf === true : false; })[0] : null;
+      if (erste ? ["liest", "verarbeitet", "uebertraegt"].indexOf(l.z) >= 0 : false) {
+        var nm = erste.titel || (erste.disc_name ? `Disc „${erste.disc_name}“ (wird nach dem Lesen erkannt)` : "Disc");
+        unter = [ART[erste.art] || l.art, nm].filter(Boolean).join(" · ");
+      }
       if (l.nebenbei ? !l.aus : false) unter = `${unter} Nebenbei: ${l.nebenbei}.`;
 
       // Ampel
