@@ -62,12 +62,15 @@ def woerter(s):
 
 
 # ------------------------------------------------------------------ Bilder und Texterkennung
-def zeitpunkte(dauer_s):
-    """Vorspann 4 s bis 6 min alle 8 s, Abspann die letzten 8 min alle 16 s (hoechstens MAX_BILDER)."""
+def zeitpunkte(dauer_s, teile=("anfang", "ende")):
+    """Vorspann 4 s bis 5 min alle 10 s, Abspann die letzten 6 min alle 20 s."""
     d = max(int(dauer_s or 0), 60)
-    anfang = list(range(4, min(360, d // 2), 8))
-    ende = list(range(max(d - 480, d // 2), d - 8, 16))
-    return [("anfang", t) for t in anfang][:45] + [("ende", t) for t in ende][: MAX_BILDER - 45]
+    aus = []
+    if "anfang" in teile:
+        aus += [("anfang", t) for t in range(4, min(300, d // 2), 10)]
+    if "ende" in teile:
+        aus += [("ende", t) for t in range(max(d - 360, d // 2), d - 8, 20)]
+    return aus[:MAX_BILDER]
 
 
 def _bild(datei, t, ziel):
@@ -78,18 +81,15 @@ def _bild(datei, t, ziel):
 
 
 def _ocr_zeilen(png):
-    """Zeilen mit Sinn: ueberwiegend Buchstaben. Erst Seitenlayout (Lauftext, Abspann), ist da nichts,
-    noch einmal als verstreuter Text (einzelne Titelschrift auf schwarzem Grund)."""
-    roh = ""
-    for psm in ("3", "11"):
-        try:
-            r = subprocess.run(["tesseract", png, "-", "-l", "eng+deu", "--psm", psm],
-                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, text=True)
-            roh = r.stdout or ""
-        except Exception:
-            roh = ""
-        if len(re.findall(r"[A-Za-zÄÖÜäöüß]{3,}", roh)) >= 2:
-            break
+    """Zeilen mit Sinn: ueberwiegend Buchstaben. tesseract --psm 11 (verstreuter Text) liefert je Textzeile einen
+    Block - passt fuer Titelschrift auf schwarzem Grund und fuer Lauftext/Abspann."""
+    try:
+        r = subprocess.run(["tesseract", png, "-", "-l", "eng+deu", "--psm", "11"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, text=True,
+                           env=dict(os.environ, OMP_THREAD_LIMIT="1"))
+        roh = r.stdout or ""
+    except Exception:
+        roh = ""
     aus = []
     for z in roh.splitlines():
         z = re.sub(r"\s+", " ", z).strip(" |-—_.,:;'\"")
@@ -99,14 +99,14 @@ def _ocr_zeilen(png):
     return aus
 
 
-def lesen(datei, dauer_s, log=None, standbild=None):
+def lesen(datei, dauer_s, log=None, standbild=None, teile=("anfang", "ende")):
     """Standbilder holen und lesen. Gibt {anfang: [zeilen], ende: [zeilen], woerter: set, jahre: [..],
     bild_bestes: pfad} zurueck. standbild = Pfad, unter dem ein normales Farbbild (Titelkarte) abgelegt wird."""
     t0 = time.time()
     tmp = tempfile.mkdtemp(prefix="erk3_")
     ergebnis = {"anfang": [], "ende": [], "woerter": set(), "jahre": [], "text": "", "bilder": 0}
     try:
-        punkte = zeitpunkte(dauer_s)
+        punkte = zeitpunkte(dauer_s, teile)
         pngs = []
         for i, (teil, t) in enumerate(punkte):
             p = os.path.join(tmp, f"{i:03d}_{teil}_{t}.png")
@@ -134,12 +134,12 @@ def lesen(datei, dauer_s, log=None, standbild=None):
         ergebnis["woerter"] = set(woerter(text))
         jahre = re.findall(r"(?:©|\(c\)|copyright|MCM|MM)[^\n]{0,40}?((?:19|20)\d\d)", text, re.I)
         ergebnis["jahre"] = sorted(set(int(j) for j in jahre))
-        if standbild:
+        if standbild and "anfang" in teile:
             t = bestes if bestes is not None else int((dauer_s or 600) * 0.1)
             subprocess.run(["ffmpeg", "-v", "error", "-ss", str(t), "-i", datei, "-frames:v", "1",
                             "-vf", "scale=640:-2", "-q:v", "4", "-y", standbild],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-        _log(log, f"Erkennung 3: {len(pngs)} Standbilder gelesen in {time.time() - t0:.0f} s, "
+        _log(log, f"Erkennung 3: {len(pngs)} Standbilder ({'/'.join(teile)}) gelesen in {time.time() - t0:.0f} s, "
                   f"{len(ergebnis['woerter'])} Woerter, Jahre {ergebnis['jahre'] or '-'}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -299,33 +299,56 @@ def entscheiden(bewertet):
     return None, grund
 
 
-def erkennen_mit_bild(st, job, datei, ist_s, k_alt=None, standbild=None):
-    """Hauptaufruf aus station.einsammeln, wenn waehle() nichts Sicheres gefunden hat.
-    Gibt (info, quelle, text, vorschlaege) zurueck; info None = nicht sicher -> pruefen + Frage an Lukas."""
-    log = st.log
-    dvd = job.get("disctype") == "dvd"
-    label_texte = st.label_varianten(job.get("label")) if not st.label_unbrauchbar(job.get("label")) else []
-    lesung = lesen(datei, ist_s, log, standbild)
-    kand = [x[3] for x in (k_alt or [])]
-    zeilen = suchzeilen(lesung)
-    if zeilen:
-        _log(log, "Erkennung 3: lese im Bild: " + " | ".join(zeilen[:6]))
+def _suchen(st, zeilen, label_texte, schon):
+    kand = []
     for z in zeilen[:6]:
+        if z in schon:
+            continue
+        schon.add(z)
         kand += wd_film_suche(st, z, 4)
         kand += omdb_film_suche(st, z, 4)
-        # Teilstuecke: die ersten 3-4 Woerter allein (Lauftext haengt oft Text an den Titel)
-        w = z.split()
+        w = z.split()  # Lauftext haengt oft Text an den Titel: die ersten Woerter allein
         if len(w) > 4:
             kand += wd_film_suche(st, " ".join(w[:4]), 3)
             kand += omdb_film_suche(st, " ".join(w[:3]), 3)
     for t in label_texte:
+        if t in schon:
+            continue
+        schon.add(t)
         kand += wd_film_suche(st, t, 4)
         kand += omdb_film_suche(st, t, 4)
-    bewertet = bewerten(st, kand, ist_s, dvd, lesung, label_texte)
+    return kand
+
+
+def erkennen_mit_bild(st, job, datei, ist_s, k_alt=None, standbild=None):
+    """Hauptaufruf aus station.einsammeln, wenn waehle() nichts Sicheres gefunden hat.
+    Erst den Vorspann lesen (meist reicht der Titel), nur wenn noetig auch den Abspann.
+    Gibt (info, quelle, text, vorschlaege) zurueck; info None = nicht sicher -> pruefen + Frage an Lukas."""
+    log = st.log
+    t0 = time.time()
+    dvd = job.get("disctype") == "dvd"
+    label_texte = st.label_varianten(job.get("label")) if not st.label_unbrauchbar(job.get("label")) else []
+    kand = [x[3] for x in (k_alt or [])]
+    schon = set()
+    lesung = {"anfang": [], "ende": [], "woerter": set(), "jahre": [], "text": ""}
+    sieger, grund, bewertet = None, "", []
+    for teil in ("anfang", "ende"):
+        neu = lesen(datei, ist_s, log, standbild, (teil,))
+        lesung[teil] = neu[teil]
+        lesung["woerter"] |= neu["woerter"]
+        lesung["jahre"] = sorted(set(lesung["jahre"]) | set(neu["jahre"]))
+        zeilen = suchzeilen(lesung)
+        if zeilen:
+            _log(log, "Erkennung 3: lese im Bild: " + " | ".join(zeilen[:6]))
+        kand += _suchen(st, zeilen, label_texte, schon)
+        bewertet = bewerten(st, kand, ist_s, dvd, lesung, label_texte)
+        sieger, grund = entscheiden(bewertet)
+        if sieger:
+            break
     for x in bewertet[:4]:
         _log(log, f"Erkennung 3: {x['info']['titel']} ({x['info']['jahr']}) {x['info']['imdb']} - Punkte {x['punkte']}, "
                   f"Bild {x['bild']}, Name {x['name']}, Laufzeit {ist_s / 60:.0f}/{x['soll']} min, Jahr {x['jahr_ok']}")
-    sieger, grund = entscheiden(bewertet)
+    _log(log, f"Erkennung 3: fertig nach {time.time() - t0:.0f} s - {'erkannt' if sieger else grund}")
     vorschlaege = [{"imdb": x["info"]["imdb"], "titel": x["info"]["titel"], "jahr": x["info"]["jahr"],
                     "bild": x["bild"], "punkte": x["punkte"]} for x in bewertet[:3]]
     if sieger:
