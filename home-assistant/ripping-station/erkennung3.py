@@ -583,7 +583,10 @@ def label_texte(st, label):
     if not label or st.label_unbrauchbar(label):
         return []
     grund = list(st.label_varianten(label))
-    roh = re.sub(r"[_.\-]+", " ", label.upper()).strip()
+    roh = [x for x in re.sub(r"[_.\-]+", " ", label.upper()).split()]
+    while roh and WEG_LABEL.match(roh[-1]):  # erst ganze Woerter (D1, DISC2, 3D), dann Ziffern abtrennen
+        roh.pop()
+    roh = " ".join(roh)
     roh = re.sub(r"(?<=[A-Z])(?=\d)|(?<=\d)(?=[A-Z])", " ", roh)  # SHREK2 -> SHREK 2, HP7 -> HP 7
     w = roh.split()
     while w and WEG_LABEL.match(w[-1]):
@@ -595,6 +598,11 @@ def label_texte(st, label):
     basis = " ".join(w)
     lang = " ".join(ABK.get(x, x) for x in w)
     neu = [basis, lang, _umlaute(basis), _umlaute(lang)]
+    if " AND " in f" {lang} ":
+        neu += [re.sub(r"\bAND\b", "&", lang), re.sub(r"\s*\bAND\b\s*", " ", lang)]  # FAST AND FURIOUS -> Fast & Furious
+    roem = {"2": "II", "3": "III", "4": "IV", "5": "V", "6": "VI", "7": "VII", "8": "VIII", "9": "IX"}
+    if re.search(r"\b[2-9]\b", lang):
+        neu.append(re.sub(r"\b([2-9])\b", lambda m: roem[m.group(1)], lang))  # Episode 5 -> Episode V
     # Teil-Angaben: PART 1 / TEIL 2 / PT 2 als "Part 2" und ohne
     ohne_teil = re.sub(r"\b(PART|TEIL|PT|CHAPTER|KAPITEL)\s*\d+\b", "", lang).strip()
     if ohne_teil and ohne_teil != lang:
@@ -604,7 +612,7 @@ def label_texte(st, label):
         t = re.sub(r"\s+", " ", t or "").strip()
         if len(t) >= 2 and t.lower() not in [x.lower() for x in aus] and not st.label_unbrauchbar(t):
             aus.append(t)
-    return aus[:6]
+    return aus[:7]
 
 
 def _stimmen(st, imdb):
@@ -621,6 +629,10 @@ def _poster(st, imdb):
         return p if p.startswith("https://") else None
     except Exception:
         return None
+
+
+SYN = {"part": "teil", "teil": "part", "chapter": "kapitel", "kapitel": "chapter", "and": "und", "und": "and",
+       "vol": "volume", "volume": "vol"}
 
 
 def _tok(s):
@@ -645,6 +657,11 @@ def name_passung(st, texte, info):
             iw = _tok(ti)
             if tw and iw and all(x in iw for x in tw):
                 best = max(best, 0.7 + 0.3 * len(tw) / len(iw))
+            elif tw and iw and len(tw) >= 3:  # teilweise: HP 7 PART 2 ~ Harry Potter ... Teil 2
+                iw2 = set(iw) | {SYN.get(x, x) for x in iw}
+                treffer = sum(1 for x in tw if x in iw2 or SYN.get(x, x) in iw2)
+                if treffer / len(tw) >= 0.6:
+                    best = max(best, 0.5 + 0.4 * treffer / len(tw))
     return round(best, 2)
 
 
@@ -711,8 +728,8 @@ def erkennen_ohne_bild(st, job, ist_s, k_alt=None):
     if not texte:
         return None, None, "kein brauchbarer Disc-Name", []
     kand = [x[3] for x in (k_alt or [])]
-    for t in texte[:5]:
-        kand += wd_film_suche(st, t, 5)
+    for t in texte[:7]:
+        kand += wd_film_suche(st, t, 6)
         kand += omdb_film_suche(st, t, 5)
     bewertet = bewerten(st, kand, ist_s, dvd, {}, texte)
     for x in bewertet:
@@ -737,6 +754,14 @@ def erkennen_ohne_bild(st, job, ist_s, k_alt=None):
             return b["info"], "Name", f"Name {b['name']:.2f}, Laufzeit {ist_s / 60:.0f}/{b['soll']} min entscheidet", vorschlaege
         # Gleicher Name, Laufzeit passt bei mehreren (Fight Club 1999/2023): Discs gibt es fast nur von bekannten
         # Filmen - ist einer viel bekannter (IMDb-Stimmen mindestens 20-mal so viele) und passt die Laufzeit, nimm ihn.
+        # Gleich guter Name bei mehreren Teilen einer Reihe ohne Unterscheidung im Disc-Namen (DIE_TRIBUTE_VON_PANEM):
+        # gemeint ist der erste Film - wenn seine Laufzeit gut passt.
+        gleich = [x for x in gute if x["name"] >= a["name"] - 0.05 and x["abw"] <= 0.06]
+        if len(gleich) >= 2:
+            erster = min(gleich, key=lambda x: str(x["info"]["jahr"]))
+            if erster["abw"] <= 0.03 and all(str(x["info"]["jahr"]) > str(erster["info"]["jahr"]) for x in gleich if x is not erster):
+                return (erster["info"], "Name", f"Name {erster['name']:.2f}, Laufzeit {ist_s / 60:.0f}/{erster['soll']} min, "
+                        f"erster Film der Reihe", vorschlaege)
         st_g = sorted(((x, _stimmen(st, x["info"]["imdb"])) for x in gute if x["abw"] <= 0.06), key=lambda y: -y[1])
         if st_g and st_g[0][1] >= 20000 and (len(st_g) == 1 or st_g[0][1] >= 20 * max(st_g[1][1], 1)):
             b = st_g[0][0]
