@@ -16,6 +16,8 @@ Nur Standardbibliothek plus ffmpeg/ffprobe und tesseract (apt: tesseract-ocr tes
 """
 import concurrent.futures
 import difflib
+import hashlib
+import io
 import json
 import os
 import re
@@ -54,6 +56,56 @@ NAME_STOPP = set("the der die das film films production productions pictures pic
                  "home company corporation limited star wars lego directed produced screenplay written casting".split())
 # Wikidata: Produzent, Regie, Drehbuch, Darsteller, Musik, Kamera, Ausfuehrender Produzent
 PERSON_ROLLEN = ["P162", "P57", "P58", "P161", "P86", "P344", "P1431"]
+
+
+# ------------------------------------------------------------------ Netz-Zwischenspeicher (Claude B 24.11.2026)
+# Wikidata und OMDb werden auf der Platte gemerkt (30 Tage): dieselbe Disc / derselbe Suchtext fragt nicht neu, das
+# spart die OMDb-Tagesgrenze und die Wikidata-Drosselung (429). Wikidata bekommt eine Kennung mit Kontakt-Adresse,
+# wie es die Wikimedia-Regeln wollen - anonyme Programme werden staerker gedrosselt.
+NETZ_CACHE = "/var/lib/station/netz_cache"
+NETZ_TTL = 30 * 86400
+NETZ_UA = "LukasRippingStation/1.3 (https://github.com/LukasSmartHome/lukas-kino; privat) Python-urllib"
+_urlopen_orig = urllib.request.urlopen
+
+
+def _netz_urlopen(req, *a, **k):
+    url = req.full_url if isinstance(req, urllib.request.Request) else str(req)
+    merken = ("omdbapi.com/" in url or "wikidata.org/w/api.php" in url) and (
+        not isinstance(req, urllib.request.Request) or req.get_method() == "GET")
+    if "wikidata.org" in url:
+        if not isinstance(req, urllib.request.Request):
+            req = urllib.request.Request(url)
+        req.add_header("User-Agent", NETZ_UA)
+    if not merken:
+        return _urlopen_orig(req, *a, **k)
+    pfad = os.path.join(NETZ_CACHE, hashlib.sha1(url.encode()).hexdigest() + ".json")
+    try:
+        if time.time() - os.path.getmtime(pfad) < NETZ_TTL:
+            with open(pfad, "rb") as f:
+                return io.BytesIO(f.read())
+    except OSError:
+        pass
+    r = _urlopen_orig(req, *a, **k)
+    try:
+        daten = r.read()
+    finally:
+        r.close()
+    try:
+        j = json.loads(daten or b"{}")
+        fehler = str(j.get("Error", "")) if isinstance(j, dict) else ""
+        if "limit" not in fehler.lower() and "invalid api" not in fehler.lower() and "error" not in j:
+            os.makedirs(NETZ_CACHE, exist_ok=True)
+            tmp = pfad + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(daten)
+            os.replace(tmp, pfad)
+    except Exception:
+        pass
+    return io.BytesIO(daten)
+
+
+if getattr(urllib.request.urlopen, "__name__", "") != "_netz_urlopen":
+    urllib.request.urlopen = _netz_urlopen
 
 
 def _log(log, text):
