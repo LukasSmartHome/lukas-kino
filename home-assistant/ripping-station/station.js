@@ -419,7 +419,7 @@
       var start = uhr(e.start);
       if (start) rechts.push(start);
       var min = dauer(e.start, e.ende);
-      if (min ? st.ok : false) rechts.push(`${min} min`);
+      if (min ? (st.ok ? min <= 240 : false) : false) rechts.push(`${min} min`);  // spaeter von Hand benannt: keine Riesen-Dauer
       return `<div class="ein${alt ? " alt" : ""}"><div class="sy ${sy}"><ha-icon icon="${icon}"></ha-icon></div>
         <div class="mi"><b>${esc(titel)}</b><span class="st ${klasse}">${esc(text)}</span>${wo}${mel}</div>
         <div class="re">${rechts.map(esc).join("<br>")}</div></div>`;
