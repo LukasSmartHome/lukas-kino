@@ -364,7 +364,7 @@ def personen_filme(st, nm_liste, jahre=None):
         rollen = "|".join(f"{r}={q}" for r in PERSON_ROLLEN)
         try:
             r = st.wikidata(action="query", list="search", srsearch=f"haswbstatement:{film_filter} haswbstatement:{rollen}",
-                            srlimit=50)
+                            srlimit=200)  # bekannte Schauspieler haben mehr als 50 Filme (Willem Dafoe)
             ids = [x["title"] for x in r.get("query", {}).get("search", [])]
         except Exception as e:
             _log(log, f"Erkennung 3: Filme von {nm}: {e}")
@@ -385,30 +385,37 @@ def personen_filme(st, nm_liste, jahre=None):
 
 
 # ------------------------------------------------------------------ Bewertung
-def titel_im_bild(info, wortset, st=None):
-    """Anteil der Titelwoerter (deutsch, englisch, OMDb), die im Bild gelesen wurden - bester Titel zaehlt.
-    Unscharf: ein Wort zaehlt auch, wenn es zu 80 Prozent passt (MENACE ~ MENACF)."""
+def titel_im_bild(info, lesung, st=None):
+    """Steht der Titel im Bild? (Claude B 24.11.2026, strenger nach Fehltreffer Daybreakers -> 'The Clearing')
+      1.0  der ganze Titel steht als Wortfolge in einer gelesenen Zeile (Vorspann; im Abspann nur auf kurzen Zeilen)
+      0.75 x Anteil  mehrteilige Titel: Woerter im Vorspann gefunden (unscharf nur bei langen Woertern, 85 Prozent)
+      0.6  Ein-Wort-Titel ab 6 Buchstaben irgendwo im Vorspann
+    Ein einzelnes Wort aus dem Abspann (z. B. 'clearance') zaehlt nicht mehr."""
+    lesung = lesung or {}
     titel = [info.get("titel"), info.get("englisch")]
     if st is not None:
         try:
             titel.append(st.omdb_info(info["imdb"]).get("Title"))
         except Exception:
             pass
+    zeilen = [("anfang", woerter(z)) for z in lesung.get("anfang", [])] + [("ende", woerter(z)) for z in lesung.get("ende", [])]
+    vorspann = set(w for teil, lw in zeilen if teil == "anfang" for w in lw)
     best = 0.0
     for t in titel:
-        w = woerter(t)
-        if not w:
+        tw = woerter(t)
+        if not tw:
             continue
-        treffer = 0
-        for x in w:
-            if x in wortset or (len(x) >= 5 and any(difflib.SequenceMatcher(None, x, y).ratio() >= 0.8
-                                                    for y in wortset if abs(len(y) - len(x)) <= 2)):
-                treffer += 1
-        anteil = treffer / len(w)
-        if len(w) == 1 and len(w[0]) < 5:
-            anteil *= 0.5  # kurze Ein-Wort-Titel ("Up", "Her") sind im Bild zu oft zufaellig
-        best = max(best, anteil)
-    return best
+        phrase = f" {' '.join(tw)} "
+        for teil, lw in zeilen:
+            if lw and phrase in f" {' '.join(lw)} " and (len(tw) >= 2 or len(lw) <= 4):
+                best = max(best, 1.0 if (teil == "anfang" or len(lw) <= 4) else 0.8)
+        if len(tw) >= 2:
+            treffer = sum(1 for x in tw if x in vorspann or (len(x) >= 6 and any(
+                difflib.SequenceMatcher(None, x, y).ratio() >= 0.85 for y in vorspann if abs(len(y) - len(x)) <= 2)))
+            best = max(best, 0.75 * treffer / len(tw))
+        elif len(tw[0]) >= 6 and tw[0] in vorspann:
+            best = max(best, 0.6)
+    return round(best, 2)
 
 
 def laufzeit_abw(st, info, ist_s, dvd):
@@ -433,7 +440,7 @@ def bewerten(st, kand, ist_s, dvd, lesung, label_texte, personen=None):
         abw, soll = laufzeit_abw(st, info, ist_s, dvd)
         if abw is None or abw > st.TOLERANZ:
             continue
-        bild = titel_im_bild(info, lesung.get("woerter", set()), st)
+        bild = titel_im_bild(info, lesung, st)
         name = max([st.aehnlich(t, info.get("titel")) for t in label_texte] +
                    [st.aehnlich(t, info.get("englisch")) for t in label_texte] + [0.0])
         jahr_ok, jahr_diff = None, None
@@ -459,6 +466,9 @@ def entscheiden(bewertet):
     b = bewertet[1] if len(bewertet) > 1 else None
     sicher = a["bild"] >= 0.66 or (a["bild"] >= 0.5 and a["name"] >= 0.5)
     # Claude B 24.11.2026: ohne Titel im Bild - Leute aus dem Vor-/Abspann, Copyright-Jahr genau und Laufzeit fast genau
+    if not sicher and a.get("personen", 0) >= 3 and a["abw"] <= 0.04:
+        # drei oder mehr Leute aus Vor-/Abspann im selben Film und die Laufzeit passt - und kein anderer Film so
+        sicher = not [x for x in bewertet[1:] if x.get("personen", 0) >= 2 and x["abw"] <= 0.04]
     if not sicher and a.get("personen", 0) >= 1 and a.get("jahr_diff") == 0 and a["abw"] <= 0.03:
         gleich_gut = [x for x in bewertet[1:] if x.get("jahr_diff") == 0 and x["abw"] <= 0.03 and x.get("personen", 0) >= 1]
         sicher = not gleich_gut
