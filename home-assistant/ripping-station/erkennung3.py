@@ -133,8 +133,8 @@ def zeitpunkte(dauer_s, teile=("anfang", "ende")):
     aus = []
     if "anfang" in teile:
         aus += [("anfang", t) for t in range(4, min(480, d // 2), 10)]  # bis 8 min: Bond-Titelsequenz kommt spaet
-    if "ende" in teile:
-        aus += [("ende", t) for t in range(max(d - 360, d // 2), d - 8, 20)]
+    if "ende" in teile:  # Abspann: die ersten Tafeln (Regie, Hauptrollen) kommen ca. 8-10 min vor Schluss
+        aus += [("ende", t) for t in range(max(d - 600, d // 2), d - 8, 20)]
     return aus[:MAX_BILDER]
 
 
@@ -301,15 +301,17 @@ def _ist_name(teil):
     return " ".join(x.capitalize() if x.isupper() and len(x.strip(".")) > 2 else x for x in t)
 
 
-def namen(lesung, n=6):
-    """Personennamen aus Vor- und Abspann (ALBERT R. BROCCOLI, HARRY SALTZMAN ...), haeufigste zuerst."""
-    zaehler = {}
-    for z in lesung.get("zeilen", []):
+def namen(lesung, n=8):
+    """Personennamen aus Vor- und Abspann (ALBERT R. BROCCOLI, HARRY SALTZMAN ...): mehrfach gelesene zuerst,
+    sonst in der Reihenfolge im Film - die ersten Tafeln zeigen Regie und Hauptrollen, spaeter kommt die Crew."""
+    zaehler, erst = {}, {}
+    for i, z in enumerate(lesung.get("zeilen", [])):
         for teil in NAME_TRENNER.split(z):
             nm = _ist_name(re.sub(r"\s+", " ", teil or "").strip(" .-'\""))
             if nm:
                 zaehler[nm] = zaehler.get(nm, 0) + 1
-    return [k for k, _ in sorted(zaehler.items(), key=lambda x: -x[1])[:n]]
+                erst.setdefault(nm, i)
+    return [k for k, _ in sorted(zaehler.items(), key=lambda x: (-min(x[1], 2), erst[x[0]]))[:n]]
 
 
 def _wd_infos(st, ids):
