@@ -426,6 +426,7 @@
     }
     _meldungText(m) {
       var t = String(m || "");
+      if (t.indexOf("Pruefung: ") >= 0) return t.slice(t.indexOf("Pruefung: ")).replace("Pruefung: ", "Geprüft: ").replace(/Qualitaet/g, "Qualität").replace(/drueber/g, "drüber").split("; ").join(" · ");
       if (/Error while running MakeMKV/i.test(t)) return "MakeMKV konnte die Disc nicht lesen";
       if (/Puffer-Fehler/i.test(t)) return "Abgebrochen: Zwischenspeicher war zu langsam (seit 23.11. abends behoben) – Disc nochmal einlegen";
       if (/^nicht erkannt/i.test(t)) return "Nicht erkannt – Claude benennt ihn (sag kurz, was es war)";

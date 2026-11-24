@@ -491,6 +491,77 @@ def erkennen_mit_bild(st, job, datei, ist_s, k_alt=None, standbild=None):
     return None, None, grund, vorschlaege
 
 
+# ------------------------------------------------------------------ Daten-Discs (gebrannte Discs mit Filmdateien)
+SCHLECHT_WOERTER = {"cam", "camrip", "ts", "hdts", "telesync", "tc", "telecine", "mic", "md", "ld", "screener", "scr",
+                    "dvdscr", "hdcam", "tsrip", "workprint"}
+WEG_WOERTER = SCHLECHT_WOERTER | {"german", "deutsch", "ger", "deu", "dl", "ac3", "dts", "xvid", "divx", "x264", "x265",
+                                  "h264", "h265", "hevc", "dvdrip", "bdrip", "brrip", "webrip", "web", "dvd", "dvd5",
+                                  "dvd9", "720p", "1080p", "2160p", "dub", "dubbed", "line", "proper", "repack", "cd1",
+                                  "cd2", "avi", "mkv", "mp4", "aac", "mp3", "internal", "uncut", "ws", "fs", "pal"}
+
+
+def _probe(datei):
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", datei],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, text=True)
+        return json.loads(r.stdout or "{}")
+    except Exception:
+        return {}
+
+
+def daten_disc_pruefen(st, job, ziel, videos):
+    """Claude B 24.11.2026: gebrannte Disc mit Filmdatei selbst pruefen - Laufzeit, Aufloesung, Ton, Hinweise im
+    Dateinamen (mic, ts, cam = im Kino aufgenommen) - und einen Film vorschlagen (Name, sonst Bild).
+    Verschoben wird NICHTS (Wunsch Lukas 23.11.: Daten-Discs bleiben in _Pruefen, Claude sortiert ein).
+    Gibt einen Text fuer die Notiz zurueck."""
+    rel, groesse = videos[0]
+    datei = os.path.join(ziel, rel)
+    j = _probe(datei)
+    dauer = float(j.get("format", {}).get("duration") or 0)
+    v = next((x for x in j.get("streams", []) if x.get("codec_type") == "video"), {})
+    a = [x for x in j.get("streams", []) if x.get("codec_type") == "audio"]
+    w, h = v.get("width") or 0, v.get("height") or 0
+    name = os.path.splitext(os.path.basename(rel))[0]
+    wort = norm(re.sub(r"[_.\-]+", " ", name)).split()
+    flags = sorted(set(wort) & SCHLECHT_WOERTER)
+    if flags:
+        qual, schlecht = f"schlecht (Dateiname: {', '.join(flags)} = im Kino aufgenommen)", True
+    elif h and h < 480:
+        qual, schlecht = f"schlecht ({w}x{h})", True
+    elif h and h < 720:
+        qual, schlecht = "DVD-Qualität", False
+    elif h:
+        qual, schlecht = "HD", False
+    else:
+        qual, schlecht = "unbekannt", False
+    teile = [f"Pruefung: {rel} {dauer / 60:.0f} min, {w}x{h} {v.get('codec_name', '?')}, "
+             f"Ton {', '.join(str(x.get('channels', '?')) + '-Kanal ' + str((x.get('tags') or {}).get('language', '')) for x in a[:3]).strip() or 'keiner'}",
+             f"Qualitaet {qual}"]
+    vorschlag = None
+    if dauer >= 40 * 60:
+        such = " ".join(x for x in wort if x not in WEG_WOERTER and not re.fullmatch(r"(19|20)\d\d", x))
+        jahr = next((int(x) for x in wort if re.fullmatch(r"(19|20)\d\d", x)), None)
+        job2 = dict(job, label=(such or job.get("label") or "").upper().replace(" ", "_"), disctype="dvd",
+                    crc_id=None, hasnicetitle=0, imdb_id=None, imdb_id_auto=None)
+        try:
+            k = st.kandidaten(job2) if such else []
+            info, quelle, text = st.waehle(k, dauer, True)
+            if not info:
+                info, quelle, text, _ = erkennen_mit_bild(st, job2, datei, dauer, k, None)
+            if info:
+                vorschlag = f"{info['titel']} ({info['jahr']}) {info['imdb']}"
+                if jahr and str(jahr) != str(info["jahr"]):
+                    vorschlag += f" (Dateiname sagt {jahr} - pruefen)"
+        except Exception as e:
+            _log(st.log, f"Daten-Disc pruefen: {e}")
+    teile.append(f"Vorschlag: {vorschlag}" if vorschlag else "Film nicht erkannt")
+    teile.append("gehoert nach: " + ("Lukas Filme nochmal drueber schauen/4 Schlechte Qualitaet" if schlecht
+                                     else "Ripping-Station/Filme (in Jellyfin)"))
+    text = "; ".join(teile)
+    _log(st.log, f"Daten-Disc {job.get('label')}: {text}")
+    return text
+
+
 # ------------------------------------------------------------------ Test von Hand
 if __name__ == "__main__":
     if len(sys.argv) >= 4 and sys.argv[1] == "test":
@@ -510,5 +581,15 @@ if __name__ == "__main__":
         i, q, t, v = erkennen_mit_bild(st, job, datei, ist, k, "/tmp/erkennung3_test.jpg")
         print("NEU:", (i or {}).get("titel"), (i or {}).get("jahr"), (i or {}).get("imdb"), q, "-", t)
         print("VORSCHLAEGE:", json.dumps(v, ensure_ascii=False))
+    elif len(sys.argv) >= 4 and sys.argv[1] == "daten":
+        import importlib.machinery
+        import importlib.util
+        lo = importlib.machinery.SourceFileLoader("station", "/opt/station/station.py")
+        st = importlib.util.module_from_spec(importlib.util.spec_from_loader("station", lo))
+        lo.exec_module(st)
+        st.LOG = "/tmp/erkennung3_test.log"
+        ordner, rel = sys.argv[2], sys.argv[3]
+        print(daten_disc_pruefen(st, {"label": os.path.basename(ordner), "job_id": 0}, ordner,
+                                 [(rel, os.path.getsize(os.path.join(ordner, rel)))]))
     else:
         print(__doc__)
