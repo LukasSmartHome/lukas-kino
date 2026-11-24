@@ -569,6 +569,23 @@ WEG_LABEL = re.compile(r"^(FEATURE|MAIN|MOVIE|FILM|THEATRICAL|EXTENDED|EXT|DC|DI
                        r"DE|DEU|GER|GERMAN|ENG|EN|DL|3D|2D|4K|UHD)$")
 
 
+GENERISCH = set("MOVIE MOVIES FILM FILME FEATURE MAIN VIDEO VIDEOS DISC DISK DVD DVDS BLURAY BLU RAY BD BDMV SONY WARNER "
+                "UNIVERSAL DISNEY PARAMOUNT FOX MGM LIONSGATE STUDIOCANAL CONCORDE CONSTANTIN UNTITLED NEW VOLUME NONAME NO "
+                "NAME DATA BACKUP COPY KOPIE MEINE MY HOME PRIVAT TEST CDROM ROM DATEN BILDER MEDIA DEFAULT LABEL".split())
+
+
+def label_generisch(label):
+    """Disc-Name ohne Inhalt: MOVIE, SONY_DVD, M000253 (Presswerk-Nummer) - danach darf nicht gesucht werden
+    (MOVIE fand sonst 'Die Simpsons – Der Film')."""
+    w = [x for x in re.sub(r"[_.\-]+", " ", (label or "").upper()).split() if not WEG_LABEL.match(x)]
+    if not w:
+        return True
+    if all(x in GENERISCH or (x.isdigit() and len(x) <= 2) for x in w):
+        return True
+    z = "".join(w)
+    return bool(re.fullmatch(r"\d{5,}", z) or re.fullmatch(r"[A-Z]{1,3}\d{4,}[A-Z]?", z))  # 300 und 1917 sind Filme
+
+
 def _umlaute(t):
     """DVD-Namen schreiben Umlaute aus: EISKOENIGIN -> Eiskönigin (nur wo es ein Wort sein kann)."""
     aus = t
@@ -580,7 +597,7 @@ def _umlaute(t):
 def label_texte(st, label):
     """Suchtexte aus der Disc-Bezeichnung: wie die Station (label_varianten) plus Ziffern abtrennen (SHREK2 ->
     SHREK 2), Rauschen weg (FEATURE, DE, EXTENDED ...), Abkuerzungen aus, Umlaute."""
-    if not label or st.label_unbrauchbar(label):
+    if not label or st.label_unbrauchbar(label) or label_generisch(label):
         return []
     grund = list(st.label_varianten(label))
     roh = [x for x in re.sub(r"[_.\-]+", " ", label.upper()).split()]
@@ -597,6 +614,8 @@ def label_texte(st, label):
         w = w[1:]  # 007_SKYFALL -> SKYFALL (der Bond-Name allein findet zu viel)
     basis = " ".join(w)
     lang = " ".join(ABK.get(x, x) for x in w)
+    if len(w) >= 2 and all(len(x) == 1 and x.isalpha() for x in w):
+        basis = lang = ".".join(w) + "."  # E_T -> E.T.
     neu = [basis, lang, _umlaute(basis), _umlaute(lang)]
     if " AND " in f" {lang} ":
         neu += [re.sub(r"\bAND\b", "&", lang), re.sub(r"\s*\bAND\b\s*", " ", lang)]  # FAST AND FURIOUS -> Fast & Furious

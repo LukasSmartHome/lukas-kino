@@ -25,6 +25,9 @@ if w < 0:
 else:
     e = z[w][: len(z[w]) - len(z[w].lstrip())]
     z[w + 1:w + 1] = [
+        f"{e}if info and erkennung3 and quelle in (\"Bezeichnung\", \"OMDb\") and erkennung3.label_generisch(job.get(\"label\")):",
+        f"{e}    log(f\"Erkennung: Disc-Name {{job.get('label')}} sagt nichts - Treffer {{info['titel']}} verworfen\")",
+        f"{e}    info, quelle, text = None, None, \"Disc-Name sagt nichts\"",
         f"{e}if info and erkennung3 and quelle != \"Gedaechtnis\" and not erkennung3.nummern_ok(__import__(\"sys\").modules[__name__], job.get(\"label\"), info):",
         f"{e}    log(f\"Erkennung: {{info['titel']}} passt nicht zur Nummer im Disc-Namen {{job.get('label')}} - pruefe weiter\")",
         f"{e}    info, quelle, text = None, None, \"Nummer im Disc-Namen passt nicht\"",

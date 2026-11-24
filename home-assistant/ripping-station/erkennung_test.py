@@ -144,6 +144,9 @@ def main():
         try:
             k = st.kandidaten(job)
             info, quelle, text_e = st.waehle(k, ist, dvd)
+            if info and quelle in ("Bezeichnung", "OMDb") and e3.label_generisch(label):
+                text_e = f"Disc-Name sagt nichts: {info['titel']} verworfen"
+                info = None
             if info and quelle != "Gedaechtnis" and not e3.nummern_ok(st, label, info):
                 text_e = f"Nummer passt nicht: {info['titel']} - {text_e}"
                 info = None
