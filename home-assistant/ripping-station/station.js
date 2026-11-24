@@ -1,5 +1,5 @@
 /* Ripping-Station-Karte fuer Home Assistant
-   v2.2.0 (Claude, Konto B, 24.11.2026: Laufwerk „liest ein“ statt „hängt“, keine ARM-Platzhalter; 23.11.: Frage „Welcher Film ist das?“ mit Standbild und Vorschlag-Knöpfen) - v1.0.1 von Konto A (06.11.2026) liegt als station_v1.0.1.js daneben (Rueckweg)
+   v2.3.0 (Claude, Konto B, 24.11.2026: Filmplakate an den Vorschlag-Knöpfen; 2.2.0: Laufwerk „liest ein“ statt „hängt“, keine ARM-Platzhalter; 23.11.: Frage „Welcher Film ist das?“ mit Standbild und Vorschlag-Knöpfen) - v1.0.1 von Konto A (06.11.2026) liegt als station_v1.0.1.js daneben (Rueckweg)
    type: custom:lukas-station
      ansicht: kachel  - Glas-Pille: Zustand in einer Zeile, beim Rippen/Hochladen gelber Fortschritt im Hintergrund,
                         gruener Punkt = naechste Disc kann rein. Antippen oeffnet das Vollbild (hash).
@@ -187,7 +187,8 @@
     .frage { padding: 12px 14px; border-radius: 22px; ${GLAS} background: linear-gradient(135deg, rgba(255,244,214,0.95), rgba(255,231,170,0.7)); border-color: rgba(245,184,0,0.45); }
     .frage .l { display: block; font-size: 11px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: #8A6A00; }
     .frage b { display: block; margin-top: 3px; font-size: 15px; font-weight: 800; line-height: 1.3; }
-    .frage img { display: block; width: 100${PRO}; margin-top: 10px; border-radius: 14px; background: #000; }
+    .frage > img { display: block; width: 100${PRO}; margin-top: 10px; border-radius: 14px; background: #000; }
+    .frage .vor .kn img.pst { flex: 0 0 auto; width: 32px; height: 46px; margin: 6px 0; border-radius: 6px; object-fit: cover; background: rgba(15,26,44,0.08); }
     .frage .vor { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
     .frage .vor .kn { justify-content: flex-start; padding: 0 14px; text-align: left; height: auto; min-height: 44px; line-height: 1.25; }
     .frage .vor .kn small { margin-left: auto; padding-left: 10px; font-size: 11.5px; font-weight: 700; color: #8A6A00; white-space: nowrap; }
@@ -493,7 +494,7 @@
         var basis = String(this._c.status_url || "").replace(/\/status\.json$/, "");
         var vor = (f.vorschlaege || []).slice(0, 3).map(function (v) {
           var sicher = v.bild != null ? `Titel im Bild ${Math.round(Number(v.bild) * 100)} von 100` : "";
-          return `<div class="kn kl${self._laeuft ? " zu" : ""}" data-b="_benennen:${esc(f.nr)}:${esc(v.imdb)}"><ha-icon icon="mdi:check"></ha-icon>${esc(v.titel)} (${esc(v.jahr)})<small>${esc(sicher)}</small></div>`;
+          return `<div class="kn kl${self._laeuft ? " zu" : ""}" data-b="_benennen:${esc(f.nr)}:${esc(v.imdb)}">${v.poster ? `<img class="pst" src="${esc(v.poster)}" alt="">` : `<ha-icon icon="mdi:check"></ha-icon>`}${esc(v.titel)} (${esc(v.jahr)})<small>${esc(sicher)}</small></div>`;
         }).join("");
         frage = `<div class="frage"><span class="l">Welcher Film ist das?</span>
           <b>Disc „${esc(f.disc || f.titel || "")}“ ist nicht sicher erkannt</b>
