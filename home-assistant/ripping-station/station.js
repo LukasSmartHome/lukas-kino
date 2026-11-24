@@ -1,5 +1,5 @@
 /* Ripping-Station-Karte fuer Home Assistant
-   v2.1.0 (Claude, Konto B, 23.11.2026, Frage „Welcher Film ist das?“ mit Standbild und Vorschlag-Knöpfen) - v1.0.1 von Konto A (06.11.2026) liegt als station_v1.0.1.js daneben (Rueckweg)
+   v2.2.0 (Claude, Konto B, 24.11.2026: Laufwerk „liest ein“ statt „hängt“, keine ARM-Platzhalter; 23.11.: Frage „Welcher Film ist das?“ mit Standbild und Vorschlag-Knöpfen) - v1.0.1 von Konto A (06.11.2026) liegt als station_v1.0.1.js daneben (Rueckweg)
    type: custom:lukas-station
      ansicht: kachel  - Glas-Pille: Zustand in einer Zeile, beim Rippen/Hochladen gelber Fortschritt im Hintergrund,
                         gruener Punkt = naechste Disc kann rein. Antippen oeffnet das Vollbild (hash).
@@ -50,6 +50,8 @@
     return t.map(ohneKennung).join(" › ");
   };
   var datei = function (ziel) { var t = String(ziel || "").split("/"); return t[t.length - 1] || ""; };
+  var leer = function (t) { return t == null ? true : /^\s*(not[ _]identified|none|unknown|unbekannt)?\s*(\((none|\d{4})?\))?\s*$/i.test(String(t)); };
+  var titelVon = function (t) { return leer(t) ? "" : String(t); };
   var zielKurz = function (z) { return z ? String(z).split("/")[0] : ""; };
 
   var SVG_PFEIL = `<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>`;
@@ -288,7 +290,7 @@
         fehler: z === "fehler",
         prozent: p == null ? null : Math.max(0, Math.min(100, p)),
         rest: zahl(a.rest_min),
-        titel: a.titel || "",
+        titel: titelVon(a.titel),
         art: ART[a.art] || "",
         ziel: zielKurz(a.ziel),
         ws: zahl(a.warteschlange) || 0,
@@ -303,7 +305,8 @@
         laufwerk: a.laufwerk || null,
         einlegen: a.einlegen,
         einlegenText: a.einlegen_text || "",
-        nebenbei: a.nebenbei || "",
+        nebenbei: String(a.nebenbei || "").replace(/\bnot identified\b/gi, "neue Disc"),
+        haengtS: zahl(a.laufwerk_haengt_s) || 0,
         frage: a.frage ? ((a.frage.vorschlaege || []).length ? a.frage : null) : null,
         auftraege: frisch ? (this._st.auftraege || []) : null,
         jellyfin: jf ? ((jf.attributes || {}).dateien || {}) : null
@@ -322,7 +325,9 @@
       }
       if (/liest/i.test(t) || l.z === "liest") return { an: "nein", b: "Noch nicht einlegen", s: "Das Laufwerk liest gerade – warte, bis die Disc rauskommt." };
       if (/liegt noch/i.test(t)) return { an: "nein", b: "Disc liegt noch im Laufwerk", s: "Sie wird gleich erkannt oder ausgeworfen. Erst rausnehmen, dann die nächste." };
-      if (/antwortet/i.test(t)) return { an: "rot", b: "Laufwerk antwortet nicht", s: "Kurz warten. Hilft das nicht: Wartung › USB neu." };
+      if (/antwortet/i.test(t)) return l.haengtS >= 300
+        ? { an: "rot", b: "Laufwerk antwortet nicht", s: "Seit über 5 min. Nach 10 min bricht die Station selbst ab und wirft aus." }
+        : { an: "nein", b: "Laufwerk liest die Disc ein", s: "Beim Einlegen normal (Kopierschutz), dauert ein paar Minuten." };
       if (/speicher|puffer/i.test(t) || !l.pufferOk) return { an: "rot", b: "Zwischenspeicher gestört", s: "Die Station repariert die Platte selbst. Bis dahin keine Disc einlegen." };
       return { an: "nein", b: "Bitte kurz warten", s: t || ZT[l.z] || "" };
     }
@@ -349,7 +354,7 @@
       var sig = [l.z, l.live, l.prozent, l.rest, l.titel, l.ws, l.pr, l.puffer, l.pufferOk, l.cpu, l.platte, l.laufwerk, l.einlegen, l.einlegenText, l.nebenbei,
         JSON.stringify(l.fehlerInfo), JSON.stringify(l.meldung), JSON.stringify(l.fertig), JSON.stringify(l.frage),
         this._c.ansicht === "kachel" ? "" : JSON.stringify(l.auftraege), this._c.ansicht === "kachel" ? "" : JSON.stringify(l.jellyfin),
-        this._frage, this._laeuft, this._antwort, this._antwortOk, this._wartung, this._alteZeigen, this._alleTage].join("|");
+        l.haengtS >= 300, this._frage, this._laeuft, this._antwort, this._antwortOk, this._wartung, this._alteZeigen, this._alleTage].join("|");
       if (sig === this._sig) return;
       this._sig = sig;
       if (this._c.ansicht === "kachel") this._kachel(l); else this._menue(l);
@@ -404,7 +409,7 @@
       else if (e.stufe === "hochladen") icon = "mdi:upload";
       else if (e.stufe === "erkennen") icon = "mdi:cog-outline";
       else icon = "mdi:disc";
-      var titel = e.titel || (e.disc_name ? `Disc „${e.disc_name}“` : `Auftrag ${e.id}`);
+      var titel = titelVon(e.titel) || (titelVon(e.disc_name) ? `Disc „${e.disc_name}“` : `Auftrag ${e.id}`);
       var wo = "";
       if (e.ziel) wo = `<span class="wo"><ha-icon icon="mdi:folder-outline"></ha-icon>${esc(ordnerText(e.ziel))}</span>`;
       var mel = "";
@@ -440,8 +445,8 @@
       var rechts = [];
       if (e.rest_min != null) rechts.push(`noch ca. ${Math.round(e.rest_min)} min`);
       if (e.mb_s) rechts.push(`${Math.round(e.mb_s)} MB/s`);
-      var titel = e.titel || (e.disc_name ? `Disc „${e.disc_name}“` : "Disc");
-      var unter = [ART[e.art] || "", e.disc_name ? `Disc-Name ${e.disc_name}` : "", e.start ? `seit ${uhr(e.start)}` : ""].filter(Boolean).join(" · ");
+      var titel = titelVon(e.titel) || (titelVon(e.disc_name) ? `Disc „${e.disc_name}“` : "Neue Disc");
+      var unter = [ART[e.art] || "", titelVon(e.disc_name) ? `Disc-Name ${e.disc_name}` : "wird erkannt", e.start ? `seit ${uhr(e.start)}` : ""].filter(Boolean).join(" · ");
       var hinweis = e.stufe === "erkennen" ? `<div class="u">Erkennen und Untertitel aufräumen – bei Blu-rays bis ca. 15 min. Die nächste Disc darf schon rein.</div>` : "";
       if (e.meldung) hinweis = `<div class="u">${esc(this._meldungText(e.meldung))}</div>`;
       return `<div class="lauf"><div class="t"><b>${esc(titel)}</b><span>${esc(st.t)}</span></div>
@@ -471,10 +476,10 @@
       else unter = "Alles erledigt.";
       var erste = l.auftraege ? l.auftraege.filter(function (e) { var s = STUFE[e.stufe]; return s ? s.lauf === true : false; })[0] : null;
       if (erste ? ["liest", "verarbeitet", "uebertraegt"].indexOf(l.z) >= 0 : false) {
-        var nm = erste.titel || (erste.disc_name ? `Disc „${erste.disc_name}“ (wird nach dem Lesen erkannt)` : "Disc");
+        var nm = titelVon(erste.titel) || (titelVon(erste.disc_name) ? `Disc „${erste.disc_name}“ (wird nach dem Lesen erkannt)` : "Neue Disc – wird erkannt");
         unter = [ART[erste.art] || l.art, nm].filter(Boolean).join(" · ");
       }
-      if (l.nebenbei ? !l.aus : false) unter = `${unter} Nebenbei: ${l.nebenbei}.`;
+      if (l.nebenbei ? !l.aus : false) unter = `${unter} · Nebenbei: ${l.nebenbei}`;
 
       // Ampel
       var am = this._ampel(l);
@@ -508,8 +513,9 @@
       // Werte
       var w = [];
       if (!l.aus) {
-        var lw = { leer: "leer", offen: "Fach offen", disc: "Disc drin", nicht_bereit: "liest ein", haengt: "hängt", unbekannt: "?" }[l.laufwerk] || null;
-        if (lw) w.push(`<div class="wt${l.laufwerk === "haengt" ? " rot" : ""}"><span>Laufwerk</span><b>${esc(lw)}</b></div>`);
+        var lange = l.laufwerk === "haengt" ? l.haengtS >= 300 : false;
+        var lw = { leer: "leer", offen: "Fach offen", disc: "Disc drin", nicht_bereit: "liest ein", haengt: lange ? "antwortet nicht" : "liest ein", unbekannt: "?" }[l.laufwerk] || null;
+        if (lw) w.push(`<div class="wt${lange ? " rot" : (l.laufwerk === "haengt" ? " warn" : "")}"><span>Laufwerk</span><b>${esc(lw)}</b></div>`);
         w.push(`<div class="wt${l.pufferOk ? "" : " rot"}"><span>Zwischenspeicher</span><b>${l.pufferOk ? (l.puffer == null ? "–" : `${Math.round(l.puffer)} GB frei`) : "gestört"}</b></div>`);
         if (l.cpu != null) w.push(`<div class="wt${l.cpu >= 85 ? " warn" : ""}"><span>IPC</span><b>${Math.round(l.cpu)} °C</b></div>`);
         if (l.platte != null) w.push(`<div class="wt${l.platte >= 60 ? " warn" : ""}"><span>Platte</span><b>${Math.round(l.platte)} °C</b></div>`);

@@ -41,6 +41,15 @@ RAUSCHEN = re.compile(r"(copyright|all rights|rights reserved|presents|präsenti
                       r"dolby|dts|thx|www\.|\.com|\.de\b|fsk|warner|universal|disney|paramount|sony|fox|mgm|"
                       r"lionsgate|studiocanal|constantin|tobis|concorde|senator|leonine|eurovideo|kinowelt)", re.I)
 MAX_BILDER = 70
+# Namen im Vor-/Abspann (Produzent, Regie, Darsteller) -> deren Filme bei Wikidata (Claude B 24.11.2026)
+NAME_TRENNER = re.compile(r"\b(?:and|und|by|von|presents?|pr[äa]sentier\w*|starring|in|als|mit|with|as|a|an|film|"
+                          r"production|produktion|picture)\b|[&,;:|/•·]", re.I)
+NAME_STOPP = set("the der die das film films production productions pictures picture presents music united artists eon "
+                 "ltd inc gmbh dvd video copyright rights reserved studio studios entertainment distributed release all "
+                 "warner bros universal paramount columbia metro goldwyn mayer twentieth century fox walt disney "
+                 "home company corporation limited star wars lego directed produced screenplay written casting".split())
+# Wikidata: Produzent, Regie, Drehbuch, Darsteller, Musik, Kamera, Ausfuehrender Produzent
+PERSON_ROLLEN = ["P162", "P57", "P58", "P161", "P86", "P344", "P1431"]
 
 
 def _log(log, text):
@@ -67,7 +76,7 @@ def zeitpunkte(dauer_s, teile=("anfang", "ende")):
     d = max(int(dauer_s or 0), 60)
     aus = []
     if "anfang" in teile:
-        aus += [("anfang", t) for t in range(4, min(300, d // 2), 10)]
+        aus += [("anfang", t) for t in range(4, min(480, d // 2), 10)]  # bis 8 min: Bond-Titelsequenz kommt spaet
     if "ende" in teile:
         aus += [("ende", t) for t in range(max(d - 360, d // 2), d - 8, 20)]
     return aus[:MAX_BILDER]
@@ -104,7 +113,7 @@ def lesen(datei, dauer_s, log=None, standbild=None, teile=("anfang", "ende")):
     bild_bestes: pfad} zurueck. standbild = Pfad, unter dem ein normales Farbbild (Titelkarte) abgelegt wird."""
     t0 = time.time()
     tmp = tempfile.mkdtemp(prefix="erk3_")
-    ergebnis = {"anfang": [], "ende": [], "woerter": set(), "jahre": [], "text": "", "bilder": 0}
+    ergebnis = {"anfang": [], "ende": [], "woerter": set(), "jahre": [], "text": "", "bilder": 0, "zeilen": []}
     try:
         punkte = zeitpunkte(dauer_s, teile)
         pngs = []
@@ -131,6 +140,7 @@ def lesen(datei, dauer_s, log=None, standbild=None, teile=("anfang", "ende")):
                     bestes, beste_zahl = t, n
         text = "\n".join(alle)
         ergebnis["text"] = text
+        ergebnis["zeilen"] = alle
         ergebnis["woerter"] = set(woerter(text))
         jahre = re.findall(r"(?:©|\(c\)|copyright|MCM|MM)[^\n]{0,40}?((?:19|20)\d\d)", text, re.I)
         ergebnis["jahre"] = sorted(set(int(j) for j in jahre))
@@ -218,6 +228,106 @@ def omdb_film_suche(st, text, n=5):
     return aus
 
 
+# ------------------------------------------------------------------ Namen im Bild -> Filme dieser Leute
+def _ist_name(teil):
+    t = [x for x in teil.split() if x]
+    if not 2 <= len(t) <= 4:
+        return None
+    for x in t:
+        if not re.fullmatch(r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß'\-]*\.?", x):
+            return None
+        if x.strip(".").lower() in NAME_STOPP:
+            return None
+        if len(x.strip(".")) < 2 and not re.fullmatch(r"[A-Z]\.", x):
+            return None
+    if sum(len(x.strip(".")) for x in t) < 8 or not any(len(x.strip(".")) >= 4 for x in t):
+        return None
+    return " ".join(x.capitalize() if x.isupper() and len(x.strip(".")) > 2 else x for x in t)
+
+
+def namen(lesung, n=6):
+    """Personennamen aus Vor- und Abspann (ALBERT R. BROCCOLI, HARRY SALTZMAN ...), haeufigste zuerst."""
+    zaehler = {}
+    for z in lesung.get("zeilen", []):
+        for teil in NAME_TRENNER.split(z):
+            nm = _ist_name(re.sub(r"\s+", " ", teil or "").strip(" .-'\""))
+            if nm:
+                zaehler[nm] = zaehler.get(nm, 0) + 1
+    return [k for k, _ in sorted(zaehler.items(), key=lambda x: -x[1])[:n]]
+
+
+def _wd_infos(st, ids):
+    """Wikidata-Eintraege -> info-Dicts wie st.wd_treffer (titel deutsch, jahr, imdb, laufzeit_min, englisch)."""
+    aus = []
+    for i in range(0, len(ids), 50):
+        try:
+            ents = st.wikidata(action="wbgetentities", ids="|".join(ids[i:i + 50]), props="labels|claims",
+                               languages="de|en")["entities"]
+        except Exception as e:
+            _log(st.log, f"Erkennung 3: Wikidata-Eintraege: {e}")
+            continue
+        for q in ids[i:i + 50]:
+            e = ents.get(q, {})
+            c = e.get("claims", {})
+            werte = lambda p: [x["mainsnak"].get("datavalue", {}).get("value") for x in c.get(p, [])
+                               if x["mainsnak"].get("datavalue")]
+            imdb = next((x for x in werte("P345") if str(x).startswith("tt")), None)
+            jahre = sorted(x["time"][1:5] for x in werte("P577") if isinstance(x, dict) and "time" in x)
+            lab = e.get("labels", {})
+            titel = lab.get("de", lab.get("en", {})).get("value")
+            if imdb and jahre and titel:
+                dauer = next((float(x["amount"]) for x in werte("P2047") if isinstance(x, dict) and "amount" in x), None)
+                aus.append({"titel": st.sauber(titel), "jahr": jahre[0], "imdb": imdb, "serie": False,
+                            "laufzeit_min": dauer, "englisch": lab.get("en", {}).get("value"), "_q": q})
+    return aus
+
+
+def personen_filme(st, nm_liste, jahre=None):
+    """Namen -> Personen (Mensch, Q5) -> ihre Filme. Gibt ({imdb: info}, {imdb: anzahl Personen}, [gefundene Namen])."""
+    log = st.log
+    personen = []
+    for nm in nm_liste:
+        try:
+            ids = [x["id"] for x in st.wikidata(action="wbsearchentities", search=nm, language="en", type="item",
+                                                limit=3).get("search", [])]
+            if not ids:
+                continue
+            ents = st.wikidata(action="wbgetentities", ids="|".join(ids), props="claims")["entities"]
+        except Exception as e:
+            _log(log, f"Erkennung 3: Person '{nm}': {e}")
+            continue
+        for q in ids:
+            p31 = [x["mainsnak"].get("datavalue", {}).get("value", {}).get("id")
+                   for x in ents.get(q, {}).get("claims", {}).get("P31", [])]
+            if "Q5" in p31:
+                personen.append((nm, q))
+                break
+    filme, zahl = {}, {}
+    film_filter = "|".join(f"P31={t}" for t in FILMTYPEN)
+    for nm, q in personen:
+        rollen = "|".join(f"{r}={q}" for r in PERSON_ROLLEN)
+        try:
+            r = st.wikidata(action="query", list="search", srsearch=f"haswbstatement:{film_filter} haswbstatement:{rollen}",
+                            srlimit=50)
+            ids = [x["title"] for x in r.get("query", {}).get("search", [])]
+        except Exception as e:
+            _log(log, f"Erkennung 3: Filme von {nm}: {e}")
+            continue
+        for info in _wd_infos(st, ids):
+            if jahre:
+                try:
+                    if min(abs(int(info["jahr"]) - j) for j in jahre) > 2:
+                        continue
+                except ValueError:
+                    continue
+            filme.setdefault(info["imdb"], info)
+            zahl[info["imdb"]] = zahl.get(info["imdb"], 0) + 1
+    if personen:
+        _log(log, f"Erkennung 3: Personen im Bild: {', '.join(n for n, _ in personen)} -> {len(filme)} Filme"
+                  + (f" um {'/'.join(str(j) for j in jahre)}" if jahre else ""))
+    return filme, zahl, [n for n, _ in personen]
+
+
 # ------------------------------------------------------------------ Bewertung
 def titel_im_bild(info, wortset, st=None):
     """Anteil der Titelwoerter (deutsch, englisch, OMDb), die im Bild gelesen wurden - bester Titel zaehlt.
@@ -256,7 +366,7 @@ def laufzeit_abw(st, info, ist_s, dvd):
     return abw, soll
 
 
-def bewerten(st, kand, ist_s, dvd, lesung, label_texte):
+def bewerten(st, kand, ist_s, dvd, lesung, label_texte, personen=None):
     """kand: Liste info-Dicts (doppelte IMDb-IDs erlaubt). Gibt sortierte Liste
     [{info, punkte, bild, abw, soll, jahr_ok, name}] zurueck (nur Filme mit passender Laufzeit)."""
     gesehen, aus = set(), []
@@ -270,15 +380,18 @@ def bewerten(st, kand, ist_s, dvd, lesung, label_texte):
         bild = titel_im_bild(info, lesung.get("woerter", set()), st)
         name = max([st.aehnlich(t, info.get("titel")) for t in label_texte] +
                    [st.aehnlich(t, info.get("englisch")) for t in label_texte] + [0.0])
-        jahr_ok = None
+        jahr_ok, jahr_diff = None, None
         if lesung.get("jahre"):
             try:
-                jahr_ok = any(abs(int(info["jahr"]) - j) <= 1 for j in lesung["jahre"])
+                jahr_diff = min(abs(int(info["jahr"]) - j) for j in lesung["jahre"])
+                jahr_ok = jahr_diff <= 1
             except (TypeError, ValueError):
                 jahr_ok = None
-        punkte = 3.0 * bild + 1.0 * name + (0.6 if jahr_ok else 0) + max(0.0, 0.5 - 5 * abw)
+        pers = (personen or {}).get(info["imdb"], 0)
+        punkte = (3.0 * bild + 1.0 * name + (0.8 if jahr_diff == 0 else (0.3 if jahr_ok else 0))
+                  + 0.7 * min(pers, 2) + max(0.0, 0.5 - 5 * abw))
         aus.append({"info": info, "punkte": round(punkte, 2), "bild": round(bild, 2), "name": round(name, 2),
-                    "abw": round(abw, 3), "soll": soll, "jahr_ok": jahr_ok})
+                    "abw": round(abw, 3), "soll": soll, "jahr_ok": jahr_ok, "jahr_diff": jahr_diff, "personen": pers})
     return sorted(aus, key=lambda x: -x["punkte"])
 
 
@@ -289,9 +402,13 @@ def entscheiden(bewertet):
     a = bewertet[0]
     b = bewertet[1] if len(bewertet) > 1 else None
     sicher = a["bild"] >= 0.66 or (a["bild"] >= 0.5 and a["name"] >= 0.5)
+    # Claude B 24.11.2026: ohne Titel im Bild - Leute aus dem Vor-/Abspann, Copyright-Jahr genau und Laufzeit fast genau
+    if not sicher and a.get("personen", 0) >= 1 and a.get("jahr_diff") == 0 and a["abw"] <= 0.03:
+        gleich_gut = [x for x in bewertet[1:] if x.get("jahr_diff") == 0 and x["abw"] <= 0.03 and x.get("personen", 0) >= 1]
+        sicher = not gleich_gut
     abstand = (a["punkte"] - b["punkte"]) if b else 9
     if sicher and abstand >= 0.8:
-        return a, "klar"
+        return a, "klar" if a["bild"] >= 0.5 else "klar (Leute im Abspann, Jahr und Laufzeit)"
     if sicher and b and b["bild"] < 0.34 and abstand >= 0.5:
         return a, "klar (nur einer im Bild)"
     grund = "unsicher: " + " / ".join(f"{x['info']['titel']} ({x['info']['jahr']}) Bild {round(100 * x['bild'])} von 100"
@@ -332,6 +449,7 @@ def erkennen_mit_bild(st, job, datei, ist_s, k_alt=None, standbild=None):
     schon = set()
     lesung = {"anfang": [], "ende": [], "woerter": set(), "jahre": [], "text": ""}
     sieger, grund, bewertet = None, "", []
+    pers_zahl, pers_gesucht = {}, set()
     for teil in ("anfang", "ende"):
         neu = lesen(datei, ist_s, log, standbild, (teil,))
         lesung[teil] = neu[teil]
@@ -341,13 +459,26 @@ def erkennen_mit_bild(st, job, datei, ist_s, k_alt=None, standbild=None):
         if zeilen:
             _log(log, "Erkennung 3: lese im Bild: " + " | ".join(zeilen[:6]))
         kand += _suchen(st, zeilen, label_texte, schon)
-        bewertet = bewerten(st, kand, ist_s, dvd, lesung, label_texte)
+        bewertet = bewerten(st, kand, ist_s, dvd, lesung, label_texte, pers_zahl)
         sieger, grund = entscheiden(bewertet)
         if sieger:
             break
+        lesung["zeilen"] = lesung.get("zeilen", []) + neu.get("zeilen", [])
+        nm = [n for n in namen(lesung) if n not in pers_gesucht]
+        if nm:  # Claude B 24.11.2026: Leute im Vor-/Abspann -> ihre Filme (Bond: Broccoli/Saltzman 1964 -> Goldfinger)
+            pers_gesucht |= set(nm)
+            filme, zahl, gefunden = personen_filme(st, nm, lesung.get("jahre"))
+            for imdb, n in zahl.items():
+                pers_zahl[imdb] = pers_zahl.get(imdb, 0) + n
+            kand += list(filme.values())
+            bewertet = bewerten(st, kand, ist_s, dvd, lesung, label_texte, pers_zahl)
+            sieger, grund = entscheiden(bewertet)
+            if sieger:
+                break
     for x in bewertet[:4]:
         _log(log, f"Erkennung 3: {x['info']['titel']} ({x['info']['jahr']}) {x['info']['imdb']} - Punkte {x['punkte']}, "
-                  f"Bild {x['bild']}, Name {x['name']}, Laufzeit {ist_s / 60:.0f}/{x['soll']} min, Jahr {x['jahr_ok']}")
+                  f"Bild {x['bild']}, Name {x['name']}, Leute {x.get('personen', 0)}, Laufzeit {ist_s / 60:.0f}/{x['soll']} min, "
+                  f"Jahr {x['jahr_ok']}")
     _log(log, f"Erkennung 3: fertig nach {time.time() - t0:.0f} s - {'erkannt' if sieger else grund}")
     vorschlaege = [{"imdb": x["info"]["imdb"], "titel": x["info"]["titel"], "jahr": x["info"]["jahr"],
                     "bild": x["bild"], "punkte": x["punkte"]} for x in bewertet[:3]]
@@ -355,7 +486,7 @@ def erkennen_mit_bild(st, job, datei, ist_s, k_alt=None, standbild=None):
         i = dict(sieger["info"])
         if "lego" in norm(i.get("englisch")) and "lego" not in norm(i.get("titel")):  # Wikidata: "Star Wars – Die Padawan-Bedrohung"
             i["titel"] = f"LEGO {i['titel']}"
-        return i, "Texterkennung", (f"Texterkennung ({grund}), Titel im Bild {sieger['bild']:.2f}, "
+        return i, "Texterkennung", (f"Texterkennung ({grund}), Titel im Bild {sieger['bild']:.2f}, Leute {sieger.get('personen', 0)}, "
                                     f"Laufzeit {ist_s / 60:.0f}/{sieger['soll']} min"), vorschlaege
     return None, None, grund, vorschlaege
 
