@@ -39,7 +39,11 @@ RAUSCHEN = re.compile(r"(copyright|all rights|rights reserved|presents|präsenti
                       r"produktion|directed|regie|screenplay|drehbuch|music by|musik|starring|casting|edited|"
                       r"executive|produced|producer|kamera|camera|cinematography|visual effects|soundtrack|"
                       r"dolby|dts|thx|www\.|\.com|\.de\b|fsk|warner|universal|disney|paramount|sony|fox|mgm|"
-                      r"lionsgate|studiocanal|constantin|tobis|concorde|senator|leonine|eurovideo|kinowelt)", re.I)
+                      r"lionsgate|studiocanal|constantin|tobis|concorde|senator|leonine|eurovideo|kinowelt|"
+                      r"wardrobe|costume|kost[uü]m|make.?up|maske|hair|art direct|set dress|lyrics|composed|conducted|"
+                      r"orchestra|supervisor|assistant|assistent|mistress|editor|schnitt|sound|ton\b|photograph|"
+                      r"special effects|stunt|script|continuity|location|unit|manager|associate|titles? (by|design)|"
+                      r"filmed|recorded|processed|laboratory|technicolor|panavision|eastmancolor)", re.I)
 MAX_BILDER = 70
 # Namen im Vor-/Abspann (Produzent, Regie, Darsteller) -> deren Filme bei Wikidata (Claude B 24.11.2026)
 NAME_TRENNER = re.compile(r"\b(?:and|und|by|von|presents?|pr[äa]sentier\w*|starring|in|als|mit|with|as|a|an|film|"
