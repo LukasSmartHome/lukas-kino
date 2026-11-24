@@ -495,6 +495,134 @@ def erkennen_mit_bild(st, job, datei, ist_s, k_alt=None, standbild=None):
     return None, None, grund, vorschlaege
 
 
+# ------------------------------------------------------------------ Disc-Name besser verstehen (ohne Bild)
+# Abkuerzungen auf Disc-Bezeichnungen (Claude B 24.11.2026)
+ABK = {"LOTR": "Lord of the Rings", "FOTR": "Fellowship of the Ring", "TTT": "The Two Towers", "ROTK": "Return of the King",
+       "HP": "Harry Potter", "BTTF": "Back to the Future", "SW": "Star Wars", "POTC": "Pirates of the Caribbean",
+       "MI": "Mission Impossible", "JP": "Jurassic Park", "MIB": "Men in Black", "TDK": "The Dark Knight",
+       "TDKR": "The Dark Knight Rises", "ID4": "Independence Day", "XMEN": "X-Men", "SPIDERMAN": "Spider-Man",
+       "AVP": "Alien vs. Predator", "TMNT": "Teenage Mutant Ninja Turtles", "GOTG": "Guardians of the Galaxy",
+       "AOU": "Age of Ultron", "007": "James Bond", "EP": "Episode", "PT": "Part", "VOL": "Vol.", "HTTYD": "How to Train Your Dragon",
+       "FF": "Fast & Furious", "TF": "Transformers", "LXG": "League of Extraordinary Gentlemen", "ST": "Star Trek",
+       "TPM": "The Phantom Menace", "AOTC": "Attack of the Clones", "ROTS": "Revenge of the Sith", "ANH": "A New Hope",
+       "ESB": "The Empire Strikes Back", "ROTJ": "Return of the Jedi", "TFA": "The Force Awakens", "TLJ": "The Last Jedi",
+       "TROS": "The Rise of Skywalker", "DOS": "The Desolation of Smaug", "AUJ": "An Unexpected Journey",
+       "BOTFA": "The Battle of the Five Armies", "DH": "Deathly Hallows", "HBP": "Half-Blood Prince",
+       "OOTP": "Order of the Phoenix", "GOF": "Goblet of Fire", "POA": "Prisoner of Azkaban", "COS": "Chamber of Secrets",
+       "PS": "Philosopher's Stone", "SS": "Sorcerer's Stone"}
+# Rauschen am Ende/Anfang von Disc-Namen, das station.label_suchtext nicht kennt
+WEG_LABEL = re.compile(r"^(FEATURE|MAIN|MOVIE|FILM|THEATRICAL|EXTENDED|EXT|DC|DIRECTORS|CUT|UNRATED|UNCUT|REMASTERED|"
+                       r"ANNIVERSARY|ULTIMATE|COLLECTORS|LIMITED|STEELBOOK|SE|CE|LE|UE|KE|GE|AUT|CH|AT|NORDIC|UK|US|EU|"
+                       r"EURO|INT|INTL|R2|R1|R2DE|PAL|NTSC|16X9|169|WS|FS|BD|BD25|BD50|BLURAY|DVD|D\d|DISC\d*|"
+                       r"DE|DEU|GER|GERMAN|ENG|EN|DL|3D|2D|4K|UHD)$")
+
+
+def _umlaute(t):
+    """DVD-Namen schreiben Umlaute aus: EISKOENIGIN -> Eiskönigin (nur wo es ein Wort sein kann)."""
+    aus = t
+    for a, b in (("AE", "Ä"), ("OE", "Ö"), ("UE", "Ü"), ("ae", "ä"), ("oe", "ö"), ("ue", "ü")):
+        aus = re.sub(rf"(?<=[A-Za-z]){a}(?=[A-Za-z])", b, aus)
+    return aus
+
+
+def label_texte(st, label):
+    """Suchtexte aus der Disc-Bezeichnung: wie die Station (label_varianten) plus Ziffern abtrennen (SHREK2 ->
+    SHREK 2), Rauschen weg (FEATURE, DE, EXTENDED ...), Abkuerzungen aus, Umlaute."""
+    if not label or st.label_unbrauchbar(label):
+        return []
+    grund = list(st.label_varianten(label))
+    roh = re.sub(r"[_.\-]+", " ", label.upper()).strip()
+    roh = re.sub(r"(?<=[A-Z])(?=\d)|(?<=\d)(?=[A-Z])", " ", roh)  # SHREK2 -> SHREK 2, HP7 -> HP 7
+    w = roh.split()
+    while w and WEG_LABEL.match(w[-1]):
+        w.pop()
+    while w and WEG_LABEL.match(w[0]) and len(w) > 1:
+        w.pop(0)
+    if w and w[0] == "007" and len(w) > 1:
+        w = w[1:]  # 007_SKYFALL -> SKYFALL (der Bond-Name allein findet zu viel)
+    basis = " ".join(w)
+    lang = " ".join(ABK.get(x, x) for x in w)
+    neu = [basis, lang, _umlaute(basis), _umlaute(lang)]
+    # Teil-Angaben: PART 1 / TEIL 2 / PT 2 als "Part 2" und ohne
+    ohne_teil = re.sub(r"\b(PART|TEIL|PT|CHAPTER|KAPITEL)\s*\d+\b", "", lang).strip()
+    if ohne_teil and ohne_teil != lang:
+        neu.append(ohne_teil)
+    aus = []
+    for t in grund + neu:
+        t = re.sub(r"\s+", " ", t or "").strip()
+        if len(t) >= 2 and t.lower() not in [x.lower() for x in aus] and not st.label_unbrauchbar(t):
+            aus.append(t)
+    return aus[:6]
+
+
+def _tok(s):
+    return [w for w in norm(s).split() if w not in STOPP and (len(w) >= 3 or w.isdigit())]
+
+
+def name_passung(st, texte, info):
+    """Wie gut passt der Disc-Name zum Film? 1.0 = gleich. Deutsche Titel haben oft Untertitel (Die Eiskoenigin –
+    Voellig unverfroren): stehen alle Woerter des Disc-Namens im Titel, zaehlt das fast wie gleich."""
+    titel = [info.get("titel"), info.get("englisch")]
+    try:
+        titel.append(st.omdb_info(info["imdb"]).get("Title"))
+    except Exception:
+        pass
+    best = 0.0
+    for t in texte:
+        tw = _tok(t)
+        for ti in titel:
+            if not ti:
+                continue
+            best = max(best, st.aehnlich(t, ti))
+            iw = _tok(ti)
+            if tw and iw and all(x in iw for x in tw):
+                best = max(best, 0.7 + 0.3 * len(tw) / len(iw))
+    return round(best, 2)
+
+
+def erkennen_ohne_bild(st, job, ist_s, k_alt=None):
+    """Zweite Stufe vor dem Bild (schnell, ohne Standbilder): Disc-Name in allen Varianten, Suche NUR ueber Filme
+    (Wikidata mit Filmtyp, OMDb type=movie), Laufzeit muss passen. Sicher nur, wenn der Name klar passt und kein
+    anderer Film mit aehnlichem Namen genauso gut in der Laufzeit liegt (Remakes: Koenig der Loewen 1994/2019).
+    Gibt (info, quelle, text, vorschlaege) zurueck."""
+    dvd = job.get("disctype") == "dvd"
+    texte = label_texte(st, job.get("label"))
+    if job.get("disctype") == "bluray":
+        try:
+            bt = st.bd_titel(job)
+            if bt:
+                texte = [bt] + [t for t in texte if t.lower() != bt.lower()]
+        except Exception:
+            pass
+    if not texte:
+        return None, None, "kein brauchbarer Disc-Name", []
+    kand = [x[3] for x in (k_alt or [])]
+    for t in texte[:5]:
+        kand += wd_film_suche(st, t, 5)
+        kand += omdb_film_suche(st, t, 5)
+    bewertet = bewerten(st, kand, ist_s, dvd, {}, texte)
+    for x in bewertet:
+        x["name"] = name_passung(st, texte, x["info"])
+    bewertet.sort(key=lambda x: (-x["name"], x["abw"]))
+    for x in bewertet[:3]:
+        _log(st.log, f"Erkennung Name: {x['info']['titel']} ({x['info']['jahr']}) {x['info']['imdb']} - Name {x['name']}, "
+                     f"Laufzeit {ist_s / 60:.0f}/{x['soll']} min")
+    vorschlaege = [{"imdb": x["info"]["imdb"], "titel": x["info"]["titel"], "jahr": x["info"]["jahr"],
+                    "bild": 0, "punkte": x["punkte"]} for x in bewertet[:3]]
+    if not bewertet:
+        return None, None, "Name: kein Film mit passender Laufzeit", vorschlaege
+    a = bewertet[0]
+    gute = [x for x in bewertet if x["name"] >= max(0.6, a["name"] - 0.15)]
+    if a["name"] >= 0.75:
+        if len(gute) == 1:
+            return a["info"], "Name", f"Name {a['name']:.2f}, Laufzeit {ist_s / 60:.0f}/{a['soll']} min", vorschlaege
+        nach_zeit = sorted(gute, key=lambda x: x["abw"])
+        if nach_zeit[0]["abw"] <= 0.03 and nach_zeit[1]["abw"] >= 0.06:
+            b = nach_zeit[0]
+            return b["info"], "Name", f"Name {b['name']:.2f}, Laufzeit {ist_s / 60:.0f}/{b['soll']} min entscheidet", vorschlaege
+    return None, None, "Name unsicher: " + " / ".join(f"{x['info']['titel']} ({x['info']['jahr']})" for x in gute[:3]), vorschlaege
+
+
 # ------------------------------------------------------------------ Daten-Discs (gebrannte Discs mit Filmdateien)
 SCHLECHT_WOERTER = {"cam", "camrip", "ts", "hdts", "telesync", "tc", "telecine", "mic", "md", "ld", "screener", "scr",
                     "dvdscr", "hdcam", "tsrip", "workprint"}
