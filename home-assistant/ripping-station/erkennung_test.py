@@ -6,7 +6,7 @@ Tut so, als laege eine Disc mit typischer Bezeichnung im Laufwerk (ohne Laufwerk
   Stufe 1 = Station (kandidaten + waehle), Stufe 2 = erkennung3.erkennen_ohne_bild (nur Name, nur Filme).
 Aufruf:  python3 /opt/station/erkennung_test.py [Datei mit Faellen]  -> /tmp/erk_test.txt
 Fall-Zeile:  BEZEICHNUNG;dvd|bluray;tt-Nummer (oder - fuer "darf nichts erkennen");Titel als Hinweis
-Verbraucht OMDb-Abfragen (Tagesgrenze 1000): bricht bei 700 ab.
+Verbraucht OMDb-Abfragen (Tagesgrenze 1000): bricht nach 450 echten Abfragen ab (Zwischenspeicher zaehlt nicht).
 """
 import hashlib
 import importlib.machinery
@@ -24,21 +24,21 @@ st.LOG = "/tmp/erk_test_station.log"
 import erkennung3 as e3  # noqa: E402
 
 ZAEHLER = {"omdb": 0, "wikidata": 0}
-_orig = urllib.request.urlopen
+_orig = e3._urlopen_orig  # nur echte Netz-Abfragen zaehlen (nicht den Zwischenspeicher)
 
 
 def _zaehl(req, *a, **k):
     url = req.full_url if hasattr(req, "full_url") else str(req)
     if "omdbapi.com" in url:
         ZAEHLER["omdb"] += 1
-        if ZAEHLER["omdb"] > 700:
+        if ZAEHLER["omdb"] > 450:
             raise RuntimeError("OMDb-Grenze fuer den Test erreicht")
     if "wikidata.org" in url:
         ZAEHLER["wikidata"] += 1
     return _orig(req, *a, **k)
 
 
-urllib.request.urlopen = _zaehl
+e3._urlopen_orig = _zaehl
 
 FAELLE = """
 SKYFALL;bluray;tt1074638;Skyfall
