@@ -665,7 +665,16 @@ SYN = {"part": "teil", "teil": "part", "chapter": "kapitel", "kapitel": "chapter
 
 
 def _tok(s):
-    return [w for w in norm(s).split() if w not in STOPP and (len(w) >= 3 or w.isdigit())]
+    """Woerter fuer den Namensvergleich; roemische Teil-Nummern als Ziffern (Episode V = Episode 5)."""
+    w = norm(s).split()
+    aus = []
+    for i, t in enumerate(w):
+        r = None if t.isdigit() else _roem(t, w[i - 1] if i else "", i == len(w) - 1 and i > 0)
+        if r:
+            aus.append(str(r))
+        elif t not in STOPP and (len(t) >= 3 or t.isdigit()):
+            aus.append(t)
+    return aus
 
 
 def name_passung(st, texte, info):
@@ -697,15 +706,30 @@ def name_passung(st, texte, info):
 ROEMISCH = {"ii": 2, "iii": 3, "iv": 4, "vi": 6, "vii": 7, "viii": 8, "ix": 9}
 
 
+TEIL_WORT = {"episode", "teil", "part", "chapter", "kapitel", "vol", "volume"}
+
+
+def _roem(t, vorher, letztes):
+    """Roemische Zahl? II..IX immer, V und X nur nach Episode/Teil/Part oder am Titel-Ende (Rocky V, Saw X)."""
+    if t in ROEMISCH:
+        return ROEMISCH[t]
+    if t in ("v", "x") and (vorher in TEIL_WORT or letztes):
+        return 5 if t == "v" else 10
+    return None
+
+
 def _nummern(text):
     """Fortsetzungs-Nummern in einem Text: 2..1899 und II..IX (nicht 007, nicht Jahre, nicht 1)."""
     aus = set()
-    for t in norm(re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", text or "")).split():
+    w = norm(re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", text or "")).split()
+    for i, t in enumerate(w):
         if t.isdigit():
             if not (t.startswith("0") and len(t) > 1) and 2 <= int(t) < 1900:
                 aus.add(int(t))
-        elif t in ROEMISCH:
-            aus.add(ROEMISCH[t])
+        else:
+            r = _roem(t, w[i - 1] if i else "", i == len(w) - 1 and i > 0)
+            if r:
+                aus.add(r)
     return aus
 
 
@@ -772,6 +796,10 @@ def erkennen_ohne_bild(st, job, ist_s, k_alt=None):
                     "bild": 0, "punkte": x["punkte"], "poster": _poster(st, x["info"]["imdb"])} for x in bewertet[:3]]
     if not bewertet:
         return None, None, "Name: kein Film mit passender Laufzeit", vorschlaege
+    if label_nummern(job.get("label")):  # Nummer im Disc-Namen: nur Filme mit dieser Nummer kommen in Frage
+        bewertet = [x for x in bewertet if label_nummern(job.get("label")) & titel_nummern(st, x["info"])]
+        if not bewertet:
+            return None, None, "Name: kein Film mit dieser Nummer", vorschlaege
     a = bewertet[0]
     gute = [x for x in bewertet if x["name"] >= max(0.6, a["name"] - 0.15)]
     if a["name"] >= 0.75:
@@ -786,9 +814,11 @@ def erkennen_ohne_bild(st, job, ist_s, k_alt=None):
         # Gleich guter Name bei mehreren Teilen einer Reihe ohne Unterscheidung im Disc-Namen (DIE_TRIBUTE_VON_PANEM):
         # gemeint ist der erste Film - wenn seine Laufzeit gut passt.
         gleich = [x for x in gute if x["name"] >= a["name"] - 0.05 and x["abw"] <= 0.06]
-        if len(gleich) >= 2:
+        if len(gleich) >= 2 and not label_nummern(job.get("label")):
             erster = min(gleich, key=lambda x: str(x["info"]["jahr"]))
-            if erster["abw"] <= 0.03 and all(str(x["info"]["jahr"]) > str(erster["info"]["jahr"]) for x in gleich if x is not erster):
+            stimmen = {x["info"]["imdb"]: _stimmen(st, x["info"]["imdb"]) for x in gleich}
+            bekannt = stimmen[erster["info"]["imdb"]] >= 0.2 * max(stimmen.values())  # nicht 'Herkules 1958' statt 'Die Unglaublichen'
+            if bekannt and erster["abw"] <= 0.03 and all(str(x["info"]["jahr"]) > str(erster["info"]["jahr"]) for x in gleich if x is not erster):
                 return (erster["info"], "Name", f"Name {erster['name']:.2f}, Laufzeit {ist_s / 60:.0f}/{erster['soll']} min, "
                         f"erster Film der Reihe", vorschlaege)
         st_g = sorted(((x, _stimmen(st, x["info"]["imdb"])) for x in gute if x["abw"] <= 0.06), key=lambda y: -y[1])
