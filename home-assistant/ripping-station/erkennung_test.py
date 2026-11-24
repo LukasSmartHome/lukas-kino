@@ -65,7 +65,7 @@ FINDET_NEMO;dvd;tt0266543;Findet Nemo
 SHREK2;dvd;tt0298148;Shrek 2
 ICE_AGE_3;dvd;tt1080016;Ice Age 3
 DER_SCHUH_DES_MANITU;dvd;tt0248408;Der Schuh des Manitu
-KEINOHRHASEN;dvd;tt1047011;Keinohrhasen
+KEINOHRHASEN;dvd;tt0960790;Keinohrhasen
 LOLA_RENNT;dvd;tt0130827;Lola rennt
 GOOD_BYE_LENIN;dvd;tt0301357;Good Bye Lenin
 DIE_WELLE;dvd;tt1063669;Die Welle
