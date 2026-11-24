@@ -123,7 +123,7 @@ def laufzeit(imdb, dvd, label):
 
 
 def main():
-    text = open(sys.argv[1], encoding="utf-8").read() if len(sys.argv) > 1 else FAELLE
+    text = open(sys.argv[1], encoding="utf-8").read() if len(sys.argv) > 1 and sys.argv[1] else FAELLE
     ziel = sys.argv[2] if len(sys.argv) > 2 else "/tmp/erk_test.txt"
     aus = open(ziel, "w", encoding="utf-8")
     zahl = {"richtig": 0, "falsch": 0, "nichts": 0}
