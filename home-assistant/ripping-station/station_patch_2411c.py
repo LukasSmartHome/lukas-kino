@@ -19,6 +19,16 @@ else:
         f"{e}    except Exception as e2:",
         f"{e}        log(f\"Erkennung Name: {{e2}}\")",
     ]
+w = next((n for n, zl in enumerate(z) if zl.strip() == 'info, quelle, text = waehle(k, ist, job["disctype"] == "dvd")'), -1)
+if w < 0:
+    fehler.append("waehle-Zeile fehlt")
+else:
+    e = z[w][: len(z[w]) - len(z[w].lstrip())]
+    z[w + 1:w + 1] = [
+        f"{e}if info and erkennung3 and quelle != \"Gedaechtnis\" and not erkennung3.nummern_ok(__import__(\"sys\").modules[__name__], job.get(\"label\"), info):",
+        f"{e}    log(f\"Erkennung: {{info['titel']}} passt nicht zur Nummer im Disc-Namen {{job.get('label')}} - pruefe weiter\")",
+        f"{e}    info, quelle, text = None, None, \"Nummer im Disc-Namen passt nicht\"",
+    ]
 j = next((n for n, zl in enumerate(z) if zl.startswith('VERSION = "1.3.0"')), -1)
 if j < 0:
     fehler.append("VERSION 1.3.0 fehlt")

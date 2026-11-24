@@ -641,6 +641,52 @@ def name_passung(st, texte, info):
     return round(best, 2)
 
 
+ROEMISCH = {"ii": 2, "iii": 3, "iv": 4, "vi": 6, "vii": 7, "viii": 8, "ix": 9}
+
+
+def _nummern(text):
+    """Fortsetzungs-Nummern in einem Text: 2..1899 und II..IX (nicht 007, nicht Jahre, nicht 1)."""
+    aus = set()
+    for t in norm(re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", text or "")).split():
+        if t.isdigit():
+            if not (t.startswith("0") and len(t) > 1) and 2 <= int(t) < 1900:
+                aus.add(int(t))
+        elif t in ROEMISCH:
+            aus.add(ROEMISCH[t])
+    return aus
+
+
+def label_nummern(label):
+    w = [x for x in re.sub(r"[_.\-]+", " ", (label or "").upper()).split() if not WEG_LABEL.match(x)]  # 3D, D1, DISC1 weg
+    return _nummern(" ".join(w))
+
+
+def titel_nummern(st, info):
+    t = [info.get("titel"), info.get("englisch")]
+    try:
+        t.append(st.omdb_info(info["imdb"]).get("Title"))
+    except Exception:
+        pass
+    aus = set()
+    for x in t:
+        aus |= _nummern(x)
+    return aus
+
+
+def nummern_ok(st, label, info):
+    """Passt die Fortsetzungs-Nummer? SHREK2 ist nicht Shrek (2001), DIE_EISKOENIGIN ist nicht Die Eiskoenigin II."""
+    ln, tn = label_nummern(label), titel_nummern(st, info)
+    return bool(ln & tn) if ln else not tn
+
+
+def nummern_filter(st, label, liste):
+    """Kandidaten mit passender Nummer bevorzugen - passt keiner, bleiben alle (MI5_ROGUE_NATION)."""
+    ln = label_nummern(label)
+    tn = [titel_nummern(st, x["info"]) for x in liste]
+    gut = [x for x, n in zip(liste, tn) if (ln & n if ln else not n)]
+    return gut if gut else liste
+
+
 def erkennen_ohne_bild(st, job, ist_s, k_alt=None):
     """Zweite Stufe vor dem Bild (schnell, ohne Standbilder): Disc-Name in allen Varianten, Suche NUR ueber Filme
     (Wikidata mit Filmtyp, OMDb type=movie), Laufzeit muss passen. Sicher nur, wenn der Name klar passt und kein
@@ -665,6 +711,7 @@ def erkennen_ohne_bild(st, job, ist_s, k_alt=None):
     for x in bewertet:
         x["name"] = name_passung(st, texte, x["info"])
     bewertet.sort(key=lambda x: (-x["name"], x["abw"]))
+    bewertet = nummern_filter(st, job.get("label"), bewertet)
     for x in bewertet[:3]:
         _log(st.log, f"Erkennung Name: {x['info']['titel']} ({x['info']['jahr']}) {x['info']['imdb']} - Name {x['name']}, "
                      f"Laufzeit {ist_s / 60:.0f}/{x['soll']} min")

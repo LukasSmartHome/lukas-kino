@@ -144,6 +144,9 @@ def main():
         try:
             k = st.kandidaten(job)
             info, quelle, text_e = st.waehle(k, ist, dvd)
+            if info and quelle != "Gedaechtnis" and not e3.nummern_ok(st, label, info):
+                text_e = f"Nummer passt nicht: {info['titel']} - {text_e}"
+                info = None
             stufe = "Station" if info else "-"
             if not info:
                 info, quelle, text_e, _ = e3.erkennen_ohne_bild(st, job, ist, k)
