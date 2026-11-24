@@ -607,6 +607,13 @@ def label_texte(st, label):
     return aus[:6]
 
 
+def _stimmen(st, imdb):
+    try:
+        return int(re.sub(r"\D", "", st.omdb_info(imdb).get("imdbVotes") or "") or 0)
+    except Exception:
+        return 0
+
+
 def _poster(st, imdb):
     """Filmplakat (OMDb, https) fuer die Push-Frage - Lukas erkennt ein Plakat schneller als ein Standbild."""
     try:
@@ -728,6 +735,13 @@ def erkennen_ohne_bild(st, job, ist_s, k_alt=None):
         if nach_zeit[0]["abw"] <= 0.03 and nach_zeit[1]["abw"] >= 0.06:
             b = nach_zeit[0]
             return b["info"], "Name", f"Name {b['name']:.2f}, Laufzeit {ist_s / 60:.0f}/{b['soll']} min entscheidet", vorschlaege
+        # Gleicher Name, Laufzeit passt bei mehreren (Fight Club 1999/2023): Discs gibt es fast nur von bekannten
+        # Filmen - ist einer viel bekannter (IMDb-Stimmen mindestens 20-mal so viele) und passt die Laufzeit, nimm ihn.
+        st_g = sorted(((x, _stimmen(st, x["info"]["imdb"])) for x in gute if x["abw"] <= 0.06), key=lambda y: -y[1])
+        if st_g and st_g[0][1] >= 20000 and (len(st_g) == 1 or st_g[0][1] >= 20 * max(st_g[1][1], 1)):
+            b = st_g[0][0]
+            return (b["info"], "Name", f"Name {b['name']:.2f}, Laufzeit {ist_s / 60:.0f}/{b['soll']} min, "
+                    f"bekanntester Film mit diesem Namen ({st_g[0][1]} IMDb-Stimmen)", vorschlaege)
     return None, None, "Name unsicher: " + " / ".join(f"{x['info']['titel']} ({x['info']['jahr']})" for x in gute[:3]), vorschlaege
 
 
