@@ -537,7 +537,7 @@ def erkennen_mit_bild(st, job, datei, ist_s, k_alt=None, standbild=None):
                   f"Jahr {x['jahr_ok']}")
     _log(log, f"Erkennung 3: fertig nach {time.time() - t0:.0f} s - {'erkannt' if sieger else grund}")
     vorschlaege = [{"imdb": x["info"]["imdb"], "titel": x["info"]["titel"], "jahr": x["info"]["jahr"],
-                    "bild": x["bild"], "punkte": x["punkte"]} for x in bewertet[:3]]
+                    "bild": x["bild"], "punkte": x["punkte"], "poster": _poster(st, x["info"]["imdb"])} for x in bewertet[:3]]
     if sieger:
         i = dict(sieger["info"])
         if "lego" in norm(i.get("englisch")) and "lego" not in norm(i.get("titel")):  # Wikidata: "Star Wars – Die Padawan-Bedrohung"
@@ -607,6 +607,15 @@ def label_texte(st, label):
     return aus[:6]
 
 
+def _poster(st, imdb):
+    """Filmplakat (OMDb, https) fuer die Push-Frage - Lukas erkennt ein Plakat schneller als ein Standbild."""
+    try:
+        p = st.omdb_info(imdb).get("Poster") or ""
+        return p if p.startswith("https://") else None
+    except Exception:
+        return None
+
+
 def _tok(s):
     return [w for w in norm(s).split() if w not in STOPP and (len(w) >= 3 or w.isdigit())]
 
@@ -660,7 +669,7 @@ def erkennen_ohne_bild(st, job, ist_s, k_alt=None):
         _log(st.log, f"Erkennung Name: {x['info']['titel']} ({x['info']['jahr']}) {x['info']['imdb']} - Name {x['name']}, "
                      f"Laufzeit {ist_s / 60:.0f}/{x['soll']} min")
     vorschlaege = [{"imdb": x["info"]["imdb"], "titel": x["info"]["titel"], "jahr": x["info"]["jahr"],
-                    "bild": 0, "punkte": x["punkte"]} for x in bewertet[:3]]
+                    "bild": 0, "punkte": x["punkte"], "poster": _poster(st, x["info"]["imdb"])} for x in bewertet[:3]]
     if not bewertet:
         return None, None, "Name: kein Film mit passender Laufzeit", vorschlaege
     a = bewertet[0]

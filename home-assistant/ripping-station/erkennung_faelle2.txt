@@ -1,0 +1,54 @@
+# Schwere Faelle: Abkuerzungen, deutsche Namen mit Umlauten, Remakes, Teil-Nummern, nichtssagende Namen
+LOTR_ROTK_D1;dvd;tt0167260;Rueckkehr des Koenigs
+HP7_PT2;bluray;tt1201607;Heiligtuemer des Todes 2
+SW_EP5;dvd;tt0080684;Imperium schlaegt zurueck
+POTC_DEAD_MANS_CHEST;dvd;tt0383574;Fluch der Karibik 2
+MI_ROGUE_NATION;bluray;tt2381249;Rogue Nation
+T2_JUDGMENT_DAY;dvd;tt0103064;Terminator 2
+TDKR;bluray;tt1345836;Dark Knight Rises
+HTTYD2;bluray;tt1646971;Drachenzaehmen 2
+FAST_AND_FURIOUS_6;bluray;tt1905041;Fast and Furious 6
+DIE_HARD_4;dvd;tt0337978;Stirb langsam 4.0
+HERR_DER_RINGE_DIE_GEFAEHRTEN;dvd;tt0120737;Gefaehrten
+DER_HERR_DER_RINGE_DIE_ZWEI_TUERME;dvd;tt0167261;Zwei Tuerme
+FLUCH_DER_KARIBIK;dvd;tt0325980;Fluch der Karibik
+ZURUECK_IN_DIE_ZUKUNFT;dvd;tt0088763;Zurueck in die Zukunft
+DIE_TRIBUTE_VON_PANEM;bluray;tt1392170;Tribute von Panem
+TRIBUTE_VON_PANEM_MOCKINGJAY_1;bluray;tt1951265;Mockingjay 1
+ALLES_STEHT_KOPF;bluray;tt2096673;Alles steht Kopf
+KUNG_FU_PANDA;dvd;tt0441773;Kung Fu Panda
+DER_KOENIG_DER_LOEWEN;dvd;tt0110357;Koenig der Loewen 1994
+ALADDIN;dvd;tt0103639;Aladdin 1992
+DUNE;bluray;tt1160419;Dune 2021
+ROBOCOP;dvd;tt0093870;RoboCop 1987
+GHOSTBUSTERS;dvd;tt0087332;Ghostbusters 1984
+TRAUMSCHIFF_SURPRISE;dvd;tt0349047;Traumschiff Surprise
+DAS_PARFUM;dvd;tt0396171;Das Parfum
+DER_UNTERGANG;dvd;tt0363163;Der Untergang
+DAS_LEBEN_DER_ANDEREN;dvd;tt0405094;Das Leben der Anderen
+SISU;bluray;tt14846026;Sisu
+GRAVITY_3D;bluray;tt1454468;Gravity
+AVATAR_WAY_OF_WATER;bluray;tt1630029;Avatar 2
+OPPENHEIMER;bluray;tt15398776;Oppenheimer
+TOP_GUN_MAVERICK;bluray;tt1745960;Top Gun Maverick
+SPIDERMAN_NO_WAY_HOME;bluray;tt10872600;No Way Home
+GUARDIANS_OF_THE_GALAXY_VOL_2;bluray;tt3896198;Guardians 2
+THOR_RAGNAROK;bluray;tt3501632;Thor Tag der Entscheidung
+X_MEN_DAYS_OF_FUTURE_PAST;bluray;tt1877832;Zukunft ist Vergangenheit
+DEADPOOL_2;bluray;tt5463162;Deadpool 2
+BLADE_RUNNER_2049;bluray;tt1856101;Blade Runner 2049
+THE_REVENANT;bluray;tt1663202;The Revenant
+KNIVES_OUT;bluray;tt8946378;Knives Out
+SHUTTER_ISLAND;dvd;tt1130884;Shutter Island
+THE_PRESTIGE;dvd;tt0482571;Prestige
+GREEN_MILE;dvd;tt0120689;The Green Mile
+SCHINDLERS_LIST;dvd;tt0108052;Schindlers Liste
+DER_SOLDAT_JAMES_RYAN;dvd;tt0120815;Der Soldat James Ryan
+E_T;dvd;tt0083866;E.T.
+DER_WEISSE_HAI;dvd;tt0073195;Der weisse Hai
+ALIENS;dvd;tt0090605;Aliens
+ROCKY;dvd;tt0075148;Rocky
+VIDEO_TS;dvd;-;nichts
+DISC_1;dvd;-;nichts
+MOVIE;bluray;-;nichts
+M000253;dvd;-;nichts

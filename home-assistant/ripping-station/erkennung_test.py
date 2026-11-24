@@ -124,7 +124,8 @@ def laufzeit(imdb, dvd, label):
 
 def main():
     text = open(sys.argv[1], encoding="utf-8").read() if len(sys.argv) > 1 else FAELLE
-    aus = open("/tmp/erk_test.txt", "w", encoding="utf-8")
+    ziel = sys.argv[2] if len(sys.argv) > 2 else "/tmp/erk_test.txt"
+    aus = open(ziel, "w", encoding="utf-8")
     zahl = {"richtig": 0, "falsch": 0, "nichts": 0}
     ergebnisse = []
     for label, art, soll_imdb, hinweis in faelle(text):
@@ -163,7 +164,7 @@ def main():
                            "text": text_e})
     aus.write(f"\nSUMME: {zahl} | OMDb-Abfragen {ZAEHLER['omdb']}, Wikidata {ZAEHLER['wikidata']}\n")
     aus.close()
-    json.dump(ergebnisse, open("/tmp/erk_test.json", "w"), ensure_ascii=False, indent=1)
+    json.dump(ergebnisse, open(ziel + ".json", "w"), ensure_ascii=False, indent=1)
 
 
 if __name__ == "__main__":
