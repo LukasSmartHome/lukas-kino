@@ -542,7 +542,7 @@ def daten_disc_pruefen(st, job, ziel, videos):
              f"Ton {', '.join(str(x.get('channels', '?')) + '-Kanal ' + str((x.get('tags') or {}).get('language', '')) for x in a[:3]).strip() or 'keiner'}",
              f"Qualitaet {qual}"]
     vorschlag = None
-    if dauer >= 40 * 60:
+    if dauer >= 15 * 60:  # auch kurze Filme (LEGO-Specials ca. 21 min)
         such = " ".join(x for x in wort if x not in WEG_WOERTER and not re.fullmatch(r"(19|20)\d\d", x))
         jahr = next((int(x) for x in wort if re.fullmatch(r"(19|20)\d\d", x)), None)
         job2 = dict(job, label=(such or job.get("label") or "").upper().replace(" ", "_"), disctype="dvd",
